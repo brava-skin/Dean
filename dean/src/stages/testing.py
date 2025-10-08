@@ -1,0 +1,525 @@
+from __future__ import annotations
+
+import json
+import os
+import random
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+import pandas as pd
+from zoneinfo import ZoneInfo  # <- use account-local timezone
+
+from slack import alert_kill, alert_promote, notify
+
+UTC = timezone.utc
+LOCAL_TZ = ZoneInfo(os.getenv("ACCOUNT_TZ", os.getenv("ACCOUNT_TIMEZONE", "Europe/Amsterdam")))
+ACCOUNT_CURRENCY = os.getenv("ACCOUNT_CURRENCY", "EUR")
+ACCOUNT_CURRENCY_SYMBOL = os.getenv("ACCOUNT_CURRENCY_SYMBOL", "€")
+
+_MIN_IMPRESSIONS = int(os.getenv("TEST_MIN_IMPRESSIONS", "300"))
+_MIN_CLICKS = int(os.getenv("TEST_MIN_CLICKS", "10"))
+_MIN_SPEND = float(os.getenv("TEST_MIN_SPEND", "10"))  # treated as EUR
+_CONSEC_TICKS_REQUIRED = int(os.getenv("TEST_CONSEC_TICKS_REQUIRED", "2"))
+_ATTR_WINDOWS = tuple((os.getenv("TEST_ATTR_WINDOWS", "7d_click,1d_view") or "7d_click,1d_view").split(","))
+_PAUSE_AFTER_PROMOTION = (os.getenv("TEST_PAUSE_AFTER_PROMOTION", "1").lower() in ("1", "true", "yes"))
+
+_BETA_PRIOR_A = float(os.getenv("TEST_BETA_PRIOR_A", "2.0"))
+_BETA_PRIOR_B = float(os.getenv("TEST_BETA_PRIOR_B", "300.0"))
+_BAYES_KILL_PROB = float(os.getenv("TEST_BAYES_KILL_PROB", "0.90"))
+_ADAPTIVE_CTR_FLOOR_MIN = float(os.getenv("TEST_ADAPTIVE_CTR_FLOOR_MIN", "0.008"))
+_ADAPTIVE_CTR_FLOOR_SCALE = float(os.getenv("TEST_ADAPTIVE_CTR_FLOOR_SCALE", "0.70"))
+_FATIGUE_DROP_PCT = float(os.getenv("TEST_FATIGUE_DROP_PCT", "0.35"))
+_EWMA_ALPHA = float(os.getenv("TEST_EWMA_ALPHA", "0.30"))
+
+_MIN_SPEND_BEFORE_KILL = float(os.getenv("TEST_MIN_SPEND_BEFORE_KILL", "20"))  # EUR
+_BANDIT_SAMPLE_COUNT = int(os.getenv("TEST_BANDIT_SAMPLE_COUNT", "32"))
+_MAX_LAUNCHES_PER_TICK = int(os.getenv("TEST_MAX_LAUNCHES_PER_TICK", "8"))
+
+
+def _now_minute_key(prefix: str) -> str:
+    # use account-local timezone for tick idempotency
+    return f"{prefix}::{datetime.now(LOCAL_TZ).strftime('%Y-%m-%dT%H:%M')}"
+
+
+def _safe_f(v: Any, default: float = 0.0) -> float:
+    try:
+        if v is None:
+            return default
+        if isinstance(v, (int, float)):
+            return float(v)
+        return float(str(v).replace(",", "").strip())
+    except Exception:
+        return default
+
+
+def _ctr(row: Dict[str, Any]) -> float:
+    imps = _safe_f(row.get("impressions"))
+    clicks = _safe_f(row.get("clicks"))
+    return (clicks / imps) if imps > 0 else 0.0
+
+
+def _roas(row: Dict[str, Any]) -> float:
+    roas_list = row.get("purchase_roas") or []
+    try:
+        if roas_list:
+            return float(roas_list[0].get("value", 0)) or 0.0
+    except Exception:
+        pass
+    return 0.0
+
+
+def _meets_minimums(row: Dict[str, Any]) -> bool:
+    return (
+        _safe_f(row.get("spend")) >= _MIN_SPEND
+        and _safe_f(row.get("impressions")) >= _MIN_IMPRESSIONS
+        and _safe_f(row.get("clicks")) >= _MIN_CLICKS
+    )
+
+
+def _stable_pass(store: Any, entity_id: str, rule_key: str, condition: bool) -> bool:
+    key = f"{entity_id}::stable::{rule_key}"
+    if condition:
+        try:
+            val = store.incr(key, 1)
+        except Exception:
+            val = 1
+            try:
+                store.set_counter(key, val)
+            except Exception:
+                pass
+        return val >= _CONSEC_TICKS_REQUIRED
+    try:
+        store.set_counter(key, 0)
+    except Exception:
+        pass
+    return False
+
+
+def _active_count(ads_list: List[Dict[str, Any]]) -> int:
+    return sum(1 for a in ads_list if str(a.get("status", "")).upper() == "ACTIVE")
+
+
+def _get_counter_float(store: Any, key: str, scale: int = 1_000_000) -> Optional[float]:
+    try:
+        v = store.get_counter(key)
+        return None if v == 0 else float(v) / scale
+    except Exception:
+        return None
+
+
+def _set_counter_float(store: Any, key: str, val: float, scale: int = 1_000_000) -> None:
+    try:
+        store.set_counter(key, int(round(val * scale)))
+    except Exception:
+        pass
+
+
+def _update_ewma_ctr(store: Any, ad_id: str, ctr_today: float) -> float:
+    k = f"{ad_id}::ewma_ctr"
+    prev = _get_counter_float(store, k) or ctr_today
+    ewma = _EWMA_ALPHA * ctr_today + (1.0 - _EWMA_ALPHA) * prev
+    _set_counter_float(store, k, ewma)
+    return ewma
+
+
+def _fatigue_detect(store: Any, ad_id: str, ctr_today: float) -> bool:
+    ewma = _update_ewma_ctr(store, ad_id, ctr_today)
+    return ewma > 0 and ctr_today < (1.0 - _FATIGUE_DROP_PCT) * ewma
+
+
+def _bayes_kill_prob(clicks: float, imps: float, floor: float) -> float:
+    a = _BETA_PRIOR_A + max(0.0, clicks)
+    b = _BETA_PRIOR_B + max(0.0, imps - clicks)
+    below = 0
+    n = _BANDIT_SAMPLE_COUNT
+    for _ in range(n):
+        sample = random.betavariate(a, b)
+        if sample < floor:
+            below += 1
+    return below / max(1, n)
+
+
+def _adaptive_ctr_floor(rows: List[Dict[str, Any]]) -> float:
+    ctrs = sorted((_ctr(r) for r in rows if _safe_f(r.get("impressions")) >= _MIN_IMPRESSIONS), reverse=True)
+    if not ctrs:
+        return _ADAPTIVE_CTR_FLOOR_MIN
+    mid = ctrs[len(ctrs) // 2]
+    return max(_ADAPTIVE_CTR_FLOOR_MIN, mid * _ADAPTIVE_CTR_FLOOR_SCALE)
+
+
+def _data_quality_sentry(row: Dict[str, Any]) -> Optional[str]:
+    spend = _safe_f(row.get("spend"))
+    acts = row.get("actions") or []
+    purchases = 0
+    atc = 0
+    for a in acts:
+        t = a.get("action_type")
+        if t == "purchase":
+            purchases += _safe_f(a.get("value"))
+        if t == "add_to_cart":
+            atc += _safe_f(a.get("value"))
+    if spend >= 20 and purchases == 0 and atc == 0:
+        return f"Spend present but no actions — check tracking"
+    return None
+
+
+def _bandit_score_for_queue_item(store: Any, label: str) -> float:
+    try:
+        clicks = store.get_counter(f"qctr::{label}::clicks")
+        imps = store.get_counter(f"qctr::{label}::imps")
+    except Exception:
+        clicks, imps = 0, 0
+    a = _BETA_PRIOR_A + clicks
+    b = _BETA_PRIOR_B + max(0, imps - clicks)
+    return random.betavariate(a, b)
+
+
+def _record_queue_feedback(store: Any, label: str, clicks: float, imps: float) -> None:
+    try:
+        store.incr(f"qctr::{label}::clicks", int(clicks))
+        store.incr(f"qctr::{label}::imps", int(imps))
+    except Exception:
+        pass
+
+
+def _clean_text_token(v: Any) -> str:
+    s = str(v or "")
+    s = s.replace("_", " ")
+    return " ".join(s.split()).strip()
+
+
+def _label_from_row(row: Dict[str, Any]) -> str:
+    avatar = _clean_text_token(row.get("avatar"))
+    vis = _clean_text_token(row.get("visual_style"))
+    script = _clean_text_token(row.get("script"))
+    if avatar and vis and script:
+        return f"{avatar} - {vis} - {script}"
+    fname = str(row.get("filename") or "").strip()
+    if fname:
+        base = os.path.basename(fname)
+        stem, _ = os.path.splitext(base)
+        parts = [p for p in stem.split("_") if p]
+        if len(parts) >= 3:
+            a, v, s = parts[-3], parts[-2], parts[-1]
+            return f"{_clean_text_token(a)} - {_clean_text_token(v)} - {_clean_text_token(s)}"
+        if stem:
+            return _clean_text_token(stem)
+    return "UNNAMED"
+
+
+def _load_copy_bank(settings: Dict[str, Any]) -> Dict[str, Any]:
+    path = (settings.get("copy_bank") or {}).get("path")
+    if not path:
+        return {"global": {}}
+    p = Path(path)
+    if not p.exists():
+        notify(f"⚠️ [TEST] Copy bank not found at '{p}'.")
+        return {"global": {}}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        notify(f"⚠️ [TEST] Failed to parse copy bank JSON: {e}")
+        return {"global": {}}
+
+
+def _rr_index(store: Any, key: str, n: int) -> int:
+    n = max(1, n)
+    try:
+        i = store.incr(f"rr::{key}", 1) - 1
+        return i % n
+    except Exception:
+        return random.randrange(n)
+
+
+def _choose_mix_and_match(store: Any, copy_bank: Dict[str, Any], label_key: str, strategy: str = "round_robin") -> Tuple[str, str, str]:
+    g = (copy_bank.get("global") or {})
+    pts = g.get("primary_texts") or []
+    hls = g.get("headlines") or []
+    descs = g.get("descriptions") or []
+    if not (pts and hls and descs):
+        raise ValueError("Copy bank needs non-empty arrays: primary_texts, headlines, descriptions.")
+    def pick(items: List[str], subkey: str) -> str:
+        if strategy == "round_robin":
+            return items[_rr_index(store, f"mix::{label_key}::{subkey}", len(items))]
+        return random.choice(items)
+    return pick(pts, "pt"), pick(hls, "hl"), pick(descs, "desc")
+
+
+# -------- robust normalizer for Excel-mangled video IDs --------
+def _normalize_video_id_cell(v: Any) -> str:
+    if v is None:
+        return ""
+    s = str(v).strip().strip("'").strip('"')
+    if s == "" or s.lower() in ("nan", "none", "null"):
+        return ""
+    s = s.replace(",", "").replace(" ", "")
+    m = re.fullmatch(r"(\d+)\.0+", s)
+    if m:
+        return m.group(1)
+    if re.fullmatch(r"\d+(\.\d+)?[eE][+-]?\d+", s):
+        try:
+            from decimal import Decimal, getcontext
+            getcontext().prec = 50
+            return str(int(Decimal(s)))
+        except Exception:
+            return ""
+    if re.fullmatch(r"\d+", s):
+        return s
+    keep = "".join(ch for ch in s if ch.isdigit())
+    return keep
+
+
+def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: Any, queue_df: pd.DataFrame) -> Dict[str, Any]:
+    summary = {"kills": 0, "promotions": 0, "launched": 0, "fatigue_flags": 0, "data_quality_alerts": 0}
+    try:
+        tk = _now_minute_key("testing")
+        if hasattr(store, "tick_seen") and store.tick_seen(tk):
+            notify(f"ℹ️ [TEST] Tick {tk} already processed; skipping.")
+            return summary
+    except Exception:
+        pass
+
+    adset_id = settings["ids"]["testing_adset_id"]
+    keep_live = int(settings["testing"]["keep_ads_live"])
+    validation_campaign_id = settings["ids"]["validation_campaign_id"]
+
+    copy_bank = _load_copy_bank(settings)
+    copy_strategy = (settings.get("copy_bank") or {}).get("strategy", "round_robin")
+
+    try:
+        rows = meta.get_ad_insights(
+            level="ad",
+            filtering=[{"field": "adset.id", "operator": "IN", "value": [adset_id]}],
+            fields=[
+                "ad_id",
+                "ad_name",
+                "adset_id",
+                "campaign_id",
+                "spend",
+                "impressions",
+                "clicks",
+                "actions",
+                "action_values",
+                "purchase_roas",
+                "reach",
+                "unique_clicks",
+            ],
+            action_attribution_windows=list(_ATTR_WINDOWS),
+            paginate=True,
+        )
+    except Exception as e:
+        notify(f"❗ [TEST] Failed to fetch insights: {e}")
+        return summary
+
+    ctr_floor = _adaptive_ctr_floor(rows)
+
+    for r in rows:
+        ad_id = r.get("ad_id")
+        name = r.get("ad_name", "")
+        if not ad_id:
+            continue
+
+        # global mins unless spend already above the per-ad minimum-before-kill
+        if _safe_f(r.get("spend")) >= _MIN_SPEND_BEFORE_KILL and not _meets_minimums(r):
+            continue
+
+        dq = _data_quality_sentry(r)
+        if dq:
+            notify(f"🩺 [TEST] {name}: {dq}")
+            summary["data_quality_alerts"] += 1
+
+        ctr_today = _ctr(r)
+        if _fatigue_detect(store, ad_id, ctr_today):
+            notify(f"🟡 [TEST] Fatigue signal on {name} (CTR drop vs trend).")
+            summary["fatigue_flags"] += 1
+
+        bayes_p = _bayes_kill_prob(_safe_f(r.get("clicks")), _safe_f(r.get("impressions")), ctr_floor)
+        bayes_kill = bayes_p >= _BAYES_KILL_PROB
+
+        try:
+            kill, reason_engine = engine.should_kill_testing(r)
+        except Exception:
+            kill, reason_engine = False, ""
+
+        should_kill = kill or bayes_kill
+        if should_kill and _stable_pass(store, ad_id, "kill_test", True):
+            try:
+                meta.pause_ad(ad_id)
+                store.log(
+                    entity_type="ad",
+                    entity_id=ad_id,
+                    action="PAUSE",
+                    reason=f"[TEST] {reason_engine or f'Bayes CTR<{ctr_floor:.2%} (p={bayes_p:.2f})'}",
+                    level="warn",
+                    stage="TEST",
+                    rule_type="testing_kill",
+                    thresholds={"ctr_floor": ctr_floor, "bayes_prob": _BAYES_KILL_PROB},
+                    observed={"CTR": f"{ctr_today:.2%}", "ROAS": round(_roas(r), 2), "spend": _safe_f(r.get("spend"))},
+                )
+                try:
+                    alert_kill("TEST", name, reason_engine or f"CTR<{ctr_floor:.2%} (p={bayes_p:.2f})", {"CTR": f"{ctr_today:.2%}", "ROAS": f"{_roas(r):.2f}"})
+                except Exception:
+                    notify(f"🛑 [TEST] Killed {name} — {reason_engine or f'Bayes CTR<{ctr_floor:.2%}'}")
+                summary["kills"] += 1
+            except Exception as e:
+                notify(f"❗ [TEST] Failed to pause {name}: {e}")
+            continue
+        else:
+            _stable_pass(store, ad_id, "kill_test", False)
+
+        # Promotion
+        try:
+            adv, adv_reason = engine.should_advance_from_testing(r)
+        except Exception:
+            adv, adv_reason = False, ""
+
+        if adv and _stable_pass(store, ad_id, "adv_test", True):
+            label = name.replace("[TEST]", "").strip() or f"Ad_{ad_id}"
+            try:
+                # EUR-aware call (account currency)
+                valid_as = meta.create_validation_adset(validation_campaign_id, label, daily_budget=40.0)
+            except Exception:
+                valid_as = None
+            store.log(
+                entity_type="ad",
+                entity_id=ad_id,
+                action="TEST_TO_VALID",
+                reason=adv_reason,
+                level="info",
+                stage="VALID",
+                meta={"validation_adset": valid_as},
+            )
+            try:
+                # Slack template may render with $, but we pass a numeric; fallback notify shows €
+                alert_promote("TEST", "VALID", label, budget=40.0)
+            except Exception:
+                notify(f"✅ [TEST→VALID] {label} — {adv_reason} (Budget: {ACCOUNT_CURRENCY_SYMBOL}40/day)")
+            if _PAUSE_AFTER_PROMOTION:
+                try:
+                    meta.pause_ad(ad_id)
+                except Exception:
+                    pass
+            summary["promotions"] += 1
+        else:
+            _stable_pass(store, ad_id, "adv_test", False)
+
+    # Top-up launches
+    try:
+        current_ads = meta.list_ads_in_adset(adset_id)
+    except Exception as e:
+        notify(f"❗ [TEST] Could not list ads in ad set: {e}")
+        return summary
+
+    active_count = _active_count(current_ads)
+    need = max(0, min(_MAX_LAUNCHES_PER_TICK, keep_live - active_count))
+    if need <= 0:
+        return summary
+
+    if queue_df is None or queue_df.empty:
+        notify(f"⚠️ [TEST] Queue empty; cannot top-up to {keep_live}.")
+        return summary
+
+    existing_names = {str(a.get("name", "")).strip() for a in current_ads}
+    candidates: List[Dict[str, Any]] = []
+    for idx, row in queue_df.iterrows():
+        label_core = _label_from_row(row)
+        cname = f"[TEST] {label_core}"
+        if not label_core or cname in existing_names:
+            continue
+        d = row.to_dict()
+        d["_label_core"] = label_core
+        d["_index"] = idx
+        candidates.append(d)
+
+    if not candidates:
+        notify("ℹ️ [TEST] No eligible queue items (likely duplicates).")
+        return summary
+
+    ranked = sorted(
+        candidates,
+        key=lambda r: _bandit_score_for_queue_item(store, str(r.get("_label_core") or _label_from_row(r)).strip()),
+        reverse=True,
+    )
+    picks = ranked[:need]
+
+    for p in picks:
+        label_core = str(p.get("_label_core") or _label_from_row(p)).strip()
+        cname = f"[TEST] {label_core}"
+
+        # Normalize & validate video_id
+        video_id_raw = p.get("video_id")
+        video_id = _normalize_video_id_cell(video_id_raw)
+        if not label_core or not video_id or not video_id.isdigit():
+            notify(f"⚠️ [TEST] Skipping '{label_core or 'UNNAMED'}' — missing/invalid video_id (got: {video_id_raw!r}).")
+            continue
+
+        try:
+            primary_text, headline, description = _choose_mix_and_match(store, copy_bank, label_core, copy_strategy)
+        except Exception as e:
+            notify(f"⚠️ [TEST] Copy bank issue for '{label_core}': {e}")
+            continue
+
+        try:
+            cc = engine.creative_compliance(
+                {
+                    "primary_text": primary_text,
+                    "headline": headline,
+                    "description": description,
+                    "link_url": os.getenv("STORE_URL", ""),
+                }
+            )
+            if not cc.get("ok", True):
+                notify(f"🚫 [TEST] '{label_core}' failed compliance: {', '.join(cc.get('issues', []))}")
+                continue
+        except Exception:
+            pass
+
+        try:
+            creative = meta.create_video_creative(
+                page_id=p.get("page_id"),
+                name=cname,
+                video_library_id=video_id,
+                primary_text=primary_text,
+                headline=headline,
+                description=description,
+                call_to_action="SHOP_NOW",
+                link_url=os.getenv("STORE_URL"),
+                utm_params=p.get("utm_params") or None,
+                thumbnail_url=p.get("thumbnail_url") or None,
+            )
+            ad = meta.create_ad(adset_id, cname, creative_id=creative["id"], status="ACTIVE")
+            store.log(
+                entity_type="ad",
+                entity_id=ad["id"],
+                action="CREATE",
+                reason=f"Top-up to {keep_live}",
+                level="info",
+                stage="TEST",
+                meta={"testing_adset_id": adset_id},
+            )
+            notify(f"🟢 [TEST] Launched {label_core}")
+            summary["launched"] += 1
+            _record_queue_feedback(store, label_core, clicks=1, imps=200)
+
+            # ── NEW: mark Supabase row as launched (best-effort) ─────────────────
+            try:
+                # Adjust import path to your runner module name if needed
+                from main import mark_supabase_launched, _normalize_video_id_cell as _norm_from_main
+
+                cid = str(p.get("creative_id") or "")
+                if cid:
+                    mark_supabase_launched([cid], use_column="id")
+                else:
+                    vid = _norm_from_main(p.get("video_id"))
+                    if vid:
+                        mark_supabase_launched([vid], use_column="video_id")
+            except Exception:
+                pass
+            # ─────────────────────────────────────────────────────────────────────
+
+        except Exception as e:
+            notify(f"❗ [TEST] Failed to launch '{label_core}': {e}")
+
+    return summary
