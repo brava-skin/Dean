@@ -17,21 +17,38 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      FB_APP_ID: ${{ secrets.FB_APP_ID }}
-      FB_APP_SECRET: ${{ secrets.FB_APP_SECRET }}
-      FB_ACCESS_TOKEN: ${{ secrets.FB_ACCESS_TOKEN }}
-      FB_AD_ACCOUNT_ID: ${{ secrets.FB_AD_ACCOUNT_ID }}
-      FB_PIXEL_ID: ${{ secrets.FB_PIXEL_ID }}
-      FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
-      STORE_URL: ${{ secrets.STORE_URL }}
-      TIMEZONE: ${{ secrets.TIMEZONE }}
-      FB_API_VERSION: ${{ secrets.FB_API_VERSION }}
-      MODE: ${{ secrets.MODE }}
-      DRY_RUN: ${{ secrets.DRY_RUN }}
-      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-      SLACK_WEBHOOK_ALERTS: ${{ secrets.SLACK_WEBHOOK_ALERTS }}
-      SLACK_WEBHOOK_DIGEST: ${{ secrets.SLACK_WEBHOOK_DIGEST }}
-      SLACK_WEBHOOK_SCALE: ${{ secrets.SLACK_WEBHOOK_SCALE }}
+      # — Meta / Facebook —
+      FB_APP_ID:             ${{ secrets.FB_APP_ID }}
+      FB_APP_SECRET:         ${{ secrets.FB_APP_SECRET }}
+      FB_ACCESS_TOKEN:       ${{ secrets.FB_ACCESS_TOKEN }}
+      FB_AD_ACCOUNT_ID:      ${{ secrets.FB_AD_ACCOUNT_ID }}
+      FB_PIXEL_ID:           ${{ secrets.FB_PIXEL_ID }}
+      FB_PAGE_ID:            ${{ secrets.FB_PAGE_ID }}
+      FB_API_VERSION:        ${{ secrets.FB_API_VERSION }}
+
+      # — App behavior —
+      MODE:                  ${{ secrets.MODE }}         # e.g. "production" or "staging"
+      DRY_RUN:               ${{ secrets.DRY_RUN }}      # "true" or "false"
+      TIMEZONE:              "Europe/Amsterdam"          # keep linter in sync with settings.yaml
+
+      # — Business config —
+      STORE_URL:             ${{ secrets.STORE_URL }}
+      BREAKEVEN_CPA:         ${{ secrets.BREAKEVEN_CPA }}  # optional
+
+      # — Slack (aligns with settings.yaml -> notifications.slack.channels) —
+      SLACK_WEBHOOK_URL:         ${{ secrets.SLACK_WEBHOOK_URL }}          # default/info/warn
+      SLACK_WEBHOOK_URL_ERRORS:  ${{ secrets.SLACK_WEBHOOK_URL_ERRORS }}   # errors
+      SLACK_WEBHOOK_DIGEST:      ${{ secrets.SLACK_WEBHOOK_DIGEST }}       # optional
+      SLACK_WEBHOOK_SCALE:       ${{ secrets.SLACK_WEBHOOK_SCALE }}        # optional
+
+      # — Supabase —
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_TABLE:            "meta_creatives"
+
+      # — Convenience (used by some stage modules) —
+      ACCOUNT_TZ:            "Europe/Amsterdam"
+      ACCOUNT_CURRENCY:      "EUR"
 
     steps:
       - name: Checkout
@@ -56,4 +73,7 @@ jobs:
 
       - name: Run workflow (all stages)
         run: |
-          python dean/src/main.py --stage all --settings dean/config/settings.yaml --rules dean/config/rules.yaml
+          python dean/src/main.py \
+            --stage all \
+            --settings dean/config/settings.yaml \
+            --rules dean/config/rules.yaml
