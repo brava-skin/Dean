@@ -51,9 +51,9 @@ jobs:
 
       - name: Ensure data dirs exist
         run: |
-          mkdir -p damian/data
-          mkdir -p damian/data/digests
+          mkdir -p dean/data
+          mkdir -p dean/data/digests
 
       - name: Run workflow (all stages)
         run: |
-          python damian/src/main.py --stage all --settings damian/config/settings.yaml --rules damian/config/rules.yaml
+          python dean/src/main.py --stage all --settings dean/config/settings.yaml --rules dean/config/rules.yaml
