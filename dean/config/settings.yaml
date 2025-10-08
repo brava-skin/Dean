@@ -18,10 +18,10 @@ notifications_timezone: "Europe/Amsterdam"  # unchanged (already EU/AMS)
 dst_note: "Windows are interpreted in account timezone; notifications in EU/AMS."
 
 ids:
-  testing_campaign_id: "120231486463120192"
-  testing_adset_id: "120231486463140192"
-  validation_campaign_id: "120231533068950192"
-  scaling_campaign_id: "120231533113610192"
+  testing_campaign_id: "120231838265440160"
+  testing_adset_id: "120231838265460160"
+  validation_campaign_id: "120231838417260160"
+  scaling_campaign_id: "120231838441470160"
 
 profiles:
   production:
@@ -326,3 +326,4 @@ cbo:
 copy_bank:
   path: "dean/data/copy_bank.json"
   strategy: "round_robin"
+
