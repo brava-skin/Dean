@@ -27,8 +27,8 @@ attribution:
   roas_source: "computed"
 
 minimums:
-  min_impressions: 500
-  min_clicks: 25
+  min_impressions: 300
+  min_clicks: 0
   min_spend: 10   # EUR
 
 stability:
@@ -204,3 +204,4 @@ redistribution:
   on_pause_winner_reinvest: true
   strategy: "proportional_to_roas"
   min_increment_per_winner: 10   # EUR
+
