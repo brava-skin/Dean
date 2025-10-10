@@ -9,6 +9,7 @@ Key improvements vs. previous:
 - Keeps portfolio + bandit logic unchanged
 - Uses MetaClient budget signatures (current_budget=...) safely
 - Subtle logging so you can trace lifetime vs today per ad
+- NEW: Per-day counters (Europe/Amsterdam) for kills, scaled, downscaled, duped, refreshed
 """
 
 import os
@@ -24,6 +25,25 @@ from slack import notify, alert_kill, alert_scale
 # ====== Time ======
 UTC = timezone.utc
 def _now() -> datetime: return datetime.now(UTC)
+
+# Local timezone (Amsterdam) for day buckets
+try:
+    from zoneinfo import ZoneInfo  # py>=3.9
+except Exception:  # pragma: no cover
+    ZoneInfo = None  # type: ignore
+
+ACCOUNT_TZ_NAME = os.getenv("ACCOUNT_TZ") or os.getenv("ACCOUNT_TIMEZONE") or "Europe/Amsterdam"
+LOCAL_TZ = ZoneInfo(ACCOUNT_TZ_NAME) if ZoneInfo else None
+
+def _now_local() -> datetime:
+    return datetime.now(LOCAL_TZ) if LOCAL_TZ else _now()
+
+def _today_str() -> str:
+    return _now_local().strftime("%Y-%m-%d")
+
+def _daily_key(stage: str, metric: str) -> str:
+    # daily::<YYYY-MM-DD>::STAGE::metric
+    return f"daily::{_today_str()}::{stage}::{metric}"
 
 # ====== Env knobs (all overridable at runtime) ======
 def _env_bool(name: str, default: bool) -> bool:
@@ -267,6 +287,13 @@ class SmartScaler:
                         cur_budget = None
 
                     meta.pause_ad(ad_id)
+
+                    # daily counter: SCALING kills++
+                    try:
+                        self.store.incr(_daily_key("SCALING", "kills"), 1)
+                    except Exception:
+                        pass
+
                     self.store.log_kill(
                         stage="SCALE",
                         entity_id=ad_id,
@@ -325,6 +352,11 @@ class SmartScaler:
                     )
                     notify(f"⬇️ [SCALE] {ad_name} → ~€{new_budget:,.0f}/d")
                     summary["downscaled"] += 1
+                    # daily counter: SCALING downscaled++
+                    try:
+                        self.store.incr(_daily_key("SCALING", "downscaled"), 1)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
 
@@ -344,6 +376,11 @@ class SmartScaler:
                             notify(f"⬆️ [SCALE] {ad_name} +{inc}% → ~€{new_budget:,.0f}/d")
                         _mark_scaled(self.store, adset_id)
                         summary["scaled"] += 1
+                        # daily counter: SCALING scaled++
+                        try:
+                            self.store.incr(_daily_key("SCALING", "scaled"), 1)
+                        except Exception:
+                            pass
                     except Exception:
                         pass
                 else:
@@ -371,6 +408,11 @@ class SmartScaler:
                         )
                         notify(f"🧬 [SCALE] {ad_name} ×{allow} (PAUSED)")
                         summary["duped"] += allow
+                        # daily counter: SCALING duped += allow
+                        try:
+                            self.store.incr(_daily_key("SCALING", "duped"), allow)
+                        except Exception:
+                            pass
                     except Exception:
                         pass
 
@@ -387,6 +429,11 @@ class SmartScaler:
                         self.store.set_counter(good_key, 0)
                         notify(f"🆕 [SCALE] Refresh copy for {ad_name}")
                         summary["refreshed"] += 1
+                        # daily counter: SCALING refreshed++
+                        try:
+                            self.store.incr(_daily_key("SCALING", "refreshed"), 1)
+                        except Exception:
+                            pass
                     except Exception:
                         pass
             else:
