@@ -35,11 +35,39 @@ def _now_local() -> datetime:
     tz = _tz()
     return datetime.now(tz) if tz else datetime.now(UTC)
 
-def _fmt_currency(amount: Optional[float]) -> str:
-    if amount is None:
+def _fmt_currency(amount: Optional[float | str]) -> str:
+    if amount is None or amount == "":
         return ""
-    # Keep simple and deterministic formatting without locale
-    return f"{ACCOUNT_CURRENCY_SYMBOL}{amount:,.0f}"
+    try:
+        val = float(str(amount).replace(",", ""))
+    except Exception:
+        return str(amount)
+    # Simple, deterministic formatting (no locale deps)
+    return f"{ACCOUNT_CURRENCY_SYMBOL}{val:,.2f}"
+
+def _fmt_pct(v: Optional[float | str]) -> str:
+    if v is None or v == "":
+        return ""
+    # Accept "0.0123" or "1.23%" or "1.23"
+    s = str(v).strip()
+    if s.endswith("%"):
+        return s
+    try:
+        f = float(s)
+    except Exception:
+        return s
+    # Heuristic: if looks like 0.012, treat as fraction
+    if 0 <= f <= 1:
+        f = f * 100.0
+    return f"{f:.1f}%"
+
+def _fmt_int(v: Optional[int | float | str]) -> str:
+    if v is None or v == "":
+        return "0"
+    try:
+        return f"{int(float(str(v).replace(',', '')))}"
+    except Exception:
+        return str(v)
 
 # ---- Env helpers ----
 ENVBOOL = lambda v, d=False: (os.getenv(v, str(int(d))) or "").lower() in ("1", "true", "yes", "y")
@@ -75,7 +103,6 @@ try:
     H_LAT = Histogram("slack_send_latency_seconds", "Send latency", ["topic"])
 except Exception:  # pragma: no cover
     METRICS = False
-
     class _N:
         def labels(self, *_, **__): return self
         def inc(self, *_): pass
@@ -112,15 +139,25 @@ def _ts_footer() -> str:
     # Show local AMS time (falls back to UTC if zoneinfo missing)
     now_local = _now_local()
     tz_name = ACCOUNT_TZ_NAME if _tz() else "UTC"
-    return f"Sent {now_local.strftime('%Y-%m-%d %H:%M:%S')} {tz_name}"
+    return f"Sent {now_local.strftime('%Y-%m-%d %H:%M')} {tz_name}"
 
+def _env_webhooks() -> Dict[str, str]:
+    return {
+        "default": os.getenv("SLACK_WEBHOOK_URL", "") or "",
+        "alerts": os.getenv("SLACK_WEBHOOK_ALERTS", "") or "",
+        "digest": os.getenv("SLACK_WEBHOOK_DIGEST", "") or "",
+        "scale": os.getenv("SLACK_WEBHOOK_SCALE", "") or "",
+    }
+
+def _slack_enabled_now() -> bool:
+    w = _env_webhooks()
+    return any(w.values()) and ENVBOOL("SLACK_ENABLED", True)
 
 def _sanitize_for_dedup(s: str) -> str:
     s = re.sub(r"\s+", " ", s or "")
     s = re.sub(r"https?://\S+", "<url>", s)
     s = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+", "<email>", s)
     return s.strip().lower()
-
 
 def _hash_dedup(
     text: str,
@@ -137,20 +174,6 @@ def _hash_dedup(
         json.dumps(attachments or [], separators=(",", ":"), ensure_ascii=False),
     ]
     return hashlib.sha256(("|".join(base)).encode("utf-8")).hexdigest()
-
-
-def _env_webhooks() -> Dict[str, str]:
-    return {
-        "default": os.getenv("SLACK_WEBHOOK_URL", "") or "",
-        "alerts": os.getenv("SLACK_WEBHOOK_ALERTS", "") or "",
-        "digest": os.getenv("SLACK_WEBHOOK_DIGEST", "") or "",
-        "scale": os.getenv("SLACK_WEBHOOK_SCALE", "") or "",
-    }
-
-
-def _slack_enabled_now() -> bool:
-    w = _env_webhooks()
-    return any(w.values()) and ENVBOOL("SLACK_ENABLED", True)
 
 
 @dataclass
@@ -181,12 +204,82 @@ class SlackMessage:
         return bool(self.route_webhook())
 
 
-EMOJI = {"info": "🟢", "warn": "🟠", "error": "🔴"}
+EMOJI = {
+    "info": "ℹ️",
+    "warn": "⏸️",
+    "error": "🛑",
+    "ok": "🟢",
+    "promote": "🚀",
+    "scale": "📈",
+    "digest": "🧾",
+}
 
+# ---------- Human formatting helpers ----------
+
+def _metrics_compact_line(metrics: Dict[str, Any]) -> str:
+    """
+    Build a compact, human-friendly facts line, trying common keys first.
+    Accepts both numeric and already-formatted strings.
+    Preferred order:
+      €today / €lifetime • CTR • ATC • Purch • ROAS
+    Falls back to a simple "k=v, ..." listing if unknown keys.
+    """
+    # Normalize keys case-insensitively
+    def getk(*names, default=None):
+        for n in names:
+            for k in metrics.keys():
+                if k.lower() == str(n).lower():
+                    return metrics[k]
+        return default
+
+    spend_today = getk("spend_today", "today_spend", "spendToday")
+    spend_life = getk("spend_lifetime", "lifetime_spend", "spendLifetime")
+    ctr = getk("ctr", "CTR", "ctr_today", "CTR_today")
+    atc = getk("atc", "ATC", "adds_to_cart", "add_to_cart")
+    purch = getk("purchases", "purchase", "Purchases")
+    roas = getk("roas", "ROAS", "purchase_roas")
+
+    known_any = any(v not in (None, "", 0) for v in [spend_today, spend_life, ctr, atc, purch, roas])
+    if not known_any:
+        # Fallback: generic listing
+        if not metrics:
+            return ""
+        return ", ".join(f"{k}={v}" for k, v in metrics.items())
+
+    parts: List[str] = []
+    if spend_today is not None or spend_life is not None:
+        left = _fmt_currency(spend_today) if spend_today not in (None, "") else "—"
+        right = _fmt_currency(spend_life) if spend_life not in (None, "") else "—"
+        parts.append(f"{left} / {right}")
+    if ctr not in (None, ""):
+        parts.append(f"CTR {_fmt_pct(ctr)}")
+    if atc not in (None, ""):
+        parts.append(f"ATC {_fmt_int(atc)}")
+    if purch not in (None, ""):
+        parts.append(f"Purch {_fmt_int(purch)}")
+    if roas not in (None, ""):
+        # keep any ROAS precision supplied; if numeric, show 2dp
+        try:
+            roas_val = float(str(roas).replace(",", ""))
+            parts.append(f"ROAS {roas_val:.2f}")
+        except Exception:
+            parts.append(f"ROAS {roas}")
+
+    return " • ".join(parts)
+
+def _mk_title(sev: str, title: str) -> str:
+    icon = EMOJI.get(sev, "ℹ️")
+    return f"{icon} *{title}*"
+
+def _mk_link(url: Optional[str], label: str = "Open in Ads Manager") -> Optional[str]:
+    if not url:
+        return None
+    return f"<{url}|{label}>"
 
 def build_basic_blocks(title: str, lines: List[str], severity: str = "info", footer: Optional[str] = None) -> List[Dict[str, Any]]:
-    blocks: List[Dict[str, Any]] = [_mk_section(f"*{EMOJI.get(severity,'ℹ️')} {title}*")]
+    blocks: List[Dict[str, Any]] = [_mk_section(_mk_title(severity, title))]
     if lines:
+        # stitch lines into sections without exceeding Slack limits
         chunk, acc = [], ""
         for ln in lines:
             if len(acc) + len(ln) + 1 > MAX_BLOCK_TEXT:
@@ -204,54 +297,78 @@ def build_basic_blocks(title: str, lines: List[str], severity: str = "info", foo
         blocks.append(_mk_context(footer))
     return blocks[:MAX_BLOCKS]
 
+# ---------- Human templates (backward-compatible with your calls) ----------
 
 def template_kill(stage: str, entity_name: str, reason: str, metrics: Dict[str, Any], link: Optional[str] = None) -> SlackMessage:
-    title = f"{stage} • Ad Paused"
-    body = [f"*Ad:* `{entity_name}`", f"*Reason:* {reason}", "*Metrics:* " + ", ".join(f"{k}={v}" for k, v in metrics.items())]
-    if link:
-        body.append(f"<{link}|Open in Ads Manager>")
+    """
+    Human, one-glance kill/pause message.
+    """
+    title = f"{stage} • Paused"
+    facts = _metrics_compact_line(metrics)
+    body: List[str] = [f"*Ad:* `{entity_name}`", f"*Why:* {reason}"]
+    if facts:
+        body.append(f"*Snapshot:* {facts}")
+    lk = _mk_link(link)
+    if lk:
+        body.append(lk)
     return SlackMessage(
-        text=f"[{stage}] PAUSE {entity_name}: {reason}",
+        text=f"[{stage}] Paused {entity_name} — {reason}",
         blocks=build_basic_blocks(title, body, severity="warn", footer=_ts_footer()),
         severity="warn",
         topic="alerts",
     )
 
-
 def template_promote(src: str, dst: str, entity_name: str, budget: Optional[float] = None, link: Optional[str] = None) -> SlackMessage:
+    """
+    Human promotion message (TEST → VALID, etc).
+    """
+    title = f"{src} → {dst} • Promoted"
     body = [f"*Creative:* `{entity_name}`"]
     if budget is not None:
         body.append(f"*Budget:* {_fmt_currency(budget)}/day")
-    if link:
-        body.append(f"<{link}|Open in Ads Manager>")
+    lk = _mk_link(link)
+    if lk:
+        body.append(lk)
     return SlackMessage(
-        text=f"[{src}->{dst}] {entity_name} promoted.",
-        blocks=build_basic_blocks(f"{src} → {dst} • Promotion", body, footer=_ts_footer()),
+        text=f"[{src}→{dst}] Promoted {entity_name}",
+        blocks=build_basic_blocks(title, body, severity="ok", footer=_ts_footer()),
         topic="alerts",
+        severity="info",
     )
 
-
 def template_scale(entity_name: str, pct: int, new_budget: Optional[float] = None, link: Optional[str] = None) -> SlackMessage:
-    body = [f"*Ad Set:* `{entity_name}`", f"*Increase:* +{pct}%"]
+    """
+    Human scaling message.
+    """
+    title = "Scaling • Budget Increased"
+    body = [f"*Ad Set:* `{entity_name}`", f"*Change:* +{int(pct)}%"]
     if new_budget is not None:
         body.append(f"*New Budget:* {_fmt_currency(new_budget)}/day")
-    if link:
-        body.append(f"<{link}|Open in Ads Manager>")
+    lk = _mk_link(link)
+    if lk:
+        body.append(lk)
     return SlackMessage(
-        text=f"[SCALE] {entity_name} +{pct}%",
-        blocks=build_basic_blocks("Scaling • Budget Increase", body, footer=_ts_footer()),
+        text=f"[SCALE] {entity_name} +{int(pct)}%",
+        blocks=build_basic_blocks(title, body, severity="info", footer=_ts_footer()),
         topic="scale",
     )
 
-
 def template_digest(date_label: str, stage_stats: Dict[str, Dict[str, Any]]) -> SlackMessage:
-    lines = [f"*{stage}:* " + " | ".join(f"{k}={v}" for k, v in stats.items()) for stage, stats in stage_stats.items()]
+    """
+    Human daily digest.
+    """
+    title = f"Daily Digest • {date_label}"
+    lines = []
+    for stage, stats in stage_stats.items():
+        nice = " | ".join(f"{k}={v}" for k, v in stats.items())
+        lines.append(f"*{stage}:* {nice}")
     return SlackMessage(
         text=f"[DIGEST] {date_label}",
-        blocks=build_basic_blocks(f"Daily Digest • {date_label}", lines, footer=_ts_footer()),
+        blocks=build_basic_blocks(title, lines, severity="info", footer=_ts_footer()),
         topic="digest",
     )
 
+# ---------- Outbox, TokenBucket, client (unchanged behavior) ----------
 
 class Outbox:
     def __init__(self, path: str):
@@ -610,33 +727,43 @@ class SlackClient:
 
 _client: Optional[SlackClient] = None
 
-
 def client() -> SlackClient:
     global _client
     if _client is None:
         _client = SlackClient()
     return _client
 
+# ---------- Public API (unchanged signatures) ----------
 
 def notify(text: str, severity: Literal["info", "warn", "error"] = "info", topic: Union[str, Literal["default", "alerts", "digest", "scale"]] = "default", ttl_seconds: Optional[int] = None) -> None:
+    """
+    Raw text passthrough (used by your logs/healthchecks). Keep as-is.
+    """
     client().notify_text(text, severity=severity, topic=topic, ttl_seconds=ttl_seconds)
 
-
 def alert_kill(stage: str, entity_name: str, reason: str, metrics: Dict[str, Any], link: Optional[str] = None) -> None:
+    """
+    Human pause/kill message.
+    """
     client().notify(template_kill(stage, entity_name, reason, metrics, link))
 
-
 def alert_promote(from_stage: str, to_stage: str, entity_name: str, budget: Optional[float] = None, link: Optional[str] = None) -> None:
+    """
+    Human promotion message.
+    """
     client().notify(template_promote(from_stage, to_stage, entity_name, budget, link))
 
-
 def alert_scale(entity_name: str, pct: int, new_budget: Optional[float] = None, link: Optional[str] = None) -> None:
+    """
+    Human scaling message.
+    """
     client().notify(template_scale(entity_name, pct, new_budget, link))
 
-
 def post_digest(date_label: str, stage_stats: Dict[str, Dict[str, Any]]) -> None:
+    """
+    Human daily digest.
+    """
     client().notify(template_digest(date_label, stage_stats))
-
 
 __all__ = [
     "SlackClient",
