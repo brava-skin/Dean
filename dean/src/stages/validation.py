@@ -8,6 +8,25 @@ from slack import alert_kill, alert_promote, notify
 
 UTC = timezone.utc
 
+# ---- Local timezone (Amsterdam) for day buckets ----
+try:
+    from zoneinfo import ZoneInfo  # py>=3.9
+except Exception:  # pragma: no cover
+    ZoneInfo = None  # type: ignore
+
+ACCOUNT_TZ_NAME = os.getenv("ACCOUNT_TZ") or os.getenv("ACCOUNT_TIMEZONE") or "Europe/Amsterdam"
+LOCAL_TZ = ZoneInfo(ACCOUNT_TZ_NAME) if ZoneInfo else None
+
+def _now_local() -> datetime:
+    return datetime.now(LOCAL_TZ) if LOCAL_TZ else datetime.now(UTC)
+
+def _today_str() -> str:
+    return _now_local().strftime("%Y-%m-%d")
+
+def _daily_key(stage: str, metric: str) -> str:
+    # daily::<YYYY-MM-DD>::STAGE::metric
+    return f"daily::{_today_str()}::{stage}::{metric}"
+
 # ---- Validation stage thresholds (EUR, Amsterdam account) ----
 _MIN_IMPRESSIONS = int(os.getenv("VALID_MIN_IMPRESSIONS", "600"))
 _MIN_CLICKS = int(os.getenv("VALID_MIN_CLICKS", "30"))
@@ -33,6 +52,7 @@ _ALLOW_CREATE_ON_PROMO_CHECK = (os.getenv("VALID_ALLOW_CREATE_ON_PROMO_CHECK", "
 
 
 def _now_minute_key(prefix: str) -> str:
+    # Validation ticks can remain UTC-based for idempotency; day totals use local time.
     return f"{prefix}::{datetime.now(UTC).strftime('%Y-%m-%dT%H:%M')}"
 
 
@@ -295,7 +315,14 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
                 reason = reason_engine or (f"Lifetime spend≥€{int(_SPEND_NO_PURCHASE_EUR)} & no purchase" if kill_tripwire else "Validation rule failed")
                 try:
                     meta.pause_ad(ad_id)
-                    # structured log
+
+                    # daily counter: VALID kills++
+                    try:
+                        store.incr(_daily_key("VALID", "kills"), 1)
+                    except Exception:
+                        pass
+
+                    # structured log (best-effort)
                     try:
                         store.log_kill(
                             stage="VALID",
@@ -320,6 +347,7 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
                         )
                     except Exception:
                         pass
+
                     # alert
                     try:
                         alert_kill(
@@ -393,6 +421,12 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
                 except Exception:
                     created_ad = None
 
+                # daily counter: VALID promotions++
+                try:
+                    store.incr(_daily_key("VALID", "promotions"), 1)
+                except Exception:
+                    pass
+
                 try:
                     store.log_promote(
                         from_stage="VALID",
@@ -404,7 +438,6 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
                 except Exception:
                     pass
                 try:
-                    # alert_promote template uses $, we still pass numeric
                     alert_promote("VALID", "SCALE", creative_label, budget=start_budget)
                 except Exception:
                     notify(f"🚀 [VALID→SCALE] {creative_label} — {adv_reason} (start €{start_budget:.0f}/d)")
@@ -420,7 +453,7 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
         else:
             _stable_pass(store, ad_id, "adv_valid", False)
 
-        # ---- SOFT PASS lane ----
+        # ---- SOFT PASS lane (does not affect daily totals requested) ----
         if summary["promotions"] == 0 and _eligible_soft_pass(r):
             soft_budget = min(_SOFT_PASS_MAX_BUDGET, start_budget_default_eur)
             try:
