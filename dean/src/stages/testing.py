@@ -38,6 +38,10 @@ _ENV_MIN_SPEND_BEFORE_KILL = float(os.getenv("TEST_MIN_SPEND_BEFORE_KILL", "20")
 _BANDIT_SAMPLE_COUNT = int(os.getenv("TEST_BANDIT_SAMPLE_COUNT", "32"))
 _MAX_LAUNCHES_PER_TICK = int(os.getenv("TEST_MAX_LAUNCHES_PER_TICK", "8"))
 
+# Inline tripwire to mirror rules.yaml: spend_no_purchase ≥ 32 EUR
+# (Can override via env if needed.)
+_SPEND_NO_PURCHASE_EUR = float(os.getenv("TEST_SPEND_NO_PURCHASE_EUR", "32"))
+
 
 def _now_minute_key(prefix: str) -> str:
     # use account-local timezone for tick idempotency
@@ -69,6 +73,24 @@ def _roas(row: Dict[str, Any]) -> float:
     except Exception:
         pass
     return 0.0
+
+
+def _purchase_and_atc_counts(row: Dict[str, Any]) -> Tuple[int, int]:
+    """
+    Count purchase/add_to_cart *events* from 'actions' list.
+    In Meta insights, actions[].value is the count; revenue lives in action_values.
+    """
+    acts = row.get("actions") or []
+    purch = 0
+    atc = 0
+    for a in acts:
+        t = a.get("action_type")
+        v = _safe_f(a.get("value"), 0.0)
+        if t == "purchase":
+            purch += int(v)
+        elif t == "add_to_cart":
+            atc += int(v)
+    return purch, atc
 
 
 def _meets_minimums(row: Dict[str, Any], min_impressions: int, min_clicks: int, min_spend: float) -> bool:
@@ -152,16 +174,8 @@ def _adaptive_ctr_floor(rows: List[Dict[str, Any]], min_impressions: int) -> flo
 
 def _data_quality_sentry(row: Dict[str, Any]) -> Optional[str]:
     spend = _safe_f(row.get("spend"))
-    acts = row.get("actions") or []
-    purchases = 0
-    atc = 0
-    for a in acts:
-        t = a.get("action_type")
-        if t == "purchase":
-            purchases += _safe_f(a.get("value"))
-        if t == "add_to_cart":
-            atc += _safe_f(a.get("value"))
-    if spend >= 20 and purchases == 0 and atc == 0:
+    purch, atc = _purchase_and_atc_counts(row)
+    if spend >= 20 and purch == 0 and atc == 0:
         return f"Spend present but no actions — check tracking"
     return None
 
@@ -285,12 +299,9 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
     # --- Resolve minimums from YAML (with env fallbacks) ---
     tmin = (settings.get("testing") or {}).get("minimums") or {}
     min_impressions = int(tmin.get("min_impressions", _ENV_MIN_IMPRESSIONS))
-    # YAML supports 'min_clicks'; if absent we fall back to env default
-    min_clicks = int(tmin.get("min_clicks", _ENV_MIN_CLICKS))
-    # YAML may use 'min_spend_eur' or generic 'min_spend'
+    min_clicks = int(tmin.get("min_clicks", _ENV_MIN_CLICKS))  # you set this to 0 in YAML
     min_spend = float(tmin.get("min_spend_eur", tmin.get("min_spend", _ENV_MIN_SPEND)))
 
-    # Per-ad budget after which we ALWAYS evaluate rules (no gating by mins)
     tfair = (settings.get("testing") or {}).get("fairness") or {}
     min_spend_before_kill = float(tfair.get("min_spend_before_kill_eur", _ENV_MIN_SPEND_BEFORE_KILL))
 
@@ -335,10 +346,10 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
             continue
 
         # Apply global minimums ONLY while spend is below the per-ad kill budget.
-        # Once spend >= min_spend_before_kill, always evaluate rules (e.g., spend≥32 & no purchase).
         if _safe_f(r.get("spend")) < min_spend_before_kill and not _meets_minimums(r, min_impressions, min_clicks, min_spend):
             continue
 
+        # Helpful DQ note (doesn't block actions)
         dq = _data_quality_sentry(r)
         if dq:
             notify(f"🩺 [TEST] {name}: {dq}")
@@ -349,33 +360,52 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
             notify(f"🟡 [TEST] Fatigue signal on {name} (CTR drop vs trend).")
             summary["fatigue_flags"] += 1
 
+        # Engine rule + Bayesian kill
         bayes_p = _bayes_kill_prob(_safe_f(r.get("clicks")), _safe_f(r.get("impressions")), ctr_floor)
         bayes_kill = bayes_p >= _BAYES_KILL_PROB
-
         try:
             kill, reason_engine = engine.should_kill_testing(r)
         except Exception:
             kill, reason_engine = False, ""
 
-        should_kill = kill or bayes_kill
+        # Inline tripwire: spend_no_purchase ≥ threshold (default 32 EUR)
+        spend = _safe_f(r.get("spend"))
+        purch_count, _ = _purchase_and_atc_counts(r)
+        trip_spend_no_purchase = (spend >= _SPEND_NO_PURCHASE_EUR and purch_count == 0)
+
+        should_kill = kill or bayes_kill or trip_spend_no_purchase
         if should_kill and _stable_pass(store, ad_id, "kill_test", True):
             try:
                 meta.pause_ad(ad_id)
+                reason = (
+                    reason_engine
+                    or ("CTR<{:.2%} (p={:.2f})".format(ctr_floor, bayes_p) if bayes_kill else "")
+                    or f"Spend≥€{int(_SPEND_NO_PURCHASE_EUR)} & no purchase"
+                )
                 store.log(
                     entity_type="ad",
                     entity_id=ad_id,
                     action="PAUSE",
-                    reason=f"[TEST] {reason_engine or f'Bayes CTR<{ctr_floor:.2%} (p={bayes_p:.2f})'}",
+                    reason=f"[TEST] {reason}",
                     level="warn",
                     stage="TEST",
                     rule_type="testing_kill",
-                    thresholds={"ctr_floor": ctr_floor, "bayes_prob": _BAYES_KILL_PROB},
-                    observed={"CTR": f"{ctr_today:.2%}", "ROAS": round(_roas(r), 2), "spend": _safe_f(r.get("spend"))},
+                    thresholds={
+                        "ctr_floor": ctr_floor,
+                        "bayes_prob": _BAYES_KILL_PROB,
+                        "spend_no_purchase_eur": _SPEND_NO_PURCHASE_EUR,
+                    },
+                    observed={
+                        "CTR": f"{ctr_today:.2%}",
+                        "ROAS": round(_roas(r), 2),
+                        "spend": spend,
+                        "purchases": purch_count,
+                    },
                 )
                 try:
-                    alert_kill("TEST", name, reason_engine or f"CTR<{ctr_floor:.2%} (p={bayes_p:.2f})", {"CTR": f"{ctr_today:.2%}", "ROAS": f"{_roas(r):.2f}"})
+                    alert_kill("TEST", name, reason, {"CTR": f"{ctr_today:.2%}", "ROAS": f"{_roas(r):.2f}"})
                 except Exception:
-                    notify(f"🛑 [TEST] Killed {name} — {reason_engine or f'Bayes CTR<{ctr_floor:.2%}'}")
+                    notify(f"🛑 [TEST] Killed {name} — {reason}")
                 summary["kills"] += 1
             except Exception as e:
                 notify(f"❗ [TEST] Failed to pause {name}: {e}")
@@ -406,7 +436,6 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
                 meta={"validation_adset": valid_as},
             )
             try:
-                # Slack template may render with $, but we pass a numeric; fallback notify shows €
                 alert_promote("TEST", "VALID", label, budget=40.0)
             except Exception:
                 notify(f"✅ [TEST→VALID] {label} — {adv_reason} (Budget: {ACCOUNT_CURRENCY_SYMBOL}40/day)")
@@ -517,7 +546,7 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
             summary["launched"] += 1
             _record_queue_feedback(store, label_core, clicks=1, imps=200)
 
-            # ── mark Supabase row as launched (best-effort) ─────────────────
+            # mark Supabase row as launched (best-effort)
             try:
                 from main import mark_supabase_launched, _normalize_video_id_cell as _norm_from_main
 
@@ -530,7 +559,6 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
                         mark_supabase_launched([vid], use_column="video_id")
             except Exception:
                 pass
-            # ────────────────────────────────────────────────────────────────
 
         except Exception as e:
             notify(f"❗ [TEST] Failed to launch '{label_core}': {e}")
