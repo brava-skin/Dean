@@ -18,9 +18,10 @@ LOCAL_TZ = ZoneInfo(os.getenv("ACCOUNT_TZ", os.getenv("ACCOUNT_TIMEZONE", "Europ
 ACCOUNT_CURRENCY = os.getenv("ACCOUNT_CURRENCY", "EUR")
 ACCOUNT_CURRENCY_SYMBOL = os.getenv("ACCOUNT_CURRENCY_SYMBOL", "€")
 
-_MIN_IMPRESSIONS = int(os.getenv("TEST_MIN_IMPRESSIONS", "300"))
-_MIN_CLICKS = int(os.getenv("TEST_MIN_CLICKS", "10"))
-_MIN_SPEND = float(os.getenv("TEST_MIN_SPEND", "10"))  # treated as EUR
+# -------- env defaults (used only if YAML keys are missing) --------
+_ENV_MIN_IMPRESSIONS = int(os.getenv("TEST_MIN_IMPRESSIONS", "300"))
+_ENV_MIN_CLICKS = int(os.getenv("TEST_MIN_CLICKS", "10"))
+_ENV_MIN_SPEND = float(os.getenv("TEST_MIN_SPEND", "10"))  # EUR
 _CONSEC_TICKS_REQUIRED = int(os.getenv("TEST_CONSEC_TICKS_REQUIRED", "2"))
 _ATTR_WINDOWS = tuple((os.getenv("TEST_ATTR_WINDOWS", "7d_click,1d_view") or "7d_click,1d_view").split(","))
 _PAUSE_AFTER_PROMOTION = (os.getenv("TEST_PAUSE_AFTER_PROMOTION", "1").lower() in ("1", "true", "yes"))
@@ -33,7 +34,7 @@ _ADAPTIVE_CTR_FLOOR_SCALE = float(os.getenv("TEST_ADAPTIVE_CTR_FLOOR_SCALE", "0.
 _FATIGUE_DROP_PCT = float(os.getenv("TEST_FATIGUE_DROP_PCT", "0.35"))
 _EWMA_ALPHA = float(os.getenv("TEST_EWMA_ALPHA", "0.30"))
 
-_MIN_SPEND_BEFORE_KILL = float(os.getenv("TEST_MIN_SPEND_BEFORE_KILL", "20"))  # EUR
+_ENV_MIN_SPEND_BEFORE_KILL = float(os.getenv("TEST_MIN_SPEND_BEFORE_KILL", "20"))  # EUR
 _BANDIT_SAMPLE_COUNT = int(os.getenv("TEST_BANDIT_SAMPLE_COUNT", "32"))
 _MAX_LAUNCHES_PER_TICK = int(os.getenv("TEST_MAX_LAUNCHES_PER_TICK", "8"))
 
@@ -70,11 +71,11 @@ def _roas(row: Dict[str, Any]) -> float:
     return 0.0
 
 
-def _meets_minimums(row: Dict[str, Any]) -> bool:
+def _meets_minimums(row: Dict[str, Any], min_impressions: int, min_clicks: int, min_spend: float) -> bool:
     return (
-        _safe_f(row.get("spend")) >= _MIN_SPEND
-        and _safe_f(row.get("impressions")) >= _MIN_IMPRESSIONS
-        and _safe_f(row.get("clicks")) >= _MIN_CLICKS
+        _safe_f(row.get("spend")) >= min_spend
+        and _safe_f(row.get("impressions")) >= min_impressions
+        and _safe_f(row.get("clicks")) >= min_clicks
     )
 
 
@@ -141,8 +142,8 @@ def _bayes_kill_prob(clicks: float, imps: float, floor: float) -> float:
     return below / max(1, n)
 
 
-def _adaptive_ctr_floor(rows: List[Dict[str, Any]]) -> float:
-    ctrs = sorted((_ctr(r) for r in rows if _safe_f(r.get("impressions")) >= _MIN_IMPRESSIONS), reverse=True)
+def _adaptive_ctr_floor(rows: List[Dict[str, Any]], min_impressions: int) -> float:
+    ctrs = sorted((_ctr(r) for r in rows if _safe_f(r.get("impressions")) >= min_impressions), reverse=True)
     if not ctrs:
         return _ADAPTIVE_CTR_FLOOR_MIN
     mid = ctrs[len(ctrs) // 2]
@@ -281,6 +282,18 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
     except Exception:
         pass
 
+    # --- Resolve minimums from YAML (with env fallbacks) ---
+    tmin = (settings.get("testing") or {}).get("minimums") or {}
+    min_impressions = int(tmin.get("min_impressions", _ENV_MIN_IMPRESSIONS))
+    # YAML supports 'min_clicks'; if absent we fall back to env default
+    min_clicks = int(tmin.get("min_clicks", _ENV_MIN_CLICKS))
+    # YAML may use 'min_spend_eur' or generic 'min_spend'
+    min_spend = float(tmin.get("min_spend_eur", tmin.get("min_spend", _ENV_MIN_SPEND)))
+
+    # Per-ad budget after which we ALWAYS evaluate rules (no gating by mins)
+    tfair = (settings.get("testing") or {}).get("fairness") or {}
+    min_spend_before_kill = float(tfair.get("min_spend_before_kill_eur", _ENV_MIN_SPEND_BEFORE_KILL))
+
     adset_id = settings["ids"]["testing_adset_id"]
     keep_live = int(settings["testing"]["keep_ads_live"])
     validation_campaign_id = settings["ids"]["validation_campaign_id"]
@@ -313,7 +326,7 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
         notify(f"❗ [TEST] Failed to fetch insights: {e}")
         return summary
 
-    ctr_floor = _adaptive_ctr_floor(rows)
+    ctr_floor = _adaptive_ctr_floor(rows, min_impressions)
 
     for r in rows:
         ad_id = r.get("ad_id")
@@ -322,8 +335,8 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
             continue
 
         # Apply global minimums ONLY while spend is below the per-ad kill budget.
-        # Once spend >= _MIN_SPEND_BEFORE_KILL, always evaluate rules (e.g., spend≥32 & no purchase).
-        if _safe_f(r.get("spend")) < _MIN_SPEND_BEFORE_KILL and not _meets_minimums(r):
+        # Once spend >= min_spend_before_kill, always evaluate rules (e.g., spend≥32 & no purchase).
+        if _safe_f(r.get("spend")) < min_spend_before_kill and not _meets_minimums(r, min_impressions, min_clicks, min_spend):
             continue
 
         dq = _data_quality_sentry(r)
@@ -504,9 +517,8 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
             summary["launched"] += 1
             _record_queue_feedback(store, label_core, clicks=1, imps=200)
 
-            # ── NEW: mark Supabase row as launched (best-effort) ─────────────────
+            # ── mark Supabase row as launched (best-effort) ─────────────────
             try:
-                # Adjust import path to your runner module name if needed
                 from main import mark_supabase_launched, _normalize_video_id_cell as _norm_from_main
 
                 cid = str(p.get("creative_id") or "")
@@ -518,7 +530,7 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
                         mark_supabase_launched([vid], use_column="video_id")
             except Exception:
                 pass
-            # ─────────────────────────────────────────────────────────────────────
+            # ────────────────────────────────────────────────────────────────
 
         except Exception as e:
             notify(f"❗ [TEST] Failed to launch '{label_core}': {e}")
