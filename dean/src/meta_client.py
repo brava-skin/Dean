@@ -405,11 +405,16 @@ class MetaClient:
         action_attribution_windows: Optional[List[str]] = None,
         paginate: bool = True,
         stage: Optional[str] = None,
+        date_preset: Optional[str] = None,  # <-- NEW: allow presets like "lifetime"
     ) -> List[Dict[str, Any]]:
-        tr = time_range or {"since": yesterday_ymd(), "until": today_ymd()}
+        """
+        Fetch insights. If `date_preset` is provided (e.g., "lifetime", "today", "yesterday", "last_7d"),
+        it is sent to the API and `time_range` is ignored. Otherwise defaults to yesterday→today.
+        """
+        tr = None if date_preset else (time_range or {"since": yesterday_ymd(), "until": today_ymd()})
 
         if self.dry_run or not USE_SDK:
-            # dev mock (values are in EUR now conceptually, but numbers are just examples)
+            # dev mock (values are in EUR conceptually, but numbers are examples)
             def mock_row(idx, stage_, spend, clicks, imps, purchases, revenue):
                 return {
                     "ad_id": f"AD_{stage_}_{idx}",
@@ -428,12 +433,21 @@ class MetaClient:
                     "action_values": [{"action_type": "purchase", "value": str(revenue)}],
                     "purchase_roas": [{"value": float(revenue) / spend if spend > 0 else 0.0}],
                 }
-            rows = [
-                mock_row(1, "TEST", 22.17, 35, 4200, 0, 0.0),
-                mock_row(2, "TEST", 38.76, 50, 5200, 1, 73.0),
-                mock_row(3, "VALID", 41.22, 48, 3900, 1, 90.0),
-                mock_row(4, "SCALE", 128.2, 120, 14000, 5, 520.0),
-            ]
+
+            # If lifetime preset, simulate higher cumulative spend
+            if date_preset == "lifetime":
+                rows = [
+                    mock_row(1, "TEST", 65.00, 90, 9000, 0, 0.0),
+                    mock_row(2, "TEST", 140.0, 160, 15000, 2, 160.0),
+                    mock_row(3, "VALID", 200.0, 210, 19000, 3, 300.0),
+                ]
+            else:
+                rows = [
+                    mock_row(1, "TEST", 22.17, 35, 4200, 0, 0.0),
+                    mock_row(2, "TEST", 38.76, 50, 5200, 1, 73.0),
+                    mock_row(3, "VALID", 41.22, 48, 3900, 1, 90.0),
+                    mock_row(4, "SCALE", 128.2, 120, 14000, 5, 520.0),
+                ]
             if stage:
                 rows = [r for r in rows if r["ad_name"].startswith(f"[{stage.upper()}]")]
             return rows
@@ -442,7 +456,6 @@ class MetaClient:
         use_fields = fields or list(self.cfg.fields_default)
         params: Dict[str, Any] = {
             "level": level,
-            "time_range": tr,
             "filtering": filtering or [],
             "limit": max(1, min(1000, int(limit))),
             "action_attribution_windows": action_attribution_windows
@@ -450,6 +463,12 @@ class MetaClient:
         }
         if breakdowns:
             params["breakdowns"] = breakdowns
+
+        # choose between time_range and date_preset
+        if date_preset:
+            params["date_preset"] = date_preset
+        else:
+            params["time_range"] = tr
 
         rows: List[Dict[str, Any]] = []
 
