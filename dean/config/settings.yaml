@@ -84,7 +84,7 @@ testing:
   dead_hours_window: "02:00-06:00"   # interpreted in Europe/Amsterdam now
   minimums:
     min_impressions: 300
-    min_clicks: 10
+    min_clicks: 0
     min_spend_eur: 10
     min_spend_usd: 10
   fairness:
@@ -324,5 +324,6 @@ cbo:
 copy_bank:
   path: "dean/data/copy_bank.json"
   strategy: "round_robin"
+
 
 
