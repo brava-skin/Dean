@@ -299,7 +299,7 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
     # --- Resolve minimums from YAML (with env fallbacks) ---
     tmin = (settings.get("testing") or {}).get("minimums") or {}
     min_impressions = int(tmin.get("min_impressions", _ENV_MIN_IMPRESSIONS))
-    min_clicks = int(tmin.get("min_clicks", _ENV_MIN_CLICKS))  # you set this to 0 in YAML
+    min_clicks = int(tmin.get("min_clicks", _ENV_MIN_CLICKS))  # allow 0 from YAML
     min_spend = float(tmin.get("min_spend_eur", tmin.get("min_spend", _ENV_MIN_SPEND)))
 
     tfair = (settings.get("testing") or {}).get("fairness") or {}
@@ -312,7 +312,9 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
     copy_bank = _load_copy_bank(settings)
     copy_strategy = (settings.get("copy_bank") or {}).get("strategy", "round_robin")
 
+    # Fetch insights: TODAY and LIFETIME (since ad launch)
     try:
+        # Today (or default preset) — used for CTR/adaptive floor and fatigue responsiveness
         rows = meta.get_ad_insights(
             level="ad",
             filtering=[{"field": "adset.id", "operator": "IN", "value": [adset_id]}],
@@ -333,9 +335,23 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
             action_attribution_windows=list(_ATTR_WINDOWS),
             paginate=True,
         )
+        # Lifetime (since ad launch) — used for spend/purchase tripwire and gating
+        rows_lifetime = meta.get_ad_insights(
+            level="ad",
+            filtering=[{"field": "adset.id", "operator": "IN", "value": [adset_id]}],
+            fields=["ad_id", "spend", "actions", "action_values"],
+            action_attribution_windows=list(_ATTR_WINDOWS),
+            date_preset="lifetime",
+            paginate=True,
+        )
     except Exception as e:
         notify(f"❗ [TEST] Failed to fetch insights: {e}")
         return summary
+
+    # Build lifetime lookup by ad_id
+    lifetime_by_id: Dict[str, Dict[str, Any]] = {}
+    for lr in rows_lifetime or []:
+        lifetime_by_id[str(lr.get("ad_id") or "")] = lr
 
     ctr_floor = _adaptive_ctr_floor(rows, min_impressions)
 
@@ -345,22 +361,34 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
         if not ad_id:
             continue
 
-        # Apply global minimums ONLY while spend is below the per-ad kill budget.
-        if _safe_f(r.get("spend")) < min_spend_before_kill and not _meets_minimums(r, min_impressions, min_clicks, min_spend):
+        # TODAY metrics
+        spend_today = _safe_f(r.get("spend"))
+        ctr_today = _ctr(r)
+        purch_today, atc_today = _purchase_and_atc_counts(r)
+
+        # LIFETIME metrics (since ad launch)
+        lr = lifetime_by_id.get(str(ad_id), {}) or {}
+        spend_life = _safe_f(lr.get("spend"))
+        purch_life, atc_life = _purchase_and_atc_counts(lr)
+
+        # Apply global minimums ONLY while BOTH today's spend AND lifetime spend are below the per-ad kill budget.
+        # Once either spend_today or spend_life >= min_spend_before_kill, always evaluate rules.
+        if (spend_today < min_spend_before_kill and spend_life < min_spend_before_kill) and \
+           not _meets_minimums(r, min_impressions, min_clicks, min_spend):
             continue
 
-        # Helpful DQ note (doesn't block actions)
+        # Helpful DQ note (doesn't block actions) — uses TODAY row shape
         dq = _data_quality_sentry(r)
         if dq:
             notify(f"🩺 [TEST] {name}: {dq}")
             summary["data_quality_alerts"] += 1
 
-        ctr_today = _ctr(r)
+        # Fatigue detection on today's CTR vs EWMA
         if _fatigue_detect(store, ad_id, ctr_today):
             notify(f"🟡 [TEST] Fatigue signal on {name} (CTR drop vs trend).")
             summary["fatigue_flags"] += 1
 
-        # Engine rule + Bayesian kill
+        # Engine rule + Bayesian kill (today-based CTR floor)
         bayes_p = _bayes_kill_prob(_safe_f(r.get("clicks")), _safe_f(r.get("impressions")), ctr_floor)
         bayes_kill = bayes_p >= _BAYES_KILL_PROB
         try:
@@ -368,10 +396,8 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
         except Exception:
             kill, reason_engine = False, ""
 
-        # Inline tripwire: spend_no_purchase ≥ threshold (default 32 EUR)
-        spend = _safe_f(r.get("spend"))
-        purch_count, _ = _purchase_and_atc_counts(r)
-        trip_spend_no_purchase = (spend >= _SPEND_NO_PURCHASE_EUR and purch_count == 0)
+        # Inline tripwire: LIFETIME spend_no_purchase ≥ threshold
+        trip_spend_no_purchase = (spend_life >= _SPEND_NO_PURCHASE_EUR and purch_life == 0)
 
         should_kill = kill or bayes_kill or trip_spend_no_purchase
         if should_kill and _stable_pass(store, ad_id, "kill_test", True):
@@ -380,7 +406,7 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
                 reason = (
                     reason_engine
                     or ("CTR<{:.2%} (p={:.2f})".format(ctr_floor, bayes_p) if bayes_kill else "")
-                    or f"Spend≥€{int(_SPEND_NO_PURCHASE_EUR)} & no purchase"
+                    or f"Lifetime spend≥€{int(_SPEND_NO_PURCHASE_EUR)} & no purchase"
                 )
                 store.log(
                     entity_type="ad",
@@ -396,10 +422,12 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
                         "spend_no_purchase_eur": _SPEND_NO_PURCHASE_EUR,
                     },
                     observed={
-                        "CTR": f"{ctr_today:.2%}",
+                        "CTR_today": f"{ctr_today:.2%}",
+                        "spend_today": spend_today,
+                        "purchases_today": purch_today,
+                        "spend_lifetime": spend_life,
+                        "purchases_lifetime": purch_life,
                         "ROAS": round(_roas(r), 2),
-                        "spend": spend,
-                        "purchases": purch_count,
                     },
                 )
                 try:
