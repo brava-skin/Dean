@@ -285,6 +285,37 @@ def _normalize_video_id_cell(v: Any) -> str:
     return keep
 
 
+# ---------- safe pause helper (works with/without MetaClient.pause_ad) ----------
+def _pause_ad(meta: Any, ad_id: str) -> Any:
+    # Preferred: client's own pause method
+    if hasattr(meta, "pause_ad") and callable(getattr(meta, "pause_ad")):
+        return meta.pause_ad(ad_id)
+    # Direct Graph POST to the object path /{ad_id}
+    try:
+        import requests
+        ver = getattr(getattr(meta, "account", None), "api_version", "v23.0") or "v23.0"
+        token = getattr(getattr(meta, "account", None), "access_token", None)
+        if not token:
+            raise RuntimeError("No access token on meta client.")
+        url = f"https://graph.facebook.com/{ver}/{ad_id}"
+        r = requests.post(url, json={"access_token": token, "status": "PAUSED"}, timeout=30)
+        if r.status_code >= 400:
+            try:
+                err = r.json()
+            except Exception:
+                err = {"error": {"message": r.text}}
+            raise RuntimeError(f"Graph POST {url} {r.status_code}: {err}")
+        return r.json()
+    except Exception:
+        # SDK fallback if available
+        try:
+            from facebook_business.adobjects.ad import Ad as FBAd
+            FBAd(ad_id).api_update(params={"status": "PAUSED"})
+            return {"result": "ok", "sdk": True}
+        except Exception as e2:
+            raise e2
+
+
 def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: Any, queue_df: pd.DataFrame) -> Dict[str, Any]:
     summary = {"kills": 0, "promotions": 0, "launched": 0, "fatigue_flags": 0, "data_quality_alerts": 0}
     try:
@@ -313,7 +344,6 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
 
     # -------- Fetch insights via MetaClient (today + lifetime) --------
     try:
-        # TODAY — adaptive CTR/fatigue should react to current performance
         rows_today = meta.get_ad_insights(
             level="ad",
             filtering=[{"field": "adset.id", "operator": "IN", "value": [adset_id]}],
@@ -336,20 +366,18 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
             date_preset="today",
         )
 
-        # LIFETIME (since ad launch) — used for tripwires like spend≥€32 & no purchase
         rows_lifetime = meta.get_ad_insights(
             level="ad",
             filtering=[{"field": "adset.id", "operator": "IN", "value": [adset_id]}],
             fields=["ad_id", "ad_name", "spend", "actions", "action_values"],
             action_attribution_windows=list(_ATTR_WINDOWS),
-            date_preset="lifetime",  # client maps to "maximum" if needed and retries
+            date_preset="lifetime",  # client maps if needed
             paginate=True,
         )
     except Exception as e:
         notify(f"❗ [TEST] Failed to fetch insights: {e}")
         return summary
 
-    # Build lifetime lookup by ad_id
     lifetime_by_id: Dict[str, Dict[str, Any]] = {}
     for lr in rows_lifetime or []:
         lifetime_by_id[str(lr.get("ad_id") or "")] = lr
@@ -362,39 +390,33 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
         if not ad_id:
             continue
 
-        # TODAY metrics
         spend_today = _safe_f(r.get("spend"))
         ctr_today = _ctr(r)
         purch_today, atc_today = _purchase_and_atc_counts(r)
 
-        # LIFETIME metrics (since ad launch)
         lr = lifetime_by_id.get(str(ad_id), {}) or {}
         spend_life = _safe_f(lr.get("spend"))
         purch_life, atc_life = _purchase_and_atc_counts(lr)
 
-        # DEBUG breadcrumb (helps verify tripwire inputs)
         try:
             notify(f"ℹ️ [TEST] {name}: lifetime_spend={spend_life:.2f} purchases={purch_life} today_spend={spend_today:.2f}")
         except Exception:
             pass
 
-        # Apply global minimums ONLY while BOTH today's spend AND lifetime spend are below the per-ad kill budget.
+        # Gate on minimums only if BOTH today's and lifetime spend are below the kill budget.
         if (spend_today < min_spend_before_kill and spend_life < min_spend_before_kill) and \
            not _meets_minimums(r, min_impressions, min_clicks, min_spend):
             continue
 
-        # Helpful DQ note (doesn't block actions) — uses TODAY row shape
         dq = _data_quality_sentry(r)
         if dq:
             notify(f"🩺 [TEST] {name}: {dq}")
             summary["data_quality_alerts"] += 1
 
-        # Fatigue detection on today's CTR vs EWMA
         if _fatigue_detect(store, ad_id, ctr_today):
             notify(f"🟡 [TEST] Fatigue signal on {name} (CTR drop vs trend).")
             summary["fatigue_flags"] += 1
 
-        # Engine rule + Bayesian kill (today-based CTR floor)
         bayes_p = _bayes_kill_prob(_safe_f(r.get("clicks")), _safe_f(r.get("impressions")), ctr_floor)
         bayes_kill = bayes_p >= _BAYES_KILL_PROB
         try:
@@ -402,14 +424,11 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
         except Exception:
             kill, reason_engine = False, ""
 
-        # Inline tripwire: LIFETIME spend_no_purchase ≥ threshold
-        trip_spend_no_purchase = (spend_life >= _SPEND_NO_PURCHASE_EUR and purch_life == 0)
-
-        # ── NEW: tripwire bypasses stability (kill immediately) ────────────────
-        if trip_spend_no_purchase:
+        # Immediate tripwire: lifetime spend≥threshold & no purchase
+        if spend_life >= _SPEND_NO_PURCHASE_EUR and purch_life == 0:
             reason = f"Lifetime spend≥€{int(_SPEND_NO_PURCHASE_EUR)} & no purchase"
             try:
-                meta.pause_ad(ad_id)
+                _pause_ad(meta, ad_id)
                 store.log(
                     entity_type="ad",
                     entity_id=ad_id,
@@ -433,15 +452,13 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
                 summary["kills"] += 1
             except Exception as e:
                 notify(f"❗ [TEST] Failed to pause {name}: {e}")
-            # do not attempt promotion on a killed ad
-            continue
-        # ──────────────────────────────────────────────────────────────────────
+            continue  # don't consider promotion after a kill
 
-        # Other kill paths still use stability
+        # Other kill paths with stability
         should_kill_other = kill or bayes_kill
         if should_kill_other and _stable_pass(store, ad_id, "kill_test", True):
             try:
-                meta.pause_ad(ad_id)
+                _pause_ad(meta, ad_id)
                 reason = (
                     reason_engine
                     or ("CTR<{:.2%} (p={:.2f})".format(ctr_floor, bayes_p) if bayes_kill else "Rule-based kill")
@@ -481,7 +498,6 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
         if adv and _stable_pass(store, ad_id, "adv_test", True):
             label = name.replace("[TEST]", "").strip() or f"Ad_{ad_id}"
             try:
-                # EUR-aware call (account currency)
                 valid_as = meta.create_validation_adset(validation_campaign_id, label, daily_budget=40.0)
             except Exception:
                 valid_as = None
@@ -500,7 +516,7 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
                 notify(f"✅ [TEST→VALID] {label} — {adv_reason} (Budget: {ACCOUNT_CURRENCY_SYMBOL}40/day)")
             if _PAUSE_AFTER_PROMOTION:
                 try:
-                    meta.pause_ad(ad_id)
+                    _pause_ad(meta, ad_id)
                 except Exception:
                     pass
             summary["promotions"] += 1
