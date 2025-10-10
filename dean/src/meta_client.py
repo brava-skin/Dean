@@ -405,13 +405,19 @@ class MetaClient:
         action_attribution_windows: Optional[List[str]] = None,
         paginate: bool = True,
         stage: Optional[str] = None,
-        date_preset: Optional[str] = None,  # <-- NEW: allow presets like "lifetime"
+        date_preset: Optional[str] = None,  # accepts presets; "lifetime" will be mapped to "maximum"
     ) -> List[Dict[str, Any]]:
         """
-        Fetch insights. If `date_preset` is provided (e.g., "lifetime", "today", "yesterday", "last_7d"),
-        it is sent to the API and `time_range` is ignored. Otherwise defaults to yesterday→today.
+        Fetch insights. If `date_preset` is provided (e.g., "maximum", "today", "yesterday",
+        "last_7d", "last_30d"), it is sent to the API and `time_range` is ignored.
+        Some API versions do NOT accept "lifetime"; we auto-map "lifetime" -> "maximum".
         """
-        tr = None if date_preset else (time_range or {"since": yesterday_ymd(), "until": today_ymd()})
+        # Normalize preset for API versions that don't accept "lifetime"
+        normalized_preset = (date_preset or "").strip().lower() or None
+        if normalized_preset == "lifetime":
+            normalized_preset = "maximum"
+
+        tr = None if normalized_preset else (time_range or {"since": yesterday_ymd(), "until": today_ymd()})
 
         if self.dry_run or not USE_SDK:
             # dev mock (values are in EUR conceptually, but numbers are examples)
@@ -434,8 +440,7 @@ class MetaClient:
                     "purchase_roas": [{"value": float(revenue) / spend if spend > 0 else 0.0}],
                 }
 
-            # If lifetime preset, simulate higher cumulative spend
-            if date_preset == "lifetime":
+            if normalized_preset in ("maximum",):
                 rows = [
                     mock_row(1, "TEST", 65.00, 90, 9000, 0, 0.0),
                     mock_row(2, "TEST", 140.0, 160, 15000, 2, 160.0),
@@ -465,8 +470,8 @@ class MetaClient:
             params["breakdowns"] = breakdowns
 
         # choose between time_range and date_preset
-        if date_preset:
-            params["date_preset"] = date_preset
+        if normalized_preset:
+            params["date_preset"] = normalized_preset
         else:
             params["time_range"] = tr
 
@@ -478,7 +483,35 @@ class MetaClient:
                 p["after"] = after
             return AdAccount(self.ad_account_id_act).get_insights(fields=use_fields, params=p)
 
-        cursor = self._retry("insights", _get)
+        # primary attempt
+        try:
+            cursor = self._retry("insights", _get)
+        except Exception as e:
+            # If preset is invalid (API code 100), make a single fallback attempt using "maximum"
+            fallback_needed = False
+            if USE_SDK and isinstance(e, FacebookRequestError):
+                try:
+                    code = _maybe_call(getattr(e, "api_error_code", None))
+                    msg = _maybe_call(getattr(e, "api_error_message", None)) or ""
+                    if code == 100 and "date_preset" in (msg or "").lower():
+                        fallback_needed = True
+                except Exception:
+                    fallback_needed = False
+            else:
+                # Non-SDK path — inspect str(e)
+                s = str(e).lower()
+                if "(#100)" in s and "date_preset" in s:
+                    fallback_needed = True
+
+            if normalized_preset and fallback_needed and normalized_preset != "maximum":
+                params["date_preset"] = "maximum"
+                try:
+                    cursor = self._retry("insights", _get)
+                except Exception:
+                    raise
+            else:
+                raise
+
         rows.extend(list(cursor))
 
         if paginate:
