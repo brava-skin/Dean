@@ -312,10 +312,10 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
     copy_bank = _load_copy_bank(settings)
     copy_strategy = (settings.get("copy_bank") or {}).get("strategy", "round_robin")
 
-    # Fetch insights: TODAY and LIFETIME (since ad launch)
+    # -------- Fetch insights via MetaClient (today + lifetime) --------
     try:
-        # Today (or default preset) — used for CTR/adaptive floor and fatigue responsiveness
-        rows = meta.get_ad_insights(
+        # TODAY — adaptive CTR/fatigue should react to current performance
+        rows_today = meta.get_ad_insights(
             level="ad",
             filtering=[{"field": "adset.id", "operator": "IN", "value": [adset_id]}],
             fields=[
@@ -334,14 +334,17 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
             ],
             action_attribution_windows=list(_ATTR_WINDOWS),
             paginate=True,
+            # works with updated MetaClient (kept here for clarity)
+            date_preset="today",
         )
-        # Lifetime (since ad launch) — used for spend/purchase tripwire and gating
+
+        # LIFETIME (since ad launch) — used for tripwires like spend≥€32 & no purchase
         rows_lifetime = meta.get_ad_insights(
             level="ad",
             filtering=[{"field": "adset.id", "operator": "IN", "value": [adset_id]}],
             fields=["ad_id", "spend", "actions", "action_values"],
             action_attribution_windows=list(_ATTR_WINDOWS),
-            date_preset="lifetime",
+            date_preset="lifetime",  # client auto-maps to "maximum" if needed and retries
             paginate=True,
         )
     except Exception as e:
@@ -353,9 +356,9 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
     for lr in rows_lifetime or []:
         lifetime_by_id[str(lr.get("ad_id") or "")] = lr
 
-    ctr_floor = _adaptive_ctr_floor(rows, min_impressions)
+    ctr_floor = _adaptive_ctr_floor(rows_today, min_impressions)
 
-    for r in rows:
+    for r in rows_today:
         ad_id = r.get("ad_id")
         name = r.get("ad_name", "")
         if not ad_id:
