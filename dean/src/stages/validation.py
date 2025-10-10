@@ -14,10 +14,14 @@ _MIN_CLICKS = int(os.getenv("VALID_MIN_CLICKS", "30"))
 _MIN_SPEND = float(os.getenv("VALID_MIN_SPEND", "40"))  # €40 per your plan
 _CONSEC_TICKS_REQUIRED = int(os.getenv("VALID_CONSEC_TICKS_REQUIRED", "2"))
 _ATTR_WINDOWS = tuple((os.getenv("VALID_ATTR_WINDOWS", "7d_click,1d_view") or "7d_click,1d_view").split(","))
+
 _PAUSE_AFTER_PROMOTION = (os.getenv("VALID_PAUSE_AFTER_PROMOTION", "1").lower() in ("1", "true", "yes"))
 
-# Ensure we don't kill before reasonable validation spend
+# Ensure we don't kill before reasonable validation spend (per-ad fairness budget)
 _MIN_FAIR_SPEND_BEFORE_KILL = float(os.getenv("VALID_MIN_FAIR_SPEND_BEFORE_KILL", "40"))  # €40
+
+# Lifetime tripwire (kill if lifetime spend ≥ this and still no purchases)
+_SPEND_NO_PURCHASE_EUR = float(os.getenv("VALID_SPEND_NO_PURCHASE_EUR", str(_MIN_FAIR_SPEND_BEFORE_KILL)))
 
 # Promotion behavior / soft pass (EUR)
 _PROMO_COOLDOWN_HOURS = int(os.getenv("VALID_PROMO_COOLDOWN_HOURS", "24"))
@@ -27,8 +31,10 @@ _SOFT_PASS_MIN_ROAS = float(os.getenv("VALID_SOFT_PASS_MIN_ROAS", "1.5"))
 _SOFT_PASS_MIN_CTR = float(os.getenv("VALID_SOFT_PASS_MIN_CTR", "0.008"))
 _ALLOW_CREATE_ON_PROMO_CHECK = (os.getenv("VALID_ALLOW_CREATE_ON_PROMO_CHECK", "0").lower() in ("1", "true", "yes"))
 
+
 def _now_minute_key(prefix: str) -> str:
     return f"{prefix}::{datetime.now(UTC).strftime('%Y-%m-%dT%H:%M')}"
+
 
 def _safe_f(v: Any, default: float = 0.0) -> float:
     try:
@@ -40,11 +46,27 @@ def _safe_f(v: Any, default: float = 0.0) -> float:
     except Exception:
         return default
 
+
+def _safe_ctr(row: Dict[str, Any]) -> float:
+    imps = _safe_f(row.get("impressions"))
+    clicks = _safe_f(row.get("clicks"))
+    return (clicks / imps) if imps > 0 else 0.0
+
+
+def _safe_roas(row: Dict[str, Any]) -> float:
+    roas_list = row.get("purchase_roas") or []
+    try:
+        return float(roas_list[0].get("value", 0)) if roas_list else 0.0
+    except Exception:
+        return 0.0
+
+
 def _meets_minimums(row: Dict[str, Any]) -> bool:
     spend = _safe_f(row.get("spend"))
     imps = _safe_f(row.get("impressions"))
     clicks = _safe_f(row.get("clicks"))
     return spend >= _MIN_SPEND and imps >= _MIN_IMPRESSIONS and clicks >= _MIN_CLICKS
+
 
 def _stable_pass(store: Any, entity_id: str, rule_key: str, condition: bool) -> bool:
     key = f"{entity_id}::stable::{rule_key}"
@@ -56,19 +78,23 @@ def _stable_pass(store: Any, entity_id: str, rule_key: str, condition: bool) -> 
     except Exception:
         return condition
 
-def _safe_ctr(row: Dict[str, Any]) -> float:
-    imps = _safe_f(row.get("impressions"))
-    clicks = _safe_f(row.get("clicks"))
-    return (clicks / imps) if imps > 0 else 0.0
 
-def _safe_roas(row: Dict[str, Any]) -> float:
-    roas_list = row.get("purchase_roas") or []
-    try:
-        return float(roas_list[0].get("value", 0)) if roas_list else 0.0
-    except Exception:
-        return 0.0
+def _purchase_and_atc_counts(row: Dict[str, Any]) -> tuple[int, int]:
+    acts = row.get("actions") or []
+    purch = 0
+    atc = 0
+    for a in acts:
+        t = a.get("action_type")
+        v = _safe_f(a.get("value"), 0.0)
+        if t == "purchase":
+            purch += int(v)
+        elif t == "add_to_cart":
+            atc += int(v)
+    return purch, atc
+
 
 def _purchase_days(meta: Any, ad_id: str, days: int = 7) -> int:
+    """Count distinct days with ≥1 purchase in the last 'days' (date breakdown)."""
     try:
         rows = meta.get_ad_insights(
             level="ad",
@@ -94,6 +120,7 @@ def _purchase_days(meta: Any, ad_id: str, days: int = 7) -> int:
     except Exception:
         return 0
 
+
 def _adaptive_start_budget_eur(row: Dict[str, Any], default_eur: float) -> float:
     """Pick a sensible starting budget in EUR based on observed CPA (caps included)."""
     spend = _safe_f(row.get("spend"))
@@ -105,6 +132,7 @@ def _adaptive_start_budget_eur(row: Dict[str, Any], default_eur: float) -> float
     if cpa is None:
         return float(default_eur)
     return float(max(_SOFT_PASS_MAX_BUDGET, min(3.0 * cpa, 150.0)))
+
 
 def _promotion_cooldown_active(store: Any, ad_id: str) -> bool:
     try:
@@ -119,12 +147,14 @@ def _promotion_cooldown_active(store: Any, ad_id: str) -> bool:
         return False
     return False
 
+
 def _set_promotion_cooldown(store: Any, ad_id: str) -> None:
     try:
         until = (datetime.now(UTC) + timedelta(hours=_PROMO_COOLDOWN_HOURS)).isoformat()
         store.set_flag("ad", ad_id, "promo_cooldown_until", until)
     except Exception:
         pass
+
 
 def _eligible_soft_pass(row: Dict[str, Any]) -> bool:
     spend = _safe_f(row.get("spend"))
@@ -135,9 +165,13 @@ def _eligible_soft_pass(row: Dict[str, Any]) -> bool:
         if a.get("action_type") == "purchase":
             purchases += _safe_f(a.get("value"))
     cpa = (spend / purchases) if purchases > 0 else None
-    return purchases >= 1 and ((cpa is not None and cpa <= _SOFT_PASS_MAX_CPA) or ctr >= _SOFT_PASS_MIN_CTR or roas >= _SOFT_PASS_MIN_ROAS)
+    return purchases >= 1 and (
+        (cpa is not None and cpa <= _SOFT_PASS_MAX_CPA) or ctr >= _SOFT_PASS_MIN_CTR or roas >= _SOFT_PASS_MIN_ROAS
+    )
+
 
 def _find_existing_scaling_adset(meta: Any, scaling_campaign_id: str, creative_label: str) -> Optional[str]:
+    """Best-effort probe to avoid duplicates (no creation if disabled)."""
     if not hasattr(meta, "ensure_adset") or not isinstance(creative_label, str):
         return None
     if not _ALLOW_CREATE_ON_PROMO_CHECK:
@@ -146,12 +180,13 @@ def _find_existing_scaling_adset(meta: Any, scaling_campaign_id: str, creative_l
         res = meta.ensure_adset(
             campaign_id=scaling_campaign_id,
             name=f"[SCALE] {creative_label}",
-            daily_budget_usd=0.0,  # value ignored; we only probe existence
+            daily_budget=0.0,  # value ignored; we only probe existence
             status="PAUSED",
         )
         return res.get("id")
     except Exception:
         return None
+
 
 def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: Any) -> Dict[str, int]:
     summary = {"kills": 0, "promotions": 0, "soft_passes": 0}
@@ -165,10 +200,12 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
     validation_campaign_id = settings["ids"]["validation_campaign_id"]
     scaling_campaign_id = settings["ids"]["scaling_campaign_id"]
 
-    # Start budget interpreted in EUR (ad account currency). Kept as *_usd in Meta client API for compatibility.
+    # Start budget interpreted in EUR (ad account currency).
     start_budget_default_eur = float(settings.get("scaling", {}).get("adset_start_budget_eur", 100.0))
 
+    # Fetch TODAY (default window) and LIFETIME (since ad launch)
     try:
+        # Today/default — used for performance metrics, promotion logic, etc.
         rows = meta.get_ad_insights(
             level="ad",
             filtering=[{"field": "campaign.id", "operator": "IN", "value": [validation_campaign_id]}],
@@ -189,9 +226,25 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
             action_attribution_windows=list(_ATTR_WINDOWS),
             paginate=True,
         )
+        # Lifetime — used to decide kills on total spend since launch
+        rows_life = meta.get_ad_insights(
+            level="ad",
+            filtering=[{"field": "campaign.id", "operator": "IN", "value": [validation_campaign_id]}],
+            fields=["ad_id", "spend", "actions", "action_values"],
+            action_attribution_windows=list(_ATTR_WINDOWS),
+            date_preset="lifetime",
+            paginate=True,
+        )
     except Exception as e:
         notify(f"❗ [VALID] Insights error: {e}")
         return summary
+
+    # Map lifetime rows by ad_id
+    life_by_ad: Dict[str, Dict[str, Any]] = {}
+    for lr in rows_life or []:
+        aid = str(lr.get("ad_id") or "")
+        if aid:
+            life_by_ad[aid] = lr
 
     for r in rows:
         ad_id = r.get("ad_id")
@@ -199,47 +252,81 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
         if not ad_id:
             continue
 
-        # Ensure minimum fair spend before a kill
-        if _safe_f(r.get("spend")) < _MIN_FAIR_SPEND_BEFORE_KILL:
-            pass  # allow promotion checks below, but defer killing
+        # Today metrics
+        spend_today = _safe_f(r.get("spend"))
+        ctr_today = _safe_ctr(r)
+        roas_today = _safe_roas(r)
+        purch_today, _atc_today = _purchase_and_atc_counts(r)
 
-        if not _meets_minimums(r):
+        # Lifetime metrics
+        lr = life_by_ad.get(str(ad_id), {}) or {}
+        spend_life = _safe_f(lr.get("spend"))
+        purch_life, _atc_life = _purchase_and_atc_counts(lr)
+
+        # Optional: log a quick line so you see the lifetime/today view
+        notify(f"ℹ️ [VALID] {ad_name}: lifetime_spend={spend_life:.2f} purchases={purch_life} today_spend={spend_today:.2f}")
+
+        # Fairness gating: while BOTH today's and lifetime spend are below fair budget AND
+        # validation minimums aren't met, skip heavy actions.
+        if (spend_today < _MIN_FAIR_SPEND_BEFORE_KILL and spend_life < _MIN_FAIR_SPEND_BEFORE_KILL) and not _meets_minimums(r):
             continue
 
+        # Informative metric (not a blocker)
         pdays = _purchase_days(meta, ad_id)
         if pdays:
             r["purchase_days"] = pdays
 
-        # KILL checks
+        # ---- KILL checks ----
+        # 1) Engine-driven kill
         try:
-            kill, reason = engine.should_kill_validation(r)
+            kill_engine, reason_engine = engine.should_kill_validation(r)
         except Exception:
-            kill, reason = False, ""
-        if kill and _stable_pass(store, ad_id, "kill_valid", True):
-            if _safe_f(r.get("spend")) < _MIN_FAIR_SPEND_BEFORE_KILL:
+            kill_engine, reason_engine = False, ""
+
+        # 2) Lifetime tripwire: spent enough since launch but zero purchases
+        kill_tripwire = (spend_life >= _SPEND_NO_PURCHASE_EUR and purch_life == 0)
+        kill_condition = bool(kill_engine or kill_tripwire)
+
+        if kill_condition and _stable_pass(store, ad_id, "kill_valid", True):
+            # If fairness not met yet, reset stability and skip kill
+            if spend_life < _MIN_FAIR_SPEND_BEFORE_KILL:
                 _stable_pass(store, ad_id, "kill_valid", False)
             else:
+                reason = reason_engine or (f"Lifetime spend≥€{int(_SPEND_NO_PURCHASE_EUR)} & no purchase" if kill_tripwire else "Validation rule failed")
                 try:
                     meta.pause_ad(ad_id)
-                    store.log_kill(
-                        stage="VALID",
-                        entity_id=ad_id,
-                        rule_type="validation_kill",
-                        reason=reason,
-                        observed={
-                            "spend": _safe_f(r.get("spend")),
-                            "CTR": round(_safe_ctr(r), 4),
-                            "ROAS": round(_safe_roas(r), 3),
-                            "purchase_days": r.get("purchase_days", 0),
-                        },
-                        thresholds={"min_spend": _MIN_SPEND, "min_imps": _MIN_IMPRESSIONS, "min_clicks": _MIN_CLICKS},
-                    )
+                    # structured log
+                    try:
+                        store.log_kill(
+                            stage="VALID",
+                            entity_id=ad_id,
+                            rule_type="validation_kill",
+                            reason=reason,
+                            observed={
+                                "spend_today": spend_today,
+                                "spend_lifetime": spend_life,
+                                "purchases_today": purch_today,
+                                "purchases_lifetime": purch_life,
+                                "CTR": round(ctr_today, 4),
+                                "ROAS": round(roas_today, 3),
+                                "purchase_days": r.get("purchase_days", 0),
+                            },
+                            thresholds={
+                                "min_spend": _MIN_SPEND,
+                                "min_imps": _MIN_IMPRESSIONS,
+                                "min_clicks": _MIN_CLICKS,
+                                "lifetime_tripwire_eur": _SPEND_NO_PURCHASE_EUR,
+                            },
+                        )
+                    except Exception:
+                        pass
+                    # alert
                     try:
                         alert_kill(
                             "VALID",
                             ad_name,
                             reason,
-                            {"spend": f"{_safe_f(r.get('spend')):.0f}", "CTR": f"{_safe_ctr(r):.2%}", "ROAS": f"{_safe_roas(r):.2f}"},
+                            {"spend_life": f"{spend_life:.0f}", "CTR": f"{ctr_today:.2%}", "ROAS": f"{roas_today:.2f}"},
                         )
                     except Exception:
                         notify(f"🛑 [VALID] Killed {ad_name} — {reason}")
@@ -250,7 +337,7 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
         else:
             _stable_pass(store, ad_id, "kill_valid", False)
 
-        # PROMOTE checks
+        # ---- PROMOTE checks ----
         if _promotion_cooldown_active(store, ad_id):
             continue
         try:
@@ -279,11 +366,15 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
 
             start_budget = _adaptive_start_budget_eur(r, start_budget_default_eur)
             try:
-                # NOTE: Meta client still expects parameter name *_usd; value is in EUR because the ad account currency is EUR.
+                # MetaClient uses EUR as account currency; parameter name is daily_budget
                 if hasattr(meta, "create_scaling_adset"):
-                    scaling_adset = meta.create_scaling_adset(scaling_campaign_id, creative_label, daily_budget_usd=start_budget)
+                    scaling_adset = meta.create_scaling_adset(scaling_campaign_id, creative_label, daily_budget=start_budget)
                 elif hasattr(meta, "ensure_adset"):
-                    scaling_adset = meta.ensure_adset(campaign_id=scaling_campaign_id, name=f"[SCALE] {creative_label}", daily_budget_usd=start_budget)
+                    scaling_adset = meta.ensure_adset(
+                        campaign_id=scaling_campaign_id,
+                        name=f"[SCALE] {creative_label}",
+                        daily_budget=start_budget,
+                    )
                 else:
                     scaling_adset = {"id": None, "name": f"[SCALE] {creative_label}"}
 
@@ -293,7 +384,12 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
                     if hasattr(meta, "get_ad_creative_id"):
                         creative_id = meta.get_ad_creative_id(ad_id)
                     if creative_id and hasattr(meta, "create_ad") and scaling_adset.get("id"):
-                        created_ad = meta.create_ad(scaling_adset["id"], f"[SCALE] {creative_label}", creative_id=creative_id, status="ACTIVE")
+                        created_ad = meta.create_ad(
+                            scaling_adset["id"],
+                            f"[SCALE] {creative_label}",
+                            creative_id=creative_id,
+                            status="ACTIVE",
+                        )
                 except Exception:
                     created_ad = None
 
@@ -308,7 +404,7 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
                 except Exception:
                     pass
                 try:
-                    # alert_promote uses a $ symbol in its template; we still send the numeric value.
+                    # alert_promote template uses $, we still pass numeric
                     alert_promote("VALID", "SCALE", creative_label, budget=start_budget)
                 except Exception:
                     notify(f"🚀 [VALID→SCALE] {creative_label} — {adv_reason} (start €{start_budget:.0f}/d)")
@@ -324,15 +420,19 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
         else:
             _stable_pass(store, ad_id, "adv_valid", False)
 
-        # SOFT PASS lane (keep small budget pressure on borderline winners)
+        # ---- SOFT PASS lane ----
         if summary["promotions"] == 0 and _eligible_soft_pass(r):
             soft_budget = min(_SOFT_PASS_MAX_BUDGET, start_budget_default_eur)
             try:
                 label = ad_name.replace("[VALID]", "").strip() or f"Ad_{ad_id}"
                 if hasattr(meta, "create_scaling_adset"):
-                    aset = meta.create_scaling_adset(scaling_campaign_id, f"{label} • Soft", daily_budget_usd=soft_budget)
+                    aset = meta.create_scaling_adset(scaling_campaign_id, f"{label} • Soft", daily_budget=soft_budget)
                 elif hasattr(meta, "ensure_adset"):
-                    aset = meta.ensure_adset(campaign_id=scaling_campaign_id, name=f"[SCALE] {label} • Soft", daily_budget_usd=soft_budget)
+                    aset = meta.ensure_adset(
+                        campaign_id=scaling_campaign_id,
+                        name=f"[SCALE] {label} • Soft",
+                        daily_budget=soft_budget,
+                    )
                 else:
                     aset = {"id": None}
                 try:
