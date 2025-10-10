@@ -44,6 +44,21 @@ _SPEND_NO_PURCHASE_EUR = float(os.getenv("TEST_SPEND_NO_PURCHASE_EUR", "32"))
 
 # ------------------------- small helpers -------------------------
 
+def _today_str() -> str:
+    # account-local “date bucket”, e.g. '2025-10-10'
+    return datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
+
+
+def _daily_key(stage: str, metric: str) -> str:
+    # daily::<YYYY-MM-DD>::STAGE::metric
+    return f"daily::{_today_str()}::{stage}::{metric}"
+
+
+def _ad_day_flag_key(ad_id: str, flag: str) -> str:
+    # ad::<ad_id>::<flag>::YYYY-MM-DD
+    return f"ad::{ad_id}::{flag}::{_today_str()}"
+
+
 def _now_minute_key(prefix: str) -> str:
     # use account-local timezone for tick idempotency
     return f"{prefix}::{datetime.now(LOCAL_TZ).strftime('%Y-%m-%dT%H:%M')}"
@@ -467,7 +482,26 @@ def run_testing_tick(
             notify(f"🩺 [TEST] {name}: {dq}")
             summary["data_quality_alerts"] += 1
 
+        # ---------- Fatigue (count once per ad per day) ----------
         if _fatigue_detect(store, ad_id, ctr_today):
+            flag_key = _ad_day_flag_key(ad_id, "fatigue")
+            first_time_today = False
+            try:
+                if int(store.get_counter(flag_key) or 0) == 0:
+                    store.set_counter(flag_key, 1)
+                    first_time_today = True
+            except Exception:
+                # best effort: treat as first time and try to set
+                first_time_today = True
+                try:
+                    store.set_counter(flag_key, 1)
+                except Exception:
+                    pass
+            if first_time_today:
+                try:
+                    store.incr(_daily_key("TEST", "fatigued"), 1)
+                except Exception:
+                    pass
             notify(f"🟡 [TEST] Fatigue signal on {name} (CTR drop vs trend).")
             summary["fatigue_flags"] += 1
 
@@ -492,6 +526,12 @@ def run_testing_tick(
                     except Exception:
                         notify(f"🛑 [TEST] Killed {name} — {reason}")
                     _set_paused_alerted(store, ad_id, 1)
+
+                # daily counter: kills++
+                try:
+                    store.incr(_daily_key("TEST", "kills"), 1)
+                except Exception:
+                    pass
 
                 store.log(
                     entity_type="ad",
@@ -532,6 +572,12 @@ def run_testing_tick(
                         notify(f"🛑 [TEST] Killed {name} — {reason}")
                     _set_paused_alerted(store, ad_id, 1)
 
+                # daily counter: kills++
+                try:
+                    store.incr(_daily_key("TEST", "kills"), 1)
+                except Exception:
+                    pass
+
                 store.log(
                     entity_type="ad",
                     entity_id=ad_id,
@@ -566,6 +612,13 @@ def run_testing_tick(
                 valid_as = meta.create_validation_adset(validation_campaign_id, label, daily_budget=40.0)
             except Exception:
                 valid_as = None
+
+            # daily counter: promotions++
+            try:
+                store.incr(_daily_key("TEST", "promotions"), 1)
+            except Exception:
+                pass
+
             store.log(
                 entity_type="ad",
                 entity_id=ad_id,
@@ -674,6 +727,13 @@ def run_testing_tick(
                 thumbnail_url=p.get("thumbnail_url") or None,
             )
             ad = meta.create_ad(adset_id, cname, creative_id=creative["id"], status="ACTIVE")
+
+            # daily counter: launched++
+            try:
+                store.incr(_daily_key("TEST", "launched"), 1)
+            except Exception:
+                pass
+
             store.log(
                 entity_type="ad",
                 entity_id=ad["id"],
