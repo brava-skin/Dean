@@ -77,10 +77,6 @@ def _roas(row: Dict[str, Any]) -> float:
 
 
 def _purchase_and_atc_counts(row: Dict[str, Any]) -> Tuple[int, int]:
-    """
-    Count purchase/add_to_cart *events* from 'actions' list.
-    In Meta insights, actions[].value is the count; revenue lives in action_values.
-    """
     acts = row.get("actions") or []
     purch = 0
     atc = 0
@@ -373,7 +369,7 @@ def run_testing_tick(
     copy_bank = _load_copy_bank(settings)
     copy_strategy = (settings.get("copy_bank") or {}).get("strategy", "round_robin")
 
-    # -------- Build ACTIVE/PAUSED map (for re-arming pause alerts) --------
+    # -------- Build ACTIVE/PAUSED map (for skip + re-arming pause alerts) --------
     try:
         current_ads = meta.list_ads_in_adset(adset_id)
     except Exception as e:
@@ -440,6 +436,13 @@ def run_testing_tick(
         if not ad_id:
             continue
 
+        # -------- HARD SKIP anything currently PAUSED --------
+        cur_status = status_by_ad_id.get(str(ad_id), "")
+        if cur_status == "PAUSED":
+            # ensure we don't re-alert on already-paused ads
+            _set_paused_alerted(store, ad_id, 1)
+            continue  # no ℹ️ logs, no rules, no alerts
+
         spend_today = _safe_f(r.get("spend"))
         ctr_today = _ctr(r)
         purch_today, atc_today = _purchase_and_atc_counts(r)
@@ -448,6 +451,7 @@ def run_testing_tick(
         spend_life = _safe_f(lr.get("spend"))
         purch_life, atc_life = _purchase_and_atc_counts(lr)
 
+        # Only log ℹ️ for ACTIVE ads
         try:
             notify(f"ℹ️ [TEST] {name}: lifetime_spend={spend_life:.2f} purchases={purch_life} today_spend={spend_today:.2f}")
         except Exception:
@@ -478,7 +482,9 @@ def run_testing_tick(
         if spend_life >= _SPEND_NO_PURCHASE_EUR and purch_life == 0:
             reason = f"Lifetime spend≥€{int(_SPEND_NO_PURCHASE_EUR)} & no purchase"
             try:
+                # Only pause if not already paused (we're in ACTIVE branch)
                 _pause_ad(meta, ad_id)
+
                 # One-shot paused alert per event
                 if _get_paused_alerted(store, ad_id) == 0:
                     try:
@@ -487,7 +493,6 @@ def run_testing_tick(
                         notify(f"🛑 [TEST] Killed {name} — {reason}")
                     _set_paused_alerted(store, ad_id, 1)
 
-                # log after notify
                 store.log(
                     entity_type="ad",
                     entity_id=ad_id,
@@ -585,7 +590,6 @@ def run_testing_tick(
             _stable_pass(store, ad_id, "adv_test", False)
 
     # -------- Top-up launches --------
-    # If we didn't fetch earlier (on error), try again so we can determine open slots.
     if not current_ads:
         try:
             current_ads = meta.list_ads_in_adset(adset_id)
@@ -629,7 +633,6 @@ def run_testing_tick(
         label_core = str(p.get("_label_core") or _label_from_row(p)).strip()
         cname = f"[TEST] {label_core}"
 
-        # Normalize & validate video_id
         video_id_raw = p.get("video_id")
         video_id = _normalize_video_id_cell(video_id_raw)
         if not label_core or not video_id or not video_id.isdigit():
@@ -684,15 +687,15 @@ def run_testing_tick(
             summary["launched"] += 1
             _record_queue_feedback(store, label_core, clicks=1, imps=200)
 
-            # --- mark Supabase row as launched using your status column ---
+            # mark Supabase row as launched using your status column
             try:
                 cid = str(p.get("creative_id") or "").strip()
                 if cid:
-                    set_supabase_status([cid], "launched")  # use PK column
+                    set_supabase_status([cid], "launched")
                 else:
                     vid = _normalize_video_id_cell(p.get("video_id"))
                     if vid:
-                        set_supabase_status([vid], "launched")  # falls back to video_id if your helper supports it
+                        set_supabase_status([vid], "launched")
             except Exception:
                 pass
 
