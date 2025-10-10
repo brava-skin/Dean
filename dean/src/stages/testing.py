@@ -6,7 +6,7 @@ import random
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Callable
 
 import pandas as pd
 from zoneinfo import ZoneInfo  # <- use account-local timezone
@@ -41,6 +41,8 @@ _MAX_LAUNCHES_PER_TICK = int(os.getenv("TEST_MAX_LAUNCHES_PER_TICK", "8"))
 # Inline tripwire to mirror rules.yaml: spend_no_purchase ≥ 32 EUR
 _SPEND_NO_PURCHASE_EUR = float(os.getenv("TEST_SPEND_NO_PURCHASE_EUR", "32"))
 
+
+# ------------------------- small helpers -------------------------
 
 def _now_minute_key(prefix: str) -> str:
     # use account-local timezone for tick idempotency
@@ -285,7 +287,8 @@ def _normalize_video_id_cell(v: Any) -> str:
     return keep
 
 
-# ---------- safe pause helper (works with/without MetaClient.pause_ad) ----------
+# ---------- pause/resume helpers & one-shot alerts ----------
+
 def _pause_ad(meta: Any, ad_id: str) -> Any:
     # Preferred: client's own pause method
     if hasattr(meta, "pause_ad") and callable(getattr(meta, "pause_ad")):
@@ -316,7 +319,35 @@ def _pause_ad(meta: Any, ad_id: str) -> Any:
             raise e2
 
 
-def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: Any, queue_df: pd.DataFrame) -> Dict[str, Any]:
+def _paused_alerted_key(ad_id: str) -> str:
+    return f"ad::{ad_id}::paused_alerted"
+
+
+def _set_paused_alerted(store: Any, ad_id: str, val: int) -> None:
+    try:
+        store.set_counter(_paused_alerted_key(ad_id), int(val))
+    except Exception:
+        pass
+
+
+def _get_paused_alerted(store: Any, ad_id: str) -> int:
+    try:
+        return int(store.get_counter(_paused_alerted_key(ad_id)))
+    except Exception:
+        return 0
+
+
+# ---------------------------------------------------------------------------
+
+
+def run_testing_tick(
+    meta: Any,
+    settings: Dict[str, Any],
+    engine: Any,
+    store: Any,
+    queue_df: pd.DataFrame,
+    set_supabase_status: Callable[[List[str], str], None],  # passed from main.py
+) -> Dict[str, Any]:
     summary = {"kills": 0, "promotions": 0, "launched": 0, "fatigue_flags": 0, "data_quality_alerts": 0}
     try:
         tk = _now_minute_key("testing")
@@ -341,6 +372,25 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
 
     copy_bank = _load_copy_bank(settings)
     copy_strategy = (settings.get("copy_bank") or {}).get("strategy", "round_robin")
+
+    # -------- Build ACTIVE/PAUSED map (for re-arming pause alerts) --------
+    try:
+        current_ads = meta.list_ads_in_adset(adset_id)
+    except Exception as e:
+        notify(f"❗ [TEST] Could not list ads in ad set: {e}")
+        current_ads = []
+
+    status_by_ad_id: Dict[str, str] = {}
+    for a in current_ads or []:
+        try:
+            status_by_ad_id[str(a.get("id"))] = str(a.get("status", "")).upper()
+        except Exception:
+            pass
+
+    # Any ad that is ACTIVE should reset the paused-alert flag (so a future pause alerts once)
+    for aid, st in status_by_ad_id.items():
+        if st == "ACTIVE":
+            _set_paused_alerted(store, aid, 0)
 
     # -------- Fetch insights via MetaClient (today + lifetime) --------
     try:
@@ -371,7 +421,7 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
             filtering=[{"field": "adset.id", "operator": "IN", "value": [adset_id]}],
             fields=["ad_id", "ad_name", "spend", "actions", "action_values"],
             action_attribution_windows=list(_ATTR_WINDOWS),
-            date_preset="lifetime",  # client maps if needed
+            date_preset="lifetime",
             paginate=True,
         )
     except Exception as e:
@@ -424,11 +474,20 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
         except Exception:
             kill, reason_engine = False, ""
 
-        # Immediate tripwire: lifetime spend≥threshold & no purchase
+        # ---------------- Tripwire kill (once-per-pause alert) ----------------
         if spend_life >= _SPEND_NO_PURCHASE_EUR and purch_life == 0:
             reason = f"Lifetime spend≥€{int(_SPEND_NO_PURCHASE_EUR)} & no purchase"
             try:
                 _pause_ad(meta, ad_id)
+                # One-shot paused alert per event
+                if _get_paused_alerted(store, ad_id) == 0:
+                    try:
+                        alert_kill("TEST", name, reason, {"CTR": f"{ctr_today:.2%}", "ROAS": f"{_roas(r):.2f}"})
+                    except Exception:
+                        notify(f"🛑 [TEST] Killed {name} — {reason}")
+                    _set_paused_alerted(store, ad_id, 1)
+
+                # log after notify
                 store.log(
                     entity_type="ad",
                     entity_id=ad_id,
@@ -445,16 +504,12 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
                         "ROAS": round(_roas(r), 2),
                     },
                 )
-                try:
-                    alert_kill("TEST", name, reason, {"CTR": f"{ctr_today:.2%}", "ROAS": f"{_roas(r):.2f}"})
-                except Exception:
-                    notify(f"🛑 [TEST] Killed {name} — {reason}")
                 summary["kills"] += 1
             except Exception as e:
                 notify(f"❗ [TEST] Failed to pause {name}: {e}")
             continue  # don't consider promotion after a kill
 
-        # Other kill paths with stability
+        # ---------------- Other kill paths (with stability) ----------------
         should_kill_other = kill or bayes_kill
         if should_kill_other and _stable_pass(store, ad_id, "kill_test", True):
             try:
@@ -463,6 +518,15 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
                     reason_engine
                     or ("CTR<{:.2%} (p={:.2f})".format(ctr_floor, bayes_p) if bayes_kill else "Rule-based kill")
                 )
+
+                # One-shot paused alert per event
+                if _get_paused_alerted(store, ad_id) == 0:
+                    try:
+                        alert_kill("TEST", name, reason, {"CTR": f"{ctr_today:.2%}", "ROAS": f"{_roas(r):.2f}"})
+                    except Exception:
+                        notify(f"🛑 [TEST] Killed {name} — {reason}")
+                    _set_paused_alerted(store, ad_id, 1)
+
                 store.log(
                     entity_type="ad",
                     entity_id=ad_id,
@@ -478,10 +542,6 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
                         "ROAS": round(_roas(r), 2),
                     },
                 )
-                try:
-                    alert_kill("TEST", name, reason, {"CTR": f"{ctr_today:.2%}", "ROAS": f"{_roas(r):.2f}"})
-                except Exception:
-                    notify(f"🛑 [TEST] Killed {name} — {reason}")
                 summary["kills"] += 1
             except Exception as e:
                 notify(f"❗ [TEST] Failed to pause {name}: {e}")
@@ -489,7 +549,7 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
         else:
             _stable_pass(store, ad_id, "kill_test", False)
 
-        # Promotion
+        # ---------------- Promotion ----------------
         try:
             adv, adv_reason = engine.should_advance_from_testing(r)
         except Exception:
@@ -517,18 +577,21 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
             if _PAUSE_AFTER_PROMOTION:
                 try:
                     _pause_ad(meta, ad_id)
+                    _set_paused_alerted(store, ad_id, 1)  # avoid duplicate pause alert for the auto-pause after promotion
                 except Exception:
                     pass
             summary["promotions"] += 1
         else:
             _stable_pass(store, ad_id, "adv_test", False)
 
-    # Top-up launches
-    try:
-        current_ads = meta.list_ads_in_adset(adset_id)
-    except Exception as e:
-        notify(f"❗ [TEST] Could not list ads in ad set: {e}")
-        return summary
+    # -------- Top-up launches --------
+    # If we didn't fetch earlier (on error), try again so we can determine open slots.
+    if not current_ads:
+        try:
+            current_ads = meta.list_ads_in_adset(adset_id)
+        except Exception as e:
+            notify(f"❗ [TEST] Could not list ads in ad set: {e}")
+            return summary
 
     active_count = _active_count(current_ads)
     need = max(0, min(_MAX_LAUNCHES_PER_TICK, keep_live - active_count))
@@ -574,7 +637,7 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
             continue
 
         try:
-            primary_text, headline, description = _choose_mix_and_match(store, copy_bank, label_core, copy_strategy)
+            primary_text, headline, description = _choose_mix_and_match(store, _load_copy_bank(settings), label_core, copy_strategy)
         except Exception as e:
             notify(f"⚠️ [TEST] Copy bank issue for '{label_core}': {e}")
             continue
@@ -612,7 +675,7 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
                 entity_type="ad",
                 entity_id=ad["id"],
                 action="CREATE",
-                reason=f"Top-up to {keep_live}",
+                reason="Top-up to keep_ads_live",
                 level="info",
                 stage="TEST",
                 meta={"testing_adset_id": adset_id},
@@ -621,17 +684,15 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
             summary["launched"] += 1
             _record_queue_feedback(store, label_core, clicks=1, imps=200)
 
-            # mark Supabase row as launched (best-effort)
+            # --- mark Supabase row as launched using your status column ---
             try:
-                from main import mark_supabase_launched, _normalize_video_id_cell as _norm_from_main
-
-                cid = str(p.get("creative_id") or "")
+                cid = str(p.get("creative_id") or "").strip()
                 if cid:
-                    mark_supabase_launched([cid], use_column="id")
+                    set_supabase_status([cid], "launched")  # use PK column
                 else:
-                    vid = _norm_from_main(p.get("video_id"))
+                    vid = _normalize_video_id_cell(p.get("video_id"))
                     if vid:
-                        mark_supabase_launched([vid], use_column="video_id")
+                        set_supabase_status([vid], "launched")  # falls back to video_id if your helper supports it
             except Exception:
                 pass
 
