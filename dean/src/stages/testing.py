@@ -39,7 +39,6 @@ _BANDIT_SAMPLE_COUNT = int(os.getenv("TEST_BANDIT_SAMPLE_COUNT", "32"))
 _MAX_LAUNCHES_PER_TICK = int(os.getenv("TEST_MAX_LAUNCHES_PER_TICK", "8"))
 
 # Inline tripwire to mirror rules.yaml: spend_no_purchase ≥ 32 EUR
-# (Can override via env if needed.)
 _SPEND_NO_PURCHASE_EUR = float(os.getenv("TEST_SPEND_NO_PURCHASE_EUR", "32"))
 
 
@@ -334,7 +333,6 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
             ],
             action_attribution_windows=list(_ATTR_WINDOWS),
             paginate=True,
-            # works with updated MetaClient (kept here for clarity)
             date_preset="today",
         )
 
@@ -342,9 +340,9 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
         rows_lifetime = meta.get_ad_insights(
             level="ad",
             filtering=[{"field": "adset.id", "operator": "IN", "value": [adset_id]}],
-            fields=["ad_id", "spend", "actions", "action_values"],
+            fields=["ad_id", "ad_name", "spend", "actions", "action_values"],
             action_attribution_windows=list(_ATTR_WINDOWS),
-            date_preset="lifetime",  # client auto-maps to "maximum" if needed and retries
+            date_preset="lifetime",  # client maps to "maximum" if needed and retries
             paginate=True,
         )
     except Exception as e:
@@ -374,8 +372,13 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
         spend_life = _safe_f(lr.get("spend"))
         purch_life, atc_life = _purchase_and_atc_counts(lr)
 
+        # DEBUG breadcrumb (helps verify tripwire inputs)
+        try:
+            notify(f"ℹ️ [TEST] {name}: lifetime_spend={spend_life:.2f} purchases={purch_life} today_spend={spend_today:.2f}")
+        except Exception:
+            pass
+
         # Apply global minimums ONLY while BOTH today's spend AND lifetime spend are below the per-ad kill budget.
-        # Once either spend_today or spend_life >= min_spend_before_kill, always evaluate rules.
         if (spend_today < min_spend_before_kill and spend_life < min_spend_before_kill) and \
            not _meets_minimums(r, min_impressions, min_clicks, min_spend):
             continue
@@ -402,14 +405,46 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
         # Inline tripwire: LIFETIME spend_no_purchase ≥ threshold
         trip_spend_no_purchase = (spend_life >= _SPEND_NO_PURCHASE_EUR and purch_life == 0)
 
-        should_kill = kill or bayes_kill or trip_spend_no_purchase
-        if should_kill and _stable_pass(store, ad_id, "kill_test", True):
+        # ── NEW: tripwire bypasses stability (kill immediately) ────────────────
+        if trip_spend_no_purchase:
+            reason = f"Lifetime spend≥€{int(_SPEND_NO_PURCHASE_EUR)} & no purchase"
+            try:
+                meta.pause_ad(ad_id)
+                store.log(
+                    entity_type="ad",
+                    entity_id=ad_id,
+                    action="PAUSE",
+                    reason=f"[TEST] {reason}",
+                    level="warn",
+                    stage="TEST",
+                    rule_type="testing_kill_tripwire",
+                    thresholds={"spend_no_purchase_eur": _SPEND_NO_PURCHASE_EUR},
+                    observed={
+                        "spend_lifetime": spend_life,
+                        "purchases_lifetime": purch_life,
+                        "CTR_today": f"{ctr_today:.2%}",
+                        "ROAS": round(_roas(r), 2),
+                    },
+                )
+                try:
+                    alert_kill("TEST", name, reason, {"CTR": f"{ctr_today:.2%}", "ROAS": f"{_roas(r):.2f}"})
+                except Exception:
+                    notify(f"🛑 [TEST] Killed {name} — {reason}")
+                summary["kills"] += 1
+            except Exception as e:
+                notify(f"❗ [TEST] Failed to pause {name}: {e}")
+            # do not attempt promotion on a killed ad
+            continue
+        # ──────────────────────────────────────────────────────────────────────
+
+        # Other kill paths still use stability
+        should_kill_other = kill or bayes_kill
+        if should_kill_other and _stable_pass(store, ad_id, "kill_test", True):
             try:
                 meta.pause_ad(ad_id)
                 reason = (
                     reason_engine
-                    or ("CTR<{:.2%} (p={:.2f})".format(ctr_floor, bayes_p) if bayes_kill else "")
-                    or f"Lifetime spend≥€{int(_SPEND_NO_PURCHASE_EUR)} & no purchase"
+                    or ("CTR<{:.2%} (p={:.2f})".format(ctr_floor, bayes_p) if bayes_kill else "Rule-based kill")
                 )
                 store.log(
                     entity_type="ad",
@@ -419,17 +454,10 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
                     level="warn",
                     stage="TEST",
                     rule_type="testing_kill",
-                    thresholds={
-                        "ctr_floor": ctr_floor,
-                        "bayes_prob": _BAYES_KILL_PROB,
-                        "spend_no_purchase_eur": _SPEND_NO_PURCHASE_EUR,
-                    },
+                    thresholds={"ctr_floor": ctr_floor, "bayes_prob": _BAYES_KILL_PROB},
                     observed={
                         "CTR_today": f"{ctr_today:.2%}",
                         "spend_today": spend_today,
-                        "purchases_today": purch_today,
-                        "spend_lifetime": spend_life,
-                        "purchases_lifetime": purch_life,
                         "ROAS": round(_roas(r), 2),
                     },
                 )
