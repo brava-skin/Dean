@@ -84,7 +84,7 @@ testing:
   dead_hours_window: "02:00-06:00"   # interpreted in Europe/Amsterdam now
   minimums:
     min_impressions: 300
-    min_clicks: 15
+    min_clicks: 10
     min_spend_eur: 10
     min_spend_usd: 10
   fairness:
@@ -206,22 +206,20 @@ creative_compliance:
 
 # ── Queue ─────────────────────────────────────────────────────────────────────
 queue:
-  path: "dean/data/creatives_queue.xlsx"
   schema:
     required_columns:
+      - video_id
+    optional_columns:
       - creative_id
       - name
-      - primary_text
-      - headline
-      - description
-    optional_columns:
-      - video_id
+      - avatar
+      - visual_style
+      - script
       - video_url
       - thumbnail_url
       - page_id
       - utm_params
       - cogs_override_eur
-      - cogs_override_usd   # legacy
       - tags
   dedupe:
     by: ["creative_id", "name"]
@@ -326,4 +324,5 @@ cbo:
 copy_bank:
   path: "dean/data/copy_bank.json"
   strategy: "round_robin"
+
 
