@@ -7,6 +7,7 @@ Changes in this version:
 - Default account timezone → Europe/Amsterdam (was America/Chicago)
 - Supabase queue source (table: meta_creatives) with graceful fallback to CSV/XLSX
 - Helper to mark Supabase rows status='launched' after successful ad launch
+- (NEW) Expose 'status' in queue DataFrame and add set_supabase_status() for pause/resume
 
 Highlights
 - Defensive config/env validation with helpful linting
@@ -158,6 +159,7 @@ def load_queue(path: str) -> pd.DataFrame:
         "visual_style",
         "script",
         "filename",
+        "status",  # NEW: keep status in DF for notify-once logic in stages
     ]
 
     if not path or not os.path.exists(path):
@@ -166,7 +168,6 @@ def load_queue(path: str) -> pd.DataFrame:
     # Read as strings to avoid pandas -> float/scientific coercion
     try:
         if path.lower().endswith((".xlsx", ".xls")):
-            # converters gives us raw cell values; coerce video_id immediately
             df = pd.read_excel(
                 path,
                 dtype=str,
@@ -255,7 +256,7 @@ def load_queue_supabase(
 
     Returns a DataFrame with columns:
       creative_id, name, video_id, thumbnail_url, primary_text, headline, description,
-      page_id, utm_params, avatar, visual_style, script, filename
+      page_id, utm_params, avatar, visual_style, script, filename, status
     """
     cols = [
         "creative_id",
@@ -271,6 +272,7 @@ def load_queue_supabase(
         "visual_style",
         "script",
         "filename",
+        "status",  # NEW: expose DB status to stages
     ]
 
     sb = _get_supabase()
@@ -308,6 +310,7 @@ def load_queue_supabase(
                 "visual_style": r.get("visual_style") or "",
                 "script": r.get("script") or "",
                 "filename": r.get("filename") or "",
+                "status": (r.get("status") or "").lower(),  # keep raw status visible
             }
         )
 
@@ -326,12 +329,21 @@ def load_queue_supabase(
     return df
 
 
-def mark_supabase_launched(ids_or_video_ids: List[str], use_column: str = "id", table: str = None) -> None:
+def set_supabase_status(
+    ids_or_video_ids: List[str],
+    new_status: str,
+    *,
+    use_column: str = "id",
+    table: str = None,
+) -> None:
     """
-    Set status='launched' for the supplied identifiers in Supabase.
-      use_column='id'       → pass Supabase primary keys (matches 'creative_id' in DF)
+    Generic status setter for meta_creatives.
+      use_column='id'       → pass Supabase PKs (matches 'creative_id' in DF)
       use_column='video_id' → pass Meta video IDs
-    Call this from Testing stage after each successful ad launch.
+    Examples:
+      set_supabase_status([creative_id], 'launched')
+      set_supabase_status([creative_id], 'paused')
+      set_supabase_status([creative_id], 'pending')
     """
     if not ids_or_video_ids:
         return
@@ -347,19 +359,26 @@ def mark_supabase_launched(ids_or_video_ids: List[str], use_column: str = "id", 
             if use_column == "video_id":
                 (
                     sb.table(table)
-                    .update({"status": "launched"})
+                    .update({"status": new_status})
                     .in_("video_id", chunk)
                     .execute()
                 )
             else:
                 (
                     sb.table(table)
-                    .update({"status": "launched"})
+                    .update({"status": new_status})
                     .in_("id", chunk)
                     .execute()
                 )
     except Exception as e:
-        notify(f"⚠️ Supabase status update failed: {e}")
+        notify(f"⚠️ Supabase status update failed ({new_status}): {e}")
+
+
+def mark_supabase_launched(ids_or_video_ids: List[str], use_column: str = "id", table: str = None) -> None:
+    """
+    Backward-compat helper. Prefer set_supabase_status(..., 'launched').
+    """
+    set_supabase_status(ids_or_video_ids, "launched", use_column=use_column, table=table)
 
 
 # --------------------------- Config hygiene --------------------------------
@@ -753,7 +772,7 @@ def main() -> None:
 
         if stage_choice in ("all", "testing"):
             overall["testing"] = run_stage(
-                run_testing_tick, "TESTING", client, settings, engine, store, queue_df
+                run_testing_tick, "TESTING", client, settings, engine, store, queue_df, set_supabase_status
             )
 
         if stage_choice in ("all", "validation"):
@@ -762,7 +781,6 @@ def main() -> None:
             )
 
         if stage_choice in ("all", "scaling"):
-            # scaling runner signature: run_scaling_tick(meta, settings, store)
             overall["scaling"] = run_stage(run_scaling_tick, "SCALING", client, settings, store)
 
     # Queue persist (only if changed length; cheap heuristic).
