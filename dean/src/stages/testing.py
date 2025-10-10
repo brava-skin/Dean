@@ -321,8 +321,9 @@ def run_testing_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: An
         if not ad_id:
             continue
 
-        # global mins unless spend already above the per-ad minimum-before-kill
-        if _safe_f(r.get("spend")) >= _MIN_SPEND_BEFORE_KILL and not _meets_minimums(r):
+        # Apply global minimums ONLY while spend is below the per-ad kill budget.
+        # Once spend >= _MIN_SPEND_BEFORE_KILL, always evaluate rules (e.g., spend≥32 & no purchase).
+        if _safe_f(r.get("spend")) < _MIN_SPEND_BEFORE_KILL and not _meets_minimums(r):
             continue
 
         dq = _data_quality_sentry(r)
