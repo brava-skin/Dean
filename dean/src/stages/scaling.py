@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 """
-Production-ready advanced scaler.
+Production-ready advanced scaler with lifetime-aware tripwires.
 
-Key improvements vs. draft:
-- Stronger typing & docstrings
-- Environment-tunable thresholds (with sane defaults)
-- Safer Store/Meta interactions (graceful fallbacks)
-- Cooldown + idempotent logging keys (dedup per tick/budget)
-- Sigma-clipping for outlier resistance hooks (kept lightweight)
-- Compact but explicit control-flow; clear reasons in logs/alerts
-- EURO/Amsterdam defaults for Brava account
+Key improvements vs. previous:
+- Adds lifetime insights (since ad launch) alongside today's stats
+- Lifetime no-purchase tripwire (env: SCALE_SPEND_NO_PURCHASE_EUR, default €150)
+- Keeps portfolio + bandit logic unchanged
+- Uses MetaClient budget signatures (current_budget=...) safely
+- Subtle logging so you can trace lifetime vs today per ad
 """
 
 import os
@@ -64,6 +62,9 @@ PORTFOLIO_MAX_MOVES  = _env_i("SCALE_PORTFOLIO_MAX_MOVES", 6)
 
 ATTR_WINDOWS         = tuple((os.getenv("SCALE_ATTR_WINDOWS", "7d_click,1d_view") or "7d_click,1d_view").split(","))
 
+# ---- Lifetime (since ad launch) tripwire (EUR) ----
+SPEND_NO_PURCHASE_EUR = _env_f("SCALE_SPEND_NO_PURCHASE_EUR", 150.0)
+
 # ====== Helpers ======
 def _meets_minimums(m: Metrics) -> bool:
     return (m.spend or 0.0) >= MIN_SPEND and (m.impressions or 0.0) >= MIN_IMPRESSIONS and (m.clicks or 0.0) >= MIN_CLICKS
@@ -104,6 +105,17 @@ def _mark_scaled(store: Any, adset_id: str) -> None:
         store.set_flag("adset", adset_id, "last_scale_ts", _now().isoformat())
     except Exception:
         pass
+
+def _count_purchases(actions: Any) -> int:
+    acts = actions or []
+    total = 0
+    for a in acts:
+        if a.get("action_type") == "purchase":
+            try:
+                total += int(float(a.get("value") or 0))
+            except Exception:
+                pass
+    return total
 
 # ====== Thompson bandit & portfolio ======
 @dataclass
@@ -152,8 +164,8 @@ class SmartScaler:
     expected `store` methods:
       - log(), log_kill(), log_scale(), incr(), get_counter(), set_counter(), set_flag(), get_flag()
     expected `meta` methods:
-      - get_ad_insights(), pause_ad(), update_adset_budget(), duplicate_adset(), get_adset_budget_usd()
-        (Note: despite *usd* naming, values reflect the ad account currency, here EUR.)
+      - get_ad_insights(), pause_ad(), update_adset_budget(), duplicate_adset(), get_adset_budget()
+        (get_adset_budget_usd is supported as a fallback alias)
     """
     def __init__(self, store: Any):
         self.store = store
@@ -178,8 +190,6 @@ class SmartScaler:
             return True, f"CPA≥40 for {consec_bad}d"
         if (m.roas or 0.0) < 1.2 and consec_bad >= KILL_ROAS_DAYS:
             return True, f"ROAS<1.2 for {consec_bad}d"
-        if (m.spend or 0.0) >= 150 and (m.purchases or 0) == 0:
-            return True, "Spend≥150 with 0 purchases"
         if _credible_underperf(m.cpa, m.roas or 0.0, m.spend or 0.0):
             return True, "Probabilistic underperformance"
         return False, ""
@@ -198,7 +208,7 @@ class SmartScaler:
         return (m.roas or 0.0) < HYST_ROAS_DOWN or (m.cpa is not None and m.cpa > HYST_CPA_UP)
 
     # ---- core process ----
-    def process(self, meta: Any, rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    def process(self, meta: Any, rows: List[Dict[str, Any]], lifetime_map: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, int]:
         summary = {"kills": 0, "scaled": 0, "duped": 0, "downscaled": 0, "refreshed": 0}
         freed_budget: float = 0.0
         winners: List[Tuple[str, float, float]] = []  # (adset_id, roas, current_budget)
@@ -210,11 +220,23 @@ class SmartScaler:
             if not ad_id or not adset_id:
                 continue
 
+            # Today/default metrics for control logic
             m = metrics_from_row(r, cfg=self.metrics_cfg)
             if not _meets_minimums(m):
                 continue
 
-            # Consecutive "bad" days counter
+            # Lifetime (since ad launch) metrics for tripwire
+            lr = (lifetime_map or {}).get(str(ad_id), {}) or {}
+            life_spend = float(lr.get("spend") or 0.0)
+            life_purchases = _count_purchases(lr.get("actions"))
+
+            # Helpful context line (non-blocking)
+            try:
+                notify(f"ℹ️ [SCALE] {ad_name}: lifetime_spend={life_spend:.2f} purchases={life_purchases} today_spend={(m.spend or 0):.2f}")
+            except Exception:
+                pass
+
+            # Consecutive "bad" days counter (based on today metrics)
             bad = 1 if ((m.cpa is not None and m.cpa >= 40) or ((m.roas or 0.0) < 1.2)) else 0
             days_key = f"{ad_id}::bad_days"
             try:
@@ -228,22 +250,34 @@ class SmartScaler:
 
             # Kill candidates
             kill, reason = self._kill_logic(m, consec_bad)
+
+            # Lifetime no-purchase tripwire takes precedence
+            if life_spend >= SPEND_NO_PURCHASE_EUR and life_purchases == 0:
+                kill = True
+                reason = f"Lifetime spend≥€{int(SPEND_NO_PURCHASE_EUR)} & 0 purchases"
+
             if kill and self._stable(ad_id, "kill", True, 2):
                 try:
+                    # Try EUR-aware getter; fallback to *_usd alias if present
+                    get_budget = getattr(meta, "get_adset_budget", None) or getattr(meta, "get_adset_budget_usd", None) or (lambda _ : None)
                     cur_budget = None
-                    if hasattr(meta, "get_adset_budget_usd"):
-                        try:
-                            cur_budget = meta.get_adset_budget_usd(adset_id)
-                        except Exception:
-                            cur_budget = None
+                    try:
+                        cur_budget = get_budget(adset_id)
+                    except Exception:
+                        cur_budget = None
+
                     meta.pause_ad(ad_id)
                     self.store.log_kill(
                         stage="SCALE",
                         entity_id=ad_id,
                         rule_type="auto_kill",
                         reason=reason,
-                        observed={"CPA": m.cpa, "ROAS": m.roas, "purchases": m.purchases, "spend": m.spend},
-                        thresholds={"cpa": 40, "roas": 1.2},
+                        observed={
+                            "CPA": m.cpa, "ROAS": m.roas,
+                            "purchases_today": m.purchases, "spend_today": m.spend,
+                            "spend_lifetime": life_spend, "purchases_lifetime": life_purchases
+                        },
+                        thresholds={"cpa": 40, "roas": 1.2, "lifetime_tripwire_eur": SPEND_NO_PURCHASE_EUR},
                     )
                     try:
                         alert_kill("SCALE", ad_name, reason, {"CPA": f"{(m.cpa or 0):.2f}", "ROAS": f"{(m.roas or 0):.2f}"})
@@ -251,7 +285,10 @@ class SmartScaler:
                         notify(f"🛑 [SCALE] {ad_name} — {reason}")
                     summary["kills"] += 1
                     if cur_budget:
-                        freed_budget += float(cur_budget)
+                        try:
+                            freed_budget += float(cur_budget)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
                 continue
@@ -265,17 +302,18 @@ class SmartScaler:
 
             if (m.roas or 0.0) >= 2.0 and (m.cpa or 9e9) <= 27 and (m.purchases or 0) >= 2:
                 try:
-                    cur = getattr(meta, "get_adset_budget_usd", lambda _:_)(adset_id) or 100.0
+                    cur = (getattr(meta, "get_adset_budget", None) or getattr(meta, "get_adset_budget_usd", lambda _ : 100.0))(adset_id) or 100.0
                 except Exception:
                     cur = 100.0
                 winners.append((adset_id, float(m.roas or 0.0), float(cur)))
 
             # Downscale (hysteresis)
-            if self._downscale_needed(m):
+            if (m.roas or 0.0) < HYST_ROAS_DOWN or (m.cpa is not None and m.cpa > HYST_CPA_UP):
                 try:
-                    cur = getattr(meta, "get_adset_budget_usd", lambda _:_)(adset_id) or 100.0
+                    cur = (getattr(meta, "get_adset_budget", None) or getattr(meta, "get_adset_budget_usd", lambda _ : 100.0))(adset_id) or 100.0
                     new_budget = max(5.0, cur * 0.5)
-                    meta.update_adset_budget(adset_id, new_budget, current_budget_usd=cur)
+                    # Use current MetaClient signature (current_budget=...)
+                    meta.update_adset_budget(adset_id, new_budget, current_budget=cur)
                     dedup_key = f"scale_down:{adset_id}:{int(round(new_budget))}:{_idkey('tick')}"
                     self.store.log(
                         entity_type="adset",
@@ -295,10 +333,10 @@ class SmartScaler:
                 inc = self._scale_step(m)
                 if inc and self._stable(ad_id, "scale", True, 2):
                     try:
-                        cur = getattr(meta, "get_adset_budget_usd", lambda _:_)(adset_id) or 100.0
+                        cur = (getattr(meta, "get_adset_budget", None) or getattr(meta, "get_adset_budget_usd", lambda _ : 100.0))(adset_id) or 100.0
                         cap = cur * (1.0 + MAX_SCALE_STEP_PCT / 100.0)
                         new_budget = min(cur * (1.0 + inc / 100.0), cap)
-                        meta.update_adset_budget(adset_id, new_budget, current_budget_usd=cur)
+                        meta.update_adset_budget(adset_id, new_budget, current_budget=cur)
                         self.store.log_scale(adset_id, inc, f"rule_inc_{inc}", meta={"old_budget": cur, "new_budget": new_budget})
                         try:
                             alert_scale(ad_name, inc, new_budget=new_budget)
@@ -362,9 +400,9 @@ class SmartScaler:
             bumps = self.portfolio.allocate(winners, freed_budget)
             for adset_id, bump in bumps.items():
                 try:
-                    cur = getattr(meta, "get_adset_budget_usd", lambda _:_)(adset_id) or 100.0
+                    cur = (getattr(meta, "get_adset_budget", None) or getattr(meta, "get_adset_budget_usd", lambda _ : 100.0))(adset_id) or 100.0
                     new_budget = cur + bump
-                    meta.update_adset_budget(adset_id, new_budget, current_budget_usd=cur)
+                    meta.update_adset_budget(adset_id, new_budget, current_budget=cur)
                     dedup_key = f"reinvest:{adset_id}:{int(round(new_budget))}:{_idkey('tick')}"
                     self.store.log(
                         entity_type="adset",
@@ -386,16 +424,16 @@ class AdvancedScalerRunner:
     Thin orchestrator that:
       1) guards duplicate ticks via store.tick_seen(...)
       2) optionally freezes scale-ups on spend velocity spikes
-      3) fetches insights & runs SmartScaler
+      3) fetches insights (today + lifetime) & runs SmartScaler
     """
     def __init__(self, meta: Any, store: Any, account_tz: str = "Europe/Amsterdam"):
         self.meta = meta
         self.store = store
-        self.tz = account_tz  # currently informational; insights time ranges come from Meta
+        self.tz = account_tz  # informational
 
     def _pacing_freeze(self, scaling_campaign_id: str) -> Tuple[bool, Dict[str, float]]:
         """
-        Heuristic velocity check (replace with explicit date windows if your client supports them).
+        Heuristic velocity check (kept simple).
         Freezes scale-ups when spend grows >+150% (24h) or >+250% (48h).
         """
         try:
@@ -407,10 +445,9 @@ class AdvancedScalerRunner:
                 paginate=True,
             )
             today_spend = sum(float(r.get("spend") or 0.0) for r in rows)
-            # crude yesterday proxy (if client supports date ranges, split explicitly)
-            y_spend = max(1.0, today_spend * 0.8)
+            y_spend = max(1.0, today_spend * 0.8)  # crude proxy
             g24 = today_spend / y_spend
-            g48 = g24  # placeholder without 2-day split
+            g48 = g24  # placeholder without explicit 2-day split
             freeze = (g24 > 1.5) or (g48 > 2.5)
             return freeze, {"g24": g24, "g48": g48}
         except Exception:
@@ -431,6 +468,7 @@ class AdvancedScalerRunner:
             notify(f"🧯 [SCALE] velocity high (24h×{velo['g24']:.2f}, 48h×{velo['g48']:.2f}) — freeze scale-ups")
 
         try:
+            # Today/default
             rows = self.meta.get_ad_insights(
                 level="ad",
                 filtering=[{"field": "campaign.id", "operator": "IN", "value": [scaling_campaign_id]}],
@@ -443,13 +481,36 @@ class AdvancedScalerRunner:
                 action_attribution_windows=list(ATTR_WINDOWS),
                 paginate=True,
             )
+            # Lifetime (since ad launch)
+            rows_life = self.meta.get_ad_insights(
+                level="ad",
+                filtering=[{"field": "campaign.id", "operator": "IN", "value": [scaling_campaign_id]}],
+                fields=["ad_id", "spend", "actions"],
+                action_attribution_windows=list(ATTR_WINDOWS),
+                date_preset="lifetime",
+                paginate=True,
+            )
         except Exception as e:
             notify(f"❗ [SCALE] Insights error: {e}")
             return {"kills": 0, "scaled": 0, "duped": 0, "downscaled": 0, "refreshed": 0}
 
-        # Freeze only blocks increases/duplication; we still allow kills/downscales inside SmartScaler.
+        # Build lifetime map
+        life_by_ad: Dict[str, Dict[str, Any]] = {}
+        for lr in rows_life or []:
+            aid = str(lr.get("ad_id") or "")
+            if aid:
+                life_by_ad[aid] = lr
+
+        # Freeze blocks increases/duplication, but SmartScaler still handles kills/downscales.
         scaler = SmartScaler(self.store)
-        return scaler.process(self.meta, rows)
+        result = scaler.process(self.meta, rows, lifetime_map=life_by_ad)
+
+        if freeze:
+            # Zero out "scaled/duped" to reflect freeze; kills/downscales still reported.
+            result["scaled"] = 0
+            result["duped"] = 0
+
+        return result
 
 # ====== Public API ======
 def run_advanced_scaling_tick(meta: Any, settings: Dict[str, Any], store: Any) -> Dict[str, int]:
