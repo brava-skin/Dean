@@ -1,13 +1,14 @@
 version: 1.0
 env: prod
 audit:
-  last_changed_at: "2025-10-08T00:00:00Z"
+  last_changed_at: "2025-10-13T00:00:00Z"
   last_changed_by: "you@company.com"
   changelog: |
     - Switch account to Europe/Amsterdam timezone and EUR currency.
     - Enable USD→EUR FX for tripwire checks (uses env USD_EUR_RATE if present).
     - Add explicit timezones (account vs audience) and reporting digest tz.
     - Clarify launch defer uses account local time; all spend/caps/CPA/ROAS thresholds are in EUR.
+    - Centralize testing engine tunables (bayes/adaptive_ctr/fatigue/tripwires/fairness/promotion/queue/attribution_windows) under testing.engine.
 
 timezones:
   account_tz: "Europe/Amsterdam"
@@ -71,6 +72,30 @@ testing:
       - {type: "purchase_gte", purchases_gte: 1}
       - {type: "cpa_lte", cpa_lte: 36}                                     # EUR
       - {type: "ctr_gte", ctr_gte: 0.008}
+  engine:
+    tripwires:
+      lifetime_spend_no_purchase_eur: 32
+    bayes:
+      prior_a: 2.0
+      prior_b: 300.0
+      sample_count: 32
+      kill_prob: 0.90
+    adaptive_ctr:
+      floor_min: 0.008
+      floor_scale: 0.70
+      min_impressions: 300
+    fatigue:
+      ewma_alpha: 0.30
+      drop_pct: 0.35
+    fairness:
+      min_spend_before_kill_eur: 20
+    promotion:
+      pause_after_promotion: true
+      validation_budget_eur: 40
+      placements: ["facebook", "instagram"]
+    queue:
+      max_launches_per_tick: 8
+    attribution_windows: ["7d_click", "1d_view"]
 
 validation:
   minimums:
@@ -204,4 +229,3 @@ redistribution:
   on_pause_winner_reinvest: true
   strategy: "proportional_to_roas"
   min_increment_per_winner: 10   # EUR
-
