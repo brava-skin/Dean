@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 """
-Production-ready runner for continuous creative testing → validation → scaling.
+Production-ready runner for continuous creative testing -> validation -> scaling.
 
 Changes in this version:
-- Default account timezone → Europe/Amsterdam (was America/Chicago)
+- Default account timezone -> Europe/Amsterdam (was America/Chicago)
 - Supabase queue source (table: meta_creatives) with graceful fallback to CSV/XLSX
 - Helper to mark Supabase rows status='launched' after successful ad launch
 - (NEW) Expose 'status' in queue DataFrame and add set_supabase_status() for pause/resume
@@ -116,16 +116,16 @@ def _normalize_video_id_cell(v: Any) -> str:
     # strip commas/spaces first
     s = s.replace(",", "").replace(" ", "")
 
-    # pure digits → keep
+    # pure digits -> keep
     if re.fullmatch(r"\d+", s):
         return s
 
-    # trailing .0 → drop fractional
+    # trailing .0 -> drop fractional
     m = re.fullmatch(r"(\d+)\.0+", s)
     if m:
         return m.group(1)
 
-    # scientific notation → Decimal to full integer string
+    # scientific notation -> Decimal to full integer string
     if re.fullmatch(r"\d+(\.\d+)?[eE]\+\d+", s):
         try:
             getcontext().prec = 50
@@ -200,7 +200,7 @@ def load_queue(path: str) -> pd.DataFrame:
     # Canonical order
     df = df[cols]
 
-    # Normalize video_id for CSV (read_csv converters aren’t applied like read_excel ones)
+    # Normalize video_id for CSV (read_csv converters are not applied like read_excel ones)
     try:
         df["video_id"] = df["video_id"].map(_normalize_video_id_cell)
     except Exception:
@@ -285,9 +285,9 @@ def load_queue_supabase(
     try:
         q = (
             sb.table(table)
-              .select("id, video_id, filename, avatar, visual_style, script, status")
-              .or_("status.is.null,status.eq.{}".format(status_filter))
-              .limit(limit)
+            .select("id, video_id, filename, avatar, visual_style, script, status")
+            .or_("status.is.null,status.eq.{}".format(status_filter))
+            .limit(limit)
         )
         data = q.execute().data or []
     except Exception as e:
@@ -316,7 +316,7 @@ def load_queue_supabase(
         )
 
     df = pd.DataFrame(rows, columns=cols)
-    # Ensure string dtype & fill NA; normalize video_id
+    # Ensure string dtype and fill NA; normalize video_id
     for c in cols:
         if c not in df.columns:
             df[c] = ""
@@ -339,8 +339,8 @@ def set_supabase_status(
 ) -> None:
     """
     Generic status setter for meta_creatives.
-      use_column='id'       → pass Supabase PKs (matches 'creative_id' in DF)
-      use_column='video_id' → pass Meta video IDs
+      use_column='id'       -> pass Supabase PKs (matches 'creative_id' in DF)
+      use_column='video_id' -> pass Meta video IDs
     Examples:
       set_supabase_status([creative_id], 'launched')
       set_supabase_status([creative_id], 'paused')
@@ -609,7 +609,7 @@ def main() -> None:
     # Load environment first (for dynamic .env overrides)
     load_dotenv()
 
-    # Load config & rules
+    # Load config and rules
     settings, rules_cfg = load_cfg(args.settings, args.rules)
 
     # Resolve profile/dry-run/shadow
@@ -636,7 +636,7 @@ def main() -> None:
     except Exception:
         pass
 
-    # Lint & basic validation
+    # Lint and basic validation
     missing_envs = validate_envs(REQUIRED_ENVS)
     missing_ids = validate_settings_ids(settings)
     lint_issues = linter(settings, rules_cfg)
@@ -772,18 +772,18 @@ def main() -> None:
         stage_choice = args.stage
 
         if stage_choice in ("all", "testing"):
-    overall["testing"] = run_stage(
-        run_testing_tick,
-        "TESTING",
-        client,
-        settings,
-        engine,
-        store,
-        queue_df,
-        set_supabase_status,
-        placements=["facebook", "instagram"],  # ✅ NEW
-        instagram_actor_id=os.getenv("IG_ACTOR_ID"),  # ✅ NEW
-    )
+            overall["testing"] = run_stage(
+                run_testing_tick,
+                "TESTING",
+                client,
+                settings,
+                engine,
+                store,
+                queue_df,
+                set_supabase_status,
+                placements=["facebook", "instagram"],  # NEW
+                instagram_actor_id=os.getenv("IG_ACTOR_ID"),  # NEW
+            )
 
         if stage_choice in ("all", "validation"):
             overall["validation"] = run_stage(
@@ -794,11 +794,11 @@ def main() -> None:
             overall["scaling"] = run_stage(run_scaling_tick, "SCALING", client, settings, store)
 
     # Queue persist (only if changed length; cheap heuristic).
-    # When using Supabase, this block normally won't run (DF length doesn't change in-place).
+    # When using Supabase, this block normally will not run (DF length does not change in-place).
     if 'queue_path' in locals() and len(queue_df) != queue_len_before:
         try:
             save_queue(queue_df, queue_path)
-            notify(f"📦 Queue saved ({len(queue_df)} rows) → {queue_path}")
+            notify(f"📦 Queue saved ({len(queue_df)} rows) -> {queue_path}")
         except Exception as e:
             notify(f"⚠️ Queue save failed: {e}")
 
@@ -837,4 +837,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
