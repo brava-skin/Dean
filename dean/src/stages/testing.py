@@ -406,6 +406,9 @@ def run_testing_tick(
     store: Any,
     queue_df: pd.DataFrame,
     set_supabase_status: Callable[[List[str], str], None],  # passed from main.py
+    *,
+    placements: Optional[List[str]] = None,           # ✅ accept but not used (testing uses existing ad set)
+    instagram_actor_id: Optional[str] = None,         # ✅ used for creatives
 ) -> Dict[str, Any]:
     summary = {"kills": 0, "promotions": 0, "launched": 0, "fatigue_flags": 0, "data_quality_alerts": 0}
     try:
@@ -812,7 +815,7 @@ def run_testing_tick(
                 link_url=os.getenv("STORE_URL"),
                 utm_params=p.get("utm_params") or None,
                 thumbnail_url=p.get("thumbnail_url") or None,
-                instagram_actor_id=os.getenv("IG_ACTOR_ID"),
+                instagram_actor_id=(instagram_actor_id or os.getenv("IG_ACTOR_ID")),  # ✅ use passed override if provided
             )
             ad = meta.create_ad(adset_id, cname, creative_id=creative["id"], status="ACTIVE")
 
