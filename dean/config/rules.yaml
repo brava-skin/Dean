@@ -8,7 +8,14 @@ audit:
     - Enable USD→EUR FX for tripwire checks (uses env USD_EUR_RATE if present).
     - Add explicit timezones (account vs audience) and reporting digest tz.
     - Clarify launch defer uses account local time; all spend/caps/CPA/ROAS thresholds are in EUR.
-    - Centralize testing engine tunables (bayes/adaptive_ctr/fatigue/tripwires/fairness/promotion/queue/attribution_windows) under testing.engine.
+    - Centralize testing engine tunables under testing.engine.
+    - Centralize validation engine tunables under validation.engine and add scaling.adset_start_budget_eur.
+
+# Optional IDs used by code
+ids:
+  testing_adset_id: "000000000000000"          # replace
+  validation_campaign_id: "000000000000000"    # replace
+  scaling_campaign_id: "000000000000000"       # replace
 
 timezones:
   account_tz: "Europe/Amsterdam"
@@ -99,9 +106,9 @@ testing:
 
 validation:
   minimums:
-    min_impressions: 600
-    min_clicks: 30
-    min_spend: 40   # EUR
+    min_impressions: 600            # maps to _MIN_IMPRESSIONS
+    min_clicks: 30                  # maps to _MIN_CLICKS
+    min_spend: 40                   # EUR — maps to _MIN_SPEND
   kill:
     - {type: "spend_no_purchase", spend_gte: 40}                          # EUR
     - {type: "cpa_gte", cpa_gte: 32}                                      # EUR
@@ -118,12 +125,32 @@ validation:
       - {type: "ctr_gte", ctr_gte: 0.01}
   strictness:
     min_days_with_purchase: 2
+  engine:
+    # Validation-stage specific tunables from validation.py
+    attribution_windows: ["7d_click", "1d_view"]   # maps to _ATTR_WINDOWS
+    stability:
+      consecutive_ticks: 2                         # maps to _CONSEC_TICKS_REQUIRED (overrides global if used)
+    fairness:
+      min_spend_before_kill_eur: 40               # maps to _MIN_FAIR_SPEND_BEFORE_KILL
+    tripwires:
+      lifetime_spend_no_purchase_eur: 40          # maps to _SPEND_NO_PURCHASE_EUR (defaults to same as fairness)
+    promotion:
+      pause_after_promotion: true                 # maps to _PAUSE_AFTER_PROMOTION
+      cooldown_hours: 24                          # maps to _PROMO_COOLDOWN_HOURS
+      allow_create_on_promo_check: false          # maps to _ALLOW_CREATE_ON_PROMO_CHECK
+    soft_pass:
+      max_budget_eur: 40                          # maps to _SOFT_PASS_MAX_BUDGET
+      max_cpa_eur: 36                             # maps to _SOFT_PASS_MAX_CPA
+      min_roas: 1.5                               # maps to _SOFT_PASS_MIN_ROAS
+      min_ctr: 0.008                              # maps to _SOFT_PASS_MIN_CTR
 
 scaling:
   minimums:
     min_impressions: 1000
     min_clicks: 50
     min_spend: 50   # EUR
+  # Start budget used by validation promotion when creating a SCALE ad set
+  adset_start_budget_eur: 100
   kill:
     - {type: "cpa_gte_consecutive_days", cpa_gte: 40, days: 2}             # EUR
     - {type: "roas_lt_over_days", roas_lt: 1.2, days: 3}
