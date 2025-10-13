@@ -1,3 +1,4 @@
+# testing.py
 from __future__ import annotations
 
 import json
@@ -9,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Callable
 
 import pandas as pd
-from zoneinfo import ZoneInfo  # use account-local timezone
+from zoneinfo import ZoneInfo  # account-local timezone
 
 from slack import alert_kill, alert_promote, notify
 
@@ -36,7 +37,6 @@ def _getenv_i(name: str, default: int) -> int:
 
 
 def _cfg(settings: Dict[str, Any], path: str, default: Any = None) -> Any:
-    """Fetch dotted-path key from settings dict."""
     cur: Any = settings
     for part in path.split("."):
         if not isinstance(cur, dict) or part not in cur:
@@ -88,22 +88,18 @@ def _cfg_or_env_list(settings: Dict[str, Any], path: str, env: str, default: Lis
 # ------------------------- small helpers -------------------------
 
 def _today_str() -> str:
-    # account-local date bucket
     return datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
 
 
 def _daily_key(stage: str, metric: str) -> str:
-    # daily::<YYYY-MM-DD>::STAGE::metric
     return f"daily::{_today_str()}::{stage}::{metric}"
 
 
 def _ad_day_flag_key(ad_id: str, flag: str) -> str:
-    # ad::<ad_id>::<flag>::YYYY-MM-DD
     return f"ad::{ad_id}::{flag}::{_today_str()}"
 
 
 def _now_minute_key(prefix: str) -> str:
-    # use account-local timezone for tick idempotency
     return f"{prefix}::{datetime.now(LOCAL_TZ).strftime('%Y-%m-%dT%H:%M')}"
 
 
@@ -346,13 +342,11 @@ def _normalize_video_id_cell(v: Any) -> str:
     return keep
 
 
-# ---------- pause/resume helpers & one-shot alerts ----------
+# ---------- pause/resume helpers and one-shot alerts ----------
 
 def _pause_ad(meta: Any, ad_id: str) -> Any:
-    # Preferred: client's own pause method
     if hasattr(meta, "pause_ad") and callable(getattr(meta, "pause_ad")):
         return meta.pause_ad(ad_id)
-    # Direct Graph POST to the object path /{ad_id}
     try:
         import requests
         ver = getattr(getattr(meta, "account", None), "api_version", "v23.0") or "v23.0"
@@ -369,7 +363,6 @@ def _pause_ad(meta: Any, ad_id: str) -> Any:
             raise RuntimeError(f"Graph POST {url} {r.status_code}: {err}")
         return r.json()
     except Exception:
-        # SDK fallback if available
         try:
             from facebook_business.adobjects.ad import Ad as FBAd
             FBAd(ad_id).api_update(params={"status": "PAUSED"})
@@ -396,8 +389,50 @@ def _get_paused_alerted(store: Any, ad_id: str) -> int:
         return 0
 
 
-# ---------------------------------------------------------------------------
+# ---------- helpers for promotion cloning ----------
 
+def _get_ad_creative_id(meta: Any, ad_id: str) -> Optional[str]:
+    """
+    Return the creative id of an ad. Uses client method if present, else Graph fallback, else SDK.
+    """
+    # client method
+    if hasattr(meta, "get_ad_details") and callable(getattr(meta, "get_ad_details")):
+        try:
+            d = meta.get_ad_details(ad_id)
+            cid = (d.get("creative") or {}).get("id")
+            if cid:
+                return str(cid)
+        except Exception:
+            pass
+    # Graph fallback
+    try:
+        import requests
+        ver = getattr(getattr(meta, "account", None), "api_version", "v23.0") or "v23.0"
+        token = getattr(getattr(meta, "account", None), "access_token", None)
+        if token:
+            url = f"https://graph.facebook.com/{ver}/{ad_id}"
+            r = requests.get(url, params={"access_token": token, "fields": "creative{id}"}, timeout=30)
+            j = r.json()
+            cid = (j.get("creative") or {}).get("id")
+            if cid:
+                return str(cid)
+    except Exception:
+        pass
+    # SDK fallback
+    try:
+        from facebook_business.adobjects.ad import Ad as FBAd
+        ad = FBAd(ad_id)
+        fields = ["creative"]
+        ad.remote_read(fields=fields)
+        cid = (ad.get("creative") or {}).get("id")
+        if cid:
+            return str(cid)
+    except Exception:
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
 
 def run_testing_tick(
     meta: Any,
@@ -405,10 +440,10 @@ def run_testing_tick(
     engine: Any,
     store: Any,
     queue_df: pd.DataFrame,
-    set_supabase_status: Callable[[List[str], str], None],  # passed from main.py
+    set_supabase_status: Callable[[List[str], str], None],
     *,
-    placements: Optional[List[str]] = None,           # ✅ accept but not used (testing uses existing ad set)
-    instagram_actor_id: Optional[str] = None,         # ✅ used for creatives
+    placements: Optional[List[str]] = None,           # respected if provided
+    instagram_actor_id: Optional[str] = None,         # used for creatives
 ) -> Dict[str, Any]:
     summary = {"kills": 0, "promotions": 0, "launched": 0, "fatigue_flags": 0, "data_quality_alerts": 0}
     try:
@@ -420,19 +455,15 @@ def run_testing_tick(
         pass
 
     # --- Resolve config from YAML with env fallbacks ---
-    # minimums
     tmin = (settings.get("testing") or {}).get("minimums") or {}
     min_impressions = int(tmin.get("min_impressions", _getenv_i("TEST_MIN_IMPRESSIONS", 300)))
-    min_clicks = int(tmin.get("min_clicks", _getenv_i("TEST_MIN_CLICKS", 10)))  # allow 0 from YAML
+    min_clicks = int(tmin.get("min_clicks", _getenv_i("TEST_MIN_CLICKS", 10)))
     min_spend = float(tmin.get("min_spend_eur", tmin.get("min_spend", _getenv_f("TEST_MIN_SPEND", 10.0))))
 
-    # fairness
     min_spend_before_kill = _cfg_or_env_f(settings, "testing.engine.fairness.min_spend_before_kill_eur", "TEST_MIN_SPEND_BEFORE_KILL", 20.0)
 
-    # stability
     consec_required = _cfg_or_env_i(settings, "stability.consecutive_ticks", "TEST_CONSEC_TICKS_REQUIRED", 2)
 
-    # engine tunables
     lifetime_spend_no_purchase_eur = _cfg_or_env_f(settings, "testing.engine.tripwires.lifetime_spend_no_purchase_eur", "TEST_SPEND_NO_PURCHASE_EUR", 32.0)
 
     prior_a = _cfg_or_env_f(settings, "testing.engine.bayes.prior_a", "TEST_BETA_PRIOR_A", 2.0)
@@ -455,17 +486,15 @@ def run_testing_tick(
 
     attr_windows = _cfg_or_env_list(settings, "testing.engine.attribution_windows", "TEST_ATTR_WINDOWS", ["7d_click", "1d_view"])
 
-    # testing keep live and ids
     adset_id = _cfg(settings, "ids.testing_adset_id")
     validation_campaign_id = _cfg(settings, "ids.validation_campaign_id")
 
-    # prefer consolidated policy location
     keep_live = int(_cfg(settings, "queue_policies.keep_active_ads", _cfg(settings, "testing.keep_ads_live", 4)))
 
     copy_bank = _load_copy_bank(settings)
     copy_strategy = (settings.get("copy_bank") or {}).get("strategy", "round_robin")
 
-    # -------- Build ACTIVE/PAUSED map (for skip + re-arming pause alerts) --------
+    # -------- Build ACTIVE or PAUSED map --------
     try:
         current_ads = meta.list_ads_in_adset(adset_id)
     except Exception as e:
@@ -479,12 +508,11 @@ def run_testing_tick(
         except Exception:
             pass
 
-    # Any ad that is ACTIVE should reset the paused-alert flag
     for aid, st in status_by_ad_id.items():
         if st == "ACTIVE":
             _set_paused_alerted(store, aid, 0)
 
-    # -------- Fetch insights via MetaClient (today + lifetime) --------
+    # -------- Fetch insights (today and lifetime) --------
     try:
         rows_today = meta.get_ad_insights(
             level="ad",
@@ -532,7 +560,6 @@ def run_testing_tick(
         if not ad_id:
             continue
 
-        # -------- HARD SKIP anything currently PAUSED --------
         cur_status = status_by_ad_id.get(str(ad_id), "")
         if cur_status == "PAUSED":
             _set_paused_alerted(store, ad_id, 1)
@@ -546,23 +573,21 @@ def run_testing_tick(
         spend_life = _safe_f(lr.get("spend"))
         purch_life, atc_life = _purchase_and_atc_counts(lr)
 
-        # Only log ℹ️ for ACTIVE ads
         try:
             notify(f"ℹ️ [TEST] {name}: lifetime_spend={spend_life:.2f} purchases={purch_life} today_spend={spend_today:.2f}")
         except Exception:
             pass
 
-        # Gate on minimums only if both today's and lifetime spend are below the fairness budget
         if (spend_today < min_spend_before_kill and spend_life < min_spend_before_kill) and \
            not _meets_minimums(r, min_impressions, min_clicks, min_spend):
             continue
 
-        dq = _data_quality_sentry(r, min_spend_for_alert=20.0)  # can be lifted to YAML if you want
+        dq = _data_quality_sentry(r, min_spend_for_alert=20.0)
         if dq:
             notify(f"🩺 [TEST] {name}: {dq}")
             summary["data_quality_alerts"] += 1
 
-        # ---------- Fatigue (count once per ad per day) ----------
+        # fatigue
         if _fatigue_detect(store, ad_id, ctr_today, ewma_alpha=ewma_alpha, drop_pct=fatigue_drop_pct):
             flag_key = _ad_day_flag_key(ad_id, "fatigue")
             first_time_today = False
@@ -598,7 +623,7 @@ def run_testing_tick(
         except Exception:
             kill, reason_engine = False, ""
 
-        # ---------------- Tripwire kill (once-per-pause alert) ----------------
+        # tripwire kill
         if spend_life >= lifetime_spend_no_purchase_eur and purch_life == 0:
             reason = f"Lifetime spend≥{ACCOUNT_CURRENCY_SYMBOL}{int(lifetime_spend_no_purchase_eur)} & no purchase"
             try:
@@ -637,7 +662,7 @@ def run_testing_tick(
                 notify(f"❗ [TEST] Failed to pause {name}: {e}")
             continue  # do not consider promotion after a kill
 
-        # ---------------- Other kill paths (with stability) ----------------
+        # other kill paths with stability
         should_kill_other = kill or bayes_kill
         if should_kill_other and _stable_pass(store, ad_id, "kill_test", True, consec_required):
             try:
@@ -681,7 +706,7 @@ def run_testing_tick(
         else:
             _stable_pass(store, ad_id, "kill_test", False, consec_required)
 
-        # ---------------- Promotion ----------------
+        # ---------------- Promotion with actual launch into VALID ----------------
         try:
             adv, adv_reason = engine.should_advance_from_testing(r)
         except Exception:
@@ -689,45 +714,73 @@ def run_testing_tick(
 
         if adv and _stable_pass(store, ad_id, "adv_test", True, consec_required):
             label = name.replace("[TEST]", "").strip() or f"Ad_{ad_id}"
+
+            # resolve placements: function arg takes precedence, else YAML, else default
+            promo_places = list(placements) if placements else list(promotion_placements)
+
+            valid_as = None
+            val_ad = None
             try:
+                # 1) create validation ad set
                 valid_as = meta.create_validation_adset(
                     validation_campaign_id,
                     label,
                     daily_budget=float(validation_budget_eur),
-                    placements=list(promotion_placements),
+                    placements=promo_places,
                 )
-            except Exception:
-                valid_as = None
 
-            try:
-                store.incr(_daily_key("TEST", "promotions"), 1)
-            except Exception:
-                pass
+                # 2) get creative id of the testing ad
+                creative_id = _get_ad_creative_id(meta, ad_id)
+                if not creative_id:
+                    raise RuntimeError("Could not fetch creative id to promote.")
 
-            store.log(
-                entity_type="ad",
-                entity_id=ad_id,
-                action="TEST_TO_VALID",
-                reason=adv_reason,
-                level="info",
-                stage="VALID",
-                meta={"validation_adset": valid_as},
-            )
-            try:
-                alert_promote("TEST", "VALID", label, budget=float(validation_budget_eur))
-            except Exception:
-                notify(f"✅ [TEST→VALID] {label} — {adv_reason} (Budget: {ACCOUNT_CURRENCY_SYMBOL}{validation_budget_eur:.0f}/day)")
-            if pause_after_promotion:
+                # 3) create an active validation ad using the same creative
+                val_ad_name = f"[VALID] {label}"
+                val_ad = meta.create_ad(valid_as["id"], val_ad_name, creative_id=creative_id, status="ACTIVE")
+
+                # 4) only now pause the test ad if configured
+                if pause_after_promotion:
+                    try:
+                        _pause_ad(meta, ad_id)
+                        _set_paused_alerted(store, ad_id, 1)
+                    except Exception:
+                        pass
+
                 try:
-                    _pause_ad(meta, ad_id)
-                    _set_paused_alerted(store, ad_id, 1)
+                    alert_promote("TEST", "VALID", label, budget=float(validation_budget_eur))
+                except Exception:
+                    notify(f"✅ [TEST→VALID] {label} — {adv_reason} (Budget: {ACCOUNT_CURRENCY_SYMBOL}{validation_budget_eur:.0f}/day)")
+
+                try:
+                    store.incr(_daily_key("TEST", "promotions"), 1)
                 except Exception:
                     pass
-            summary["promotions"] += 1
+
+                store.log(
+                    entity_type="ad",
+                    entity_id=val_ad["id"],
+                    action="TEST_TO_VALID",
+                    reason=adv_reason,
+                    level="info",
+                    stage="VALID",
+                    meta={"validation_adset": valid_as, "placements": promo_places},
+                )
+
+                # 5) Supabase status for visibility
+                try:
+                    set_supabase_status([creative_id], "promoted")
+                except Exception:
+                    pass
+
+                summary["promotions"] += 1
+
+            except Exception as e:
+                notify(f"❗ [VALID] Promotion failed for '{label}': {e}")
+                # do not pause the test ad on failure
         else:
             _stable_pass(store, ad_id, "adv_test", False, consec_required)
 
-    # -------- Top-up launches --------
+    # -------- Top-up launches to keep N active --------
     if not current_ads:
         try:
             current_ads = meta.list_ads_in_adset(adset_id)
@@ -779,7 +832,7 @@ def run_testing_tick(
         video_id_raw = p.get("video_id")
         video_id = _normalize_video_id_cell(video_id_raw)
         if not label_core or not video_id or not video_id.isdigit():
-            notify(f"⚠️ [TEST] Skipping '{label_core or 'UNNAMED'}' — missing or invalid video_id (got: {video_id_raw!r}).")
+            notify(f"⚠️ [TEST] Skipping '{label_core or 'UNNAMED'}' — invalid video_id (got: {video_id_raw!r}).")
             continue
 
         try:
@@ -815,7 +868,7 @@ def run_testing_tick(
                 link_url=os.getenv("STORE_URL"),
                 utm_params=p.get("utm_params") or None,
                 thumbnail_url=p.get("thumbnail_url") or None,
-                instagram_actor_id=(instagram_actor_id or os.getenv("IG_ACTOR_ID")),  # ✅ use passed override if provided
+                instagram_actor_id=(instagram_actor_id or os.getenv("IG_ACTOR_ID")),
             )
             ad = meta.create_ad(adset_id, cname, creative_id=creative["id"], status="ACTIVE")
 
