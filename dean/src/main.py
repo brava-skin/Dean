@@ -448,7 +448,7 @@ def file_lock(path: str):
     """
     Cross-platform(ish) run lock:
     - POSIX: flock
-    - Windows/others: presence + PID written; best-effort
+    - Windows/others: presence + PID written, best-effort
     """
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     fd = None
@@ -674,11 +674,10 @@ def main() -> None:
         app_secret=os.getenv("FB_APP_SECRET", ""),
         api_version=os.getenv("FB_API_VERSION") or None,
     )
+    # ClientConfig in meta_client.py does not accept attribution fields. Keep it minimal.
     cfg = ClientConfig(
-        timezone=tz_name,
-        attribution_click_days=int((rules_cfg.get("attribution") or {}).get("click_days", 7)),
-        attribution_view_days=int((rules_cfg.get("attribution") or {}).get("view_days", 1)),
-        roas_source=(rules_cfg.get("attribution") or {}).get("roas_source", "computed"),
+        timezone=tz_name
+        # currency, budgets and switches are already defaulted inside ClientConfig
     )
     client = MetaClient(
         accounts=[account],
