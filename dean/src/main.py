@@ -61,6 +61,7 @@ REQUIRED_ENVS = [
     "FB_PIXEL_ID",
     "FB_PAGE_ID",
     "STORE_URL",
+    "IG_ACTOR_ID",
 ]
 REQUIRED_IDS = [
     ("ids", "testing_campaign_id"),
@@ -771,9 +772,18 @@ def main() -> None:
         stage_choice = args.stage
 
         if stage_choice in ("all", "testing"):
-            overall["testing"] = run_stage(
-                run_testing_tick, "TESTING", client, settings, engine, store, queue_df, set_supabase_status
-            )
+    overall["testing"] = run_stage(
+        run_testing_tick,
+        "TESTING",
+        client,
+        settings,
+        engine,
+        store,
+        queue_df,
+        set_supabase_status,
+        placements=["facebook", "instagram"],  # ✅ NEW
+        instagram_actor_id=os.getenv("IG_ACTOR_ID"),  # ✅ NEW
+    )
 
         if stage_choice in ("all", "validation"):
             overall["validation"] = run_stage(
@@ -827,3 +837,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
