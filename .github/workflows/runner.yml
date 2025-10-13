@@ -25,6 +25,7 @@ jobs:
       FB_PIXEL_ID:           ${{ secrets.FB_PIXEL_ID }}
       FB_PAGE_ID:            ${{ secrets.FB_PAGE_ID }}
       FB_API_VERSION:        ${{ secrets.FB_API_VERSION }}
+      IG_ACTOR_ID: ${{ secrets.IG_ACTOR_ID }}
 
       # — App behavior —
       MODE:                  ${{ secrets.MODE }}         # e.g. "production" or "staging"
