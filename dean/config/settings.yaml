@@ -3,7 +3,7 @@ env: prod
 branding_name: "Dean"
 
 audit:
-  last_changed_at: "2025-09-29T00:00:00Z"
+  last_changed_at: "2025-10-13T00:00:00Z"
   last_changed_by: "you@company.com"
   changelog: |
     - v1.2: Add profiles, richer guardrails, reinvestment policy, data-quality,
@@ -11,10 +11,11 @@ audit:
     - v1.2-eur: Switch account timezone to Europe/Amsterdam and adopt EUR.
                 Added *_eur keys while keeping *_usd for backward compatibility.
                 Updated templates to use €.
+    - v1.2-ig: Add explicit Instagram placements and optional instagram_actor_id env
 
 # ── Timezones ─────────────────────────────────────────────────────────────────
-account_timezone: "Europe/Amsterdam"        # was America/Chicago
-notifications_timezone: "Europe/Amsterdam"  # unchanged (already EU/AMS)
+account_timezone: "Europe/Amsterdam"
+notifications_timezone: "Europe/Amsterdam"
 dst_note: "Windows are interpreted in account timezone; notifications in EU/AMS."
 
 ids:
@@ -56,6 +57,7 @@ meta_defaults:
       engaged_custom_audience_ids: []
       purchaser_custom_audience_ids: []
       lookalike_exclusions: []
+  # Legacy placement knobs kept for backward compat with any code still reading these
   placements:
     testing_mode: "advantage_plus"
     validation_mode: "advantage_plus"
@@ -64,14 +66,23 @@ meta_defaults:
     dynamic_creative: false
     cta: "SHOP_NOW"
     link_url_env: "STORE_URL"
+    instagram_actor_id_env: "IG_ACTOR_ID"   # optional: set env to force IG handle
     utm:
       template: "utm_source=meta&utm_medium=paid&utm_campaign={{campaign.name}}&utm_adset={{adset.name}}&utm_content={{ad.name}}"
       require: false
   attribution_windows_override: null
 
+# ── Global placements (used if a stage does not override) ─────────────────────
+placements:
+  publisher_platforms: ["facebook", "instagram"]
+  device_platforms: ["mobile", "desktop"]     # or ["mobile"] to force mobile-only
+  facebook_positions: ["feed", "video_feeds", "marketplace"]
+  instagram_positions: ["feed", "story", "reels", "explore"]
+  messenger_positions: []
+  audience_network_positions: []
+
 # ── Testing ───────────────────────────────────────────────────────────────────
 testing:
-  # Canonical (EUR); keep *_usd for backward-compat
   daily_budget_eur: 50
   daily_budget_usd: 50
   keep_ads_live: 4
@@ -81,7 +92,7 @@ testing:
   bid_strategy: "lowest_cost"
   dynamic_creative: false
   pause_dead_hours: true
-  dead_hours_window: "02:00-06:00"   # interpreted in Europe/Amsterdam now
+  dead_hours_window: "02:00-06:00"
   minimums:
     min_impressions: 300
     min_clicks: 0
@@ -96,6 +107,14 @@ testing:
     refill_on_kill: true
     max_launches_per_day: 8
   naming_prefix: "[TEST]"
+  # Stage-specific placements (optional; if omitted, uses global placements)
+  placements:
+    publisher_platforms: ["facebook", "instagram"]
+    device_platforms: ["mobile", "desktop"]
+    facebook_positions: ["feed", "video_feeds"]
+    instagram_positions: ["feed", "story", "reels"]
+    messenger_positions: []
+    audience_network_positions: []
 
 # ── Validation ────────────────────────────────────────────────────────────────
 validation:
@@ -117,6 +136,13 @@ validation:
   promotion:
     pause_validation_on_promotion: true
   naming_prefix: "[VALID]"
+  placements:
+    publisher_platforms: ["facebook", "instagram"]
+    device_platforms: ["mobile", "desktop"]
+    facebook_positions: ["feed", "video_feeds", "marketplace"]
+    instagram_positions: ["feed", "story", "reels", "explore"]
+    messenger_positions: []
+    audience_network_positions: []
 
 # ── Scaling ───────────────────────────────────────────────────────────────────
 scaling:
@@ -133,8 +159,8 @@ scaling:
   budget:
     min_eur: 10
     max_eur: 5000
-    min_usd: 10     # legacy
-    max_usd: 5000   # legacy
+    min_usd: 10
+    max_usd: 5000
     max_step_pct: 100
     cooldown_hours_after_scale: 24
   hysteresis:
@@ -152,6 +178,13 @@ scaling:
     cpa_max: 22
     roas_min: 3.0
   naming_prefix: "[SCALE]"
+  placements:
+    publisher_platforms: ["facebook", "instagram"]
+    device_platforms: ["mobile", "desktop"]
+    facebook_positions: ["feed", "video_feeds", "marketplace"]
+    instagram_positions: ["feed", "story", "reels", "explore"]
+    messenger_positions: []
+    audience_network_positions: []
 
 # ── Guardrails ────────────────────────────────────────────────────────────────
 guardrails:
@@ -159,7 +192,7 @@ guardrails:
   account_cpa_window_days: 2
   no_purchases_tripwire_hours: 48
   global_daily_cap_eur: 3000
-  global_daily_cap_usd: 3000   # legacy
+  global_daily_cap_usd: 3000
   spend_velocity:
     compare_24h_vs_prev_24h: true
     compare_48h_vs_prev_48h: true
@@ -244,7 +277,7 @@ notifications:
       error: "errors"
     digest:
       enabled: true
-      time_local: "08:30"   # Europe/Amsterdam
+      time_local: "08:30"
       include_tables: true
       include_stage_summaries: true
     templates:
@@ -262,18 +295,18 @@ reporting:
 
 # ── Economics ────────────────────────────────────────────────────────────────
 economics:
-  currency: "EUR"                # was USD
+  currency: "EUR"
   breakeven_cpa_env: "BREAKEVEN_CPA"
   cogs_env: "COGS_PER_PURCHASE"
   fx:
-    enabled: false               # account is already EUR
+    enabled: false
 
 # ── Data quality ─────────────────────────────────────────────────────────────
 data_quality:
   missing_actions_alert:
     enabled: true
     min_spend_for_alert_eur: 20
-    min_spend_for_alert_usd: 20   # legacy
+    min_spend_for_alert_usd: 20
   tracking_drop_alert:
     enabled: true
     drop_pct_vs_7d_avg: 60
@@ -324,6 +357,3 @@ cbo:
 copy_bank:
   path: "dean/data/copy_bank.json"
   strategy: "round_robin"
-
-
-
