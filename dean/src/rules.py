@@ -118,6 +118,7 @@ class AdvancedRuleEngine:
       - Reinvestment allocator
       - Creative compliance
       - TZ-aware daily counters (Europe/Amsterdam by default)
+      - Accessors for validation.engine and scaling.engine tunables (new)
     """
 
     def __init__(self, cfg: Dict[str, Any], store: Optional[Any] = None):
@@ -300,7 +301,7 @@ class AdvancedRuleEngine:
                 issues.append(f"{k} exceeds max length {max_len}")
         return {"ok": len(issues) == 0, "issues": issues}
 
-    # ---------- Rule evaluation ----------
+    # ---------- Stage rule evaluation ----------
     def _eval(self, rule: Dict[str, Any], m: Metrics, row: Dict[str, Any]) -> Tuple[bool, str]:
         t = rule["type"]
 
@@ -470,8 +471,12 @@ class AdvancedRuleEngine:
             self._stable(entity_id, f"scale_kill:{r['type']}", False)
         return False, ""
 
-    # ---------- Scaling actions ----------
+    # ---------- Scaling actions (legacy YAML keys still supported) ----------
     def scaling_increase_budget_pct(self, row: Dict[str, Any], entity_id: str = "ad") -> int:
+        """
+        Reads thresholds from scaling.scale_up + scaling.scale_up.hysteresis (legacy keys kept in rules.yaml).
+        scaling.py uses scaling.engine.*; this keeps compatibility for any callers still using RuleEngine.
+        """
         m = self.compute_metrics(row)
         cfg = (self.cfg.get("scaling", {}).get("scale_up", {}) or {})
         steps = cfg.get("steps", []) or []
@@ -505,7 +510,6 @@ class AdvancedRuleEngine:
         dup = (self.cfg.get("scaling", {}).get("duplicate_on_fire", {}) or {})
         cap = int(dup.get("max_duplicates_per_24h", 3) or 3)
         rules = dup.get("rules", []) or []
-        # Use account-local date for the per-day cap key
         used_key = self._key(entity_id, "dups", self._today_key_account())
         used = self._get_counter(used_key)
         for r in rules:
@@ -567,6 +571,40 @@ class AdvancedRuleEngine:
         roas_vals = [max(0.1, _f(w.get("ROAS"), 0.1)) for w in winners]
         probs = _softmax(roas_vals)
         return [(w["adset_id"], freed_budget * p) for w, p in zip(winners, probs)]
+
+    # ---------- Engine accessors (NEW) ----------
+    def get_validation_engine_settings(self) -> Dict[str, Any]:
+        """
+        Convenience accessor mirroring rules.yaml: validation.engine.*
+        Helpful if you want to wire env vars for validation.py at runtime
+        or inspect configured thresholds from a single place.
+        """
+        return (self.cfg.get("validation", {}) or {}).get("engine", {}) or {}
+
+    def get_scaling_engine_settings(self) -> Dict[str, Any]:
+        """
+        Convenience accessor mirroring rules.yaml: scaling.engine.*
+        scaling.py reads the same structure directly; this helper is
+        provided for tooling/tests that only have RuleEngine around.
+        """
+        return (self.cfg.get("scaling", {}) or {}).get("engine", {}) or {}
+
+    def get_engine_attr_windows(self, stage: str) -> List[str]:
+        """
+        Return attribution windows from the stage's engine block if present,
+        else fall back to ["7d_click","1d_view"].
+        stage: "testing" | "validation" | "scaling"
+        """
+        stage = (stage or "").lower()
+        default = ["7d_click", "1d_view"]
+        eng = (self.cfg.get(stage, {}) or {}).get("engine", {}) or {}
+        wins = eng.get("attribution_windows")
+        if isinstance(wins, (list, tuple)) and wins:
+            return list(wins)
+        return default
+
+    def account_timezone(self) -> str:
+        return self.account_tz_name
 
     # ---------- Explain / simulate ----------
     def explain(self, stage: str, row: Dict[str, Any]) -> Dict[str, Any]:
