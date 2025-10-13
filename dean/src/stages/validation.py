@@ -169,13 +169,17 @@ def _stable_pass(store: Any, entity_id: str, rule_key: str, condition: bool, con
 
 
 def _purchase_days(meta: Any, ad_id: str, attr_windows: List[str], days: int = 7) -> int:
-    """Count distinct days with ≥1 purchase in the last 'days' (date breakdown)."""
+    """
+    Count distinct days with >= 1 purchase over the last N days using date breakdown.
+    """
     try:
+        since = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%d")
+        until = datetime.now(UTC).strftime("%Y-%m-%d")
         rows = meta.get_ad_insights(
             level="ad",
-            time_range=None,
+            time_range={"since": since, "until": until},
             filtering=[{"field": "ad.id", "operator": "IN", "value": [ad_id]}],
-            fields=["actions", "spend", "impressions", "clicks", "date_start"],
+            fields=["actions", "date_start"],
             action_attribution_windows=list(attr_windows),
             breakdowns=["date"],
             paginate=True,
@@ -183,30 +187,30 @@ def _purchase_days(meta: Any, ad_id: str, attr_windows: List[str], days: int = 7
         seen = set()
         for r in rows:
             acts = r.get("actions") or []
-            purch = 0.0
-            for a in acts:
-                if a.get("action_type") == "purchase":
-                    purch += _safe_f(a.get("value"))
-            if purch > 0:
-                d = (r.get("date_start") or r.get("date") or "").split("T")[0]
+            if any(a.get("action_type") == "purchase" and _safe_f(a.get("value")) > 0 for a in acts):
+                d = (r.get("date_start") or "").split("T")[0]
                 if d:
                     seen.add(d)
-        return min(len(seen), days)
+        return len(seen)
     except Exception:
         return 0
 
 
 def _adaptive_start_budget_eur(row: Dict[str, Any], default_eur: float, soft_max_budget: float) -> float:
-    """Pick a sensible starting budget in EUR based on observed CPA (caps included)."""
+    """
+    Choose a starting budget in EUR based on observed CPA with caps.
+    If no purchases, fall back to default.
+    Caps at soft_max_budget and at 150 EUR, and scales roughly as 3x CPA.
+    """
     spend = _safe_f(row.get("spend"))
     purchases = 0.0
     for a in (row.get("actions") or []):
         if a.get("action_type") == "purchase":
             purchases += _safe_f(a.get("value"))
-    cpa = (spend / purchases) if purchases > 0 else None
-    if cpa is None:
+    if purchases <= 0:
         return float(default_eur)
-    return float(max(soft_max_budget, min(3.0 * cpa, 150.0)))
+    cpa = spend / purchases
+    return float(min(soft_max_budget, 3.0 * cpa, 150.0))
 
 
 def _promotion_cooldown_active(store: Any, ad_id: str) -> bool:
@@ -214,12 +218,9 @@ def _promotion_cooldown_active(store: Any, ad_id: str) -> bool:
         rec = store.get_flag("ad", ad_id, "promo_cooldown_until")
         until_iso = rec.get("v") if isinstance(rec, dict) else rec
         if until_iso:
-            try:
-                return datetime.fromisoformat(str(until_iso)) > datetime.now(UTC)
-            except Exception:
-                return False
+            return datetime.fromisoformat(str(until_iso)) > datetime.now(UTC)
     except Exception:
-        return False
+        pass
     return False
 
 
@@ -227,6 +228,27 @@ def _set_promotion_cooldown(store: Any, ad_id: str, hours: int) -> None:
     try:
         until = (datetime.now(UTC) + timedelta(hours=hours)).isoformat()
         store.set_flag("ad", ad_id, "promo_cooldown_until", until)
+    except Exception:
+        pass
+
+
+# ---- Soft pass cooldown helpers ----
+
+def _soft_pass_cooldown_active(store: Any, ad_id: str) -> bool:
+    try:
+        rec = store.get_flag("ad", ad_id, "soft_pass_cooldown_until")
+        until_iso = rec.get("v") if isinstance(rec, dict) else rec
+        if until_iso:
+            return datetime.fromisoformat(str(until_iso)) > datetime.now(UTC)
+    except Exception:
+        pass
+    return False
+
+
+def _set_soft_pass_cooldown(store: Any, ad_id: str, hours: int) -> None:
+    try:
+        until = (datetime.now(UTC) + timedelta(hours=hours)).isoformat()
+        store.set_flag("ad", ad_id, "soft_pass_cooldown_until", until)
     except Exception:
         pass
 
@@ -246,7 +268,11 @@ def _eligible_soft_pass(row: Dict[str, Any], max_cpa: float, min_ctr: float, min
 
 
 def _find_existing_scaling_adset(meta: Any, scaling_campaign_id: str, creative_label: str, allow_probe: bool) -> Optional[str]:
-    """Best-effort probe to avoid duplicates (no creation if disabled)."""
+    """
+    Best-effort probe to avoid duplicates.
+    If allow_probe is False, do nothing.
+    If your client ensure_adset creates when missing, keep allow_probe False to avoid side effects.
+    """
     if not hasattr(meta, "ensure_adset") or not isinstance(creative_label, str):
         return None
     if not allow_probe:
@@ -255,7 +281,7 @@ def _find_existing_scaling_adset(meta: Any, scaling_campaign_id: str, creative_l
         res = meta.ensure_adset(
             campaign_id=scaling_campaign_id,
             name=f"[SCALE] {creative_label}",
-            daily_budget=0.0,  # value ignored; we only probe existence
+            daily_budget=0.0,  # value ignored by probe
             status="PAUSED",
         )
         return res.get("id")
@@ -286,7 +312,12 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
 
     # Engine
     attr_windows = _cfg_or_env_list(settings, "validation.engine.attribution_windows", "VALID_ATTR_WINDOWS", ["7d_click", "1d_view"])
-    consec_required = _cfg_or_env_i(settings, "validation.engine.stability.consecutive_ticks", "VALID_CONSEC_TICKS_REQUIRED", _cfg_or_env_i(settings, "stability.consecutive_ticks", "VALID_CONSEC_TICKS_REQUIRED", 2))
+    consec_required = _cfg_or_env_i(
+        settings,
+        "validation.engine.stability.consecutive_ticks",
+        "VALID_CONSEC_TICKS_REQUIRED",
+        _cfg_or_env_i(settings, "stability.consecutive_ticks", "VALID_CONSEC_TICKS_REQUIRED", 2),
+    )
     fair_min_spend_before_kill = _cfg_or_env_f(settings, "validation.engine.fairness.min_spend_before_kill_eur", "VALID_MIN_FAIR_SPEND_BEFORE_KILL", 40.0)
     tripwire_life_spend_no_purchase = _cfg_or_env_f(settings, "validation.engine.tripwires.lifetime_spend_no_purchase_eur", "VALID_SPEND_NO_PURCHASE_EUR", fair_min_spend_before_kill)
 
@@ -298,6 +329,7 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
     soft_max_cpa = _cfg_or_env_f(settings, "validation.engine.soft_pass.max_cpa_eur", "VALID_SOFT_PASS_MAX_CPA", 36.0)
     soft_min_roas = _cfg_or_env_f(settings, "validation.engine.soft_pass.min_roas", "VALID_SOFT_PASS_MIN_ROAS", 1.5)
     soft_min_ctr = _cfg_or_env_f(settings, "validation.engine.soft_pass.min_ctr", "VALID_SOFT_PASS_MIN_CTR", 0.008)
+    soft_pass_cooldown_hours = _cfg_or_env_i(settings, "validation.engine.soft_pass.cooldown_hours", "VALID_SOFT_PASS_COOLDOWN_HOURS", 24)
 
     # Scaling start budget (used on promotion)
     start_budget_default_eur = _cfg_or_env_f(settings, "scaling.adset_start_budget_eur", "VALID_START_BUDGET_EUR", 100.0)
@@ -362,35 +394,32 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
         spend_life = _safe_f(lr.get("spend"))
         purch_life, _atc_life = _purchase_and_atc_counts(lr)
 
-        # Optional: log a quick line so you see the lifetime/today view
+        # Quick log
         try:
             notify(f"ℹ️ [VALID] {ad_name}: lifetime_spend={spend_life:.2f} purchases={purch_life} today_spend={spend_today:.2f}")
         except Exception:
             pass
 
-        # Fairness gating: while BOTH today's and lifetime spend are below fair budget AND
-        # validation minimums aren't met, skip heavy actions.
+        # Fairness gating
         if (spend_today < fair_min_spend_before_kill and spend_life < fair_min_spend_before_kill) and not _meets_minimums(r, min_spend, min_imps, min_clicks):
             continue
 
-        # Informative metric (not a blocker)
+        # Informational signal
         pdays = _purchase_days(meta, ad_id, attr_windows)
         if pdays:
             r["purchase_days"] = pdays
 
         # ---- KILL checks ----
-        # 1) Engine-driven kill
         try:
             kill_engine, reason_engine = engine.should_kill_validation(r)
         except Exception:
             kill_engine, reason_engine = False, ""
 
-        # 2) Lifetime tripwire: spent enough since launch but zero purchases
         kill_tripwire = (spend_life >= tripwire_life_spend_no_purchase and purch_life == 0)
         kill_condition = bool(kill_engine or kill_tripwire)
 
         if kill_condition and _stable_pass(store, ad_id, "kill_valid", True, consec_required):
-            # If fairness not met yet, reset stability and skip kill
+            # If still below fairness lifetime spend, reset and skip
             if spend_life < fair_min_spend_before_kill:
                 _stable_pass(store, ad_id, "kill_valid", False, consec_required)
             else:
@@ -401,13 +430,13 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
                     else:
                         raise RuntimeError("meta.pause_ad not available")
 
-                    # daily counter: VALID kills++
+                    # daily counter
                     try:
                         store.incr(_daily_key("VALID", "kills"), 1)
                     except Exception:
                         pass
 
-                    # structured log (best-effort)
+                    # structured log
                     try:
                         store.log_kill(
                             stage="VALID",
@@ -460,7 +489,7 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
         if adv and _stable_pass(store, ad_id, "adv_valid", True, consec_required):
             creative_label = ad_name.replace("[VALID]", "").strip() or f"Ad_{ad_id}"
 
-            # Avoid creating duplicate scaling ad sets
+            # Avoid duplicate scaling ad sets
             exists = _find_existing_scaling_adset(meta, scaling_campaign_id, creative_label, allow_probe=allow_create_on_promo_check)
             if exists:
                 try:
@@ -479,7 +508,7 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
 
             start_budget = _adaptive_start_budget_eur(r, start_budget_default_eur, soft_max_budget)
             try:
-                # MetaClient uses EUR as account currency; parameter name is daily_budget
+                # Create scaling ad set
                 if hasattr(meta, "create_scaling_adset"):
                     scaling_adset = meta.create_scaling_adset(scaling_campaign_id, creative_label, daily_budget=start_budget)
                 elif hasattr(meta, "ensure_adset"):
@@ -506,7 +535,7 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
                 except Exception:
                     created_ad = None
 
-                # daily counter: VALID promotions++
+                # daily counter
                 try:
                     store.incr(_daily_key("VALID", "promotions"), 1)
                 except Exception:
@@ -538,8 +567,10 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
         else:
             _stable_pass(store, ad_id, "adv_valid", False, consec_required)
 
-        # ---- SOFT PASS lane (does not affect daily totals requested) ----
-        if summary["promotions"] == 0 and _eligible_soft_pass(r, max_cpa=soft_max_cpa, min_ctr=soft_min_ctr, min_roas=soft_min_roas):
+        # ---- SOFT PASS lane with cooldown (does not block promotions) ----
+        if not _soft_pass_cooldown_active(store, ad_id) and _eligible_soft_pass(
+            r, max_cpa=soft_max_cpa, min_ctr=soft_min_ctr, min_roas=soft_min_roas
+        ):
             soft_budget = min(soft_max_budget, start_budget_default_eur)
             try:
                 label = ad_name.replace("[VALID]", "").strip() or f"Ad_{ad_id}"
@@ -565,6 +596,7 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
                     )
                 except Exception:
                     pass
+                _set_soft_pass_cooldown(store, ad_id, hours=soft_pass_cooldown_hours)
                 summary["soft_passes"] += 1
             except Exception:
                 pass
