@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Callable
 
 import pandas as pd
-from zoneinfo import ZoneInfo  # <- use account-local timezone
+from zoneinfo import ZoneInfo  # use account-local timezone
 
 from slack import alert_kill, alert_promote, notify
 
@@ -18,34 +18,77 @@ LOCAL_TZ = ZoneInfo(os.getenv("ACCOUNT_TZ", os.getenv("ACCOUNT_TIMEZONE", "Europ
 ACCOUNT_CURRENCY = os.getenv("ACCOUNT_CURRENCY", "EUR")
 ACCOUNT_CURRENCY_SYMBOL = os.getenv("ACCOUNT_CURRENCY_SYMBOL", "€")
 
-# -------- env defaults (used only if YAML keys are missing) --------
-_ENV_MIN_IMPRESSIONS = int(os.getenv("TEST_MIN_IMPRESSIONS", "300"))
-_ENV_MIN_CLICKS = int(os.getenv("TEST_MIN_CLICKS", "10"))
-_ENV_MIN_SPEND = float(os.getenv("TEST_MIN_SPEND", "10"))  # EUR
-_CONSEC_TICKS_REQUIRED = int(os.getenv("TEST_CONSEC_TICKS_REQUIRED", "2"))
-_ATTR_WINDOWS = tuple((os.getenv("TEST_ATTR_WINDOWS", "7d_click,1d_view") or "7d_click,1d_view").split(","))
-_PAUSE_AFTER_PROMOTION = (os.getenv("TEST_PAUSE_AFTER_PROMOTION", "1").lower() in ("1", "true", "yes"))
 
-_BETA_PRIOR_A = float(os.getenv("TEST_BETA_PRIOR_A", "2.0"))
-_BETA_PRIOR_B = float(os.getenv("TEST_BETA_PRIOR_B", "300.0"))
-_BAYES_KILL_PROB = float(os.getenv("TEST_BAYES_KILL_PROB", "0.90"))
-_ADAPTIVE_CTR_FLOOR_MIN = float(os.getenv("TEST_ADAPTIVE_CTR_FLOOR_MIN", "0.008"))
-_ADAPTIVE_CTR_FLOOR_SCALE = float(os.getenv("TEST_ADAPTIVE_CTR_FLOOR_SCALE", "0.70"))
-_FATIGUE_DROP_PCT = float(os.getenv("TEST_FATIGUE_DROP_PCT", "0.35"))
-_EWMA_ALPHA = float(os.getenv("TEST_EWMA_ALPHA", "0.30"))
+# ------------------------- config helpers -------------------------
 
-_ENV_MIN_SPEND_BEFORE_KILL = float(os.getenv("TEST_MIN_SPEND_BEFORE_KILL", "20"))  # EUR
-_BANDIT_SAMPLE_COUNT = int(os.getenv("TEST_BANDIT_SAMPLE_COUNT", "32"))
-_MAX_LAUNCHES_PER_TICK = int(os.getenv("TEST_MAX_LAUNCHES_PER_TICK", "8"))
+def _getenv_f(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except Exception:
+        return default
 
-# Inline tripwire to mirror rules.yaml: spend_no_purchase ≥ 32 EUR
-_SPEND_NO_PURCHASE_EUR = float(os.getenv("TEST_SPEND_NO_PURCHASE_EUR", "32"))
+
+def _getenv_i(name: str, default: int) -> int:
+    try:
+        return int(float(os.getenv(name, str(default))))
+    except Exception:
+        return default
+
+
+def _cfg(settings: Dict[str, Any], path: str, default: Any = None) -> Any:
+    """Fetch dotted-path key from settings dict."""
+    cur: Any = settings
+    for part in path.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return default
+        cur = cur[part]
+    return cur
+
+
+def _cfg_or_env_f(settings: Dict[str, Any], path: str, env: str, default: float) -> float:
+    v = _cfg(settings, path, None)
+    if v is None:
+        return _getenv_f(env, default)
+    try:
+        return float(v)
+    except Exception:
+        return default
+
+
+def _cfg_or_env_i(settings: Dict[str, Any], path: str, env: str, default: int) -> int:
+    v = _cfg(settings, path, None)
+    if v is None:
+        return _getenv_i(env, default)
+    try:
+        return int(v)
+    except Exception:
+        return default
+
+
+def _cfg_or_env_b(settings: Dict[str, Any], path: str, env: str, default: bool) -> bool:
+    v = _cfg(settings, path, None)
+    if v is None:
+        raw = os.getenv(env, str(int(default))).lower()
+        return raw in ("1", "true", "yes", "y")
+    if isinstance(v, bool):
+        return v
+    return str(v).lower() in ("1", "true", "yes", "y")
+
+
+def _cfg_or_env_list(settings: Dict[str, Any], path: str, env: str, default: List[str]) -> List[str]:
+    v = _cfg(settings, path, None)
+    if v is None:
+        raw = os.getenv(env, ",".join(default))
+        return [s.strip() for s in (raw or "").split(",") if s.strip()]
+    if isinstance(v, (list, tuple)):
+        return list(v)
+    return [str(v).strip()]
 
 
 # ------------------------- small helpers -------------------------
 
 def _today_str() -> str:
-    # account-local “date bucket”, e.g. '2025-10-10'
+    # account-local date bucket
     return datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
 
 
@@ -113,7 +156,7 @@ def _meets_minimums(row: Dict[str, Any], min_impressions: int, min_clicks: int, 
     )
 
 
-def _stable_pass(store: Any, entity_id: str, rule_key: str, condition: bool) -> bool:
+def _stable_pass(store: Any, entity_id: str, rule_key: str, condition: bool, consec_required: int) -> bool:
     key = f"{entity_id}::stable::{rule_key}"
     if condition:
         try:
@@ -124,7 +167,7 @@ def _stable_pass(store: Any, entity_id: str, rule_key: str, condition: bool) -> 
                 store.set_counter(key, val)
             except Exception:
                 pass
-        return val >= _CONSEC_TICKS_REQUIRED
+        return val >= consec_required
     try:
         store.set_counter(key, 0)
     except Exception:
@@ -151,55 +194,60 @@ def _set_counter_float(store: Any, key: str, val: float, scale: int = 1_000_000)
         pass
 
 
-def _update_ewma_ctr(store: Any, ad_id: str, ctr_today: float) -> float:
+def _update_ewma_ctr(store: Any, ad_id: str, ctr_today: float, ewma_alpha: float) -> float:
     k = f"{ad_id}::ewma_ctr"
     prev = _get_counter_float(store, k) or ctr_today
-    ewma = _EWMA_ALPHA * ctr_today + (1.0 - _EWMA_ALPHA) * prev
+    ewma = ewma_alpha * ctr_today + (1.0 - ewma_alpha) * prev
     _set_counter_float(store, k, ewma)
     return ewma
 
 
-def _fatigue_detect(store: Any, ad_id: str, ctr_today: float) -> bool:
-    ewma = _update_ewma_ctr(store, ad_id, ctr_today)
-    return ewma > 0 and ctr_today < (1.0 - _FATIGUE_DROP_PCT) * ewma
+def _fatigue_detect(store: Any, ad_id: str, ctr_today: float, ewma_alpha: float, drop_pct: float) -> bool:
+    ewma = _update_ewma_ctr(store, ad_id, ctr_today, ewma_alpha)
+    return ewma > 0 and ctr_today < (1.0 - drop_pct) * ewma
 
 
-def _bayes_kill_prob(clicks: float, imps: float, floor: float) -> float:
-    a = _BETA_PRIOR_A + max(0.0, clicks)
-    b = _BETA_PRIOR_B + max(0.0, imps - clicks)
+def _bayes_kill_prob(clicks: float, imps: float, floor: float, prior_a: float, prior_b: float, sample_count: int) -> float:
+    a = prior_a + max(0.0, clicks)
+    b = prior_b + max(0.0, imps - clicks)
     below = 0
-    n = _BANDIT_SAMPLE_COUNT
+    n = max(1, sample_count)
     for _ in range(n):
         sample = random.betavariate(a, b)
         if sample < floor:
             below += 1
-    return below / max(1, n)
+    return below / n
 
 
-def _adaptive_ctr_floor(rows: List[Dict[str, Any]], min_impressions: int) -> float:
-    ctrs = sorted((_ctr(r) for r in rows if _safe_f(r.get("impressions")) >= min_impressions), reverse=True)
+def _adaptive_ctr_floor(
+    rows: List[Dict[str, Any]],
+    min_impressions_for_floor: int,
+    floor_min: float,
+    floor_scale: float,
+) -> float:
+    ctrs = sorted((_ctr(r) for r in rows if _safe_f(r.get("impressions")) >= min_impressions_for_floor), reverse=True)
     if not ctrs:
-        return _ADAPTIVE_CTR_FLOOR_MIN
+        return floor_min
     mid = ctrs[len(ctrs) // 2]
-    return max(_ADAPTIVE_CTR_FLOOR_MIN, mid * _ADAPTIVE_CTR_FLOOR_SCALE)
+    return max(floor_min, mid * floor_scale)
 
 
-def _data_quality_sentry(row: Dict[str, Any]) -> Optional[str]:
+def _data_quality_sentry(row: Dict[str, Any], min_spend_for_alert: float) -> Optional[str]:
     spend = _safe_f(row.get("spend"))
     purch, atc = _purchase_and_atc_counts(row)
-    if spend >= 20 and purch == 0 and atc == 0:
-        return f"Spend present but no actions — check tracking"
+    if spend >= min_spend_for_alert and purch == 0 and atc == 0:
+        return "Spend present but no actions, check tracking"
     return None
 
 
-def _bandit_score_for_queue_item(store: Any, label: str) -> float:
+def _bandit_score_for_queue_item(store: Any, label: str, prior_a: float, prior_b: float) -> float:
     try:
         clicks = store.get_counter(f"qctr::{label}::clicks")
         imps = store.get_counter(f"qctr::{label}::imps")
     except Exception:
         clicks, imps = 0, 0
-    a = _BETA_PRIOR_A + clicks
-    b = _BETA_PRIOR_B + max(0, imps - clicks)
+    a = prior_a + clicks
+    b = prior_b + max(0, imps - clicks)
     return random.betavariate(a, b)
 
 
@@ -368,18 +416,48 @@ def run_testing_tick(
     except Exception:
         pass
 
-    # --- Resolve minimums from YAML (with env fallbacks) ---
+    # --- Resolve config from YAML with env fallbacks ---
+    # minimums
     tmin = (settings.get("testing") or {}).get("minimums") or {}
-    min_impressions = int(tmin.get("min_impressions", _ENV_MIN_IMPRESSIONS))
-    min_clicks = int(tmin.get("min_clicks", _ENV_MIN_CLICKS))  # allow 0 from YAML
-    min_spend = float(tmin.get("min_spend_eur", tmin.get("min_spend", _ENV_MIN_SPEND)))
+    min_impressions = int(tmin.get("min_impressions", _getenv_i("TEST_MIN_IMPRESSIONS", 300)))
+    min_clicks = int(tmin.get("min_clicks", _getenv_i("TEST_MIN_CLICKS", 10)))  # allow 0 from YAML
+    min_spend = float(tmin.get("min_spend_eur", tmin.get("min_spend", _getenv_f("TEST_MIN_SPEND", 10.0))))
 
-    tfair = (settings.get("testing") or {}).get("fairness") or {}
-    min_spend_before_kill = float(tfair.get("min_spend_before_kill_eur", _ENV_MIN_SPEND_BEFORE_KILL))
+    # fairness
+    min_spend_before_kill = _cfg_or_env_f(settings, "testing.engine.fairness.min_spend_before_kill_eur", "TEST_MIN_SPEND_BEFORE_KILL", 20.0)
 
-    adset_id = settings["ids"]["testing_adset_id"]
-    keep_live = int(settings["testing"]["keep_ads_live"])
-    validation_campaign_id = settings["ids"]["validation_campaign_id"]
+    # stability
+    consec_required = _cfg_or_env_i(settings, "stability.consecutive_ticks", "TEST_CONSEC_TICKS_REQUIRED", 2)
+
+    # engine tunables
+    lifetime_spend_no_purchase_eur = _cfg_or_env_f(settings, "testing.engine.tripwires.lifetime_spend_no_purchase_eur", "TEST_SPEND_NO_PURCHASE_EUR", 32.0)
+
+    prior_a = _cfg_or_env_f(settings, "testing.engine.bayes.prior_a", "TEST_BETA_PRIOR_A", 2.0)
+    prior_b = _cfg_or_env_f(settings, "testing.engine.bayes.prior_b", "TEST_BETA_PRIOR_B", 300.0)
+    sample_count = _cfg_or_env_i(settings, "testing.engine.bayes.sample_count", "TEST_BANDIT_SAMPLE_COUNT", 32)
+    kill_prob = _cfg_or_env_f(settings, "testing.engine.bayes.kill_prob", "TEST_BAYES_KILL_PROB", 0.90)
+
+    floor_min = _cfg_or_env_f(settings, "testing.engine.adaptive_ctr.floor_min", "TEST_ADAPTIVE_CTR_FLOOR_MIN", 0.008)
+    floor_scale = _cfg_or_env_f(settings, "testing.engine.adaptive_ctr.floor_scale", "TEST_ADAPTIVE_CTR_FLOOR_SCALE", 0.70)
+    min_imps_for_floor = _cfg_or_env_i(settings, "testing.engine.adaptive_ctr.min_impressions", "TEST_MIN_IMPRESSIONS_FOR_FLOOR", 300)
+
+    ewma_alpha = _cfg_or_env_f(settings, "testing.engine.fatigue.ewma_alpha", "TEST_EWMA_ALPHA", 0.30)
+    fatigue_drop_pct = _cfg_or_env_f(settings, "testing.engine.fatigue.drop_pct", "TEST_FATIGUE_DROP_PCT", 0.35)
+
+    pause_after_promotion = _cfg_or_env_b(settings, "testing.engine.promotion.pause_after_promotion", "TEST_PAUSE_AFTER_PROMOTION", True)
+    validation_budget_eur = _cfg_or_env_f(settings, "testing.engine.promotion.validation_budget_eur", "TEST_VALIDATION_BUDGET_EUR", 40.0)
+    promotion_placements = _cfg_or_env_list(settings, "testing.engine.promotion.placements", "TEST_PROMOTION_PLACEMENTS", ["facebook", "instagram"])
+
+    max_launches_per_tick = _cfg_or_env_i(settings, "testing.engine.queue.max_launches_per_tick", "TEST_MAX_LAUNCHES_PER_TICK", 8)
+
+    attr_windows = _cfg_or_env_list(settings, "testing.engine.attribution_windows", "TEST_ATTR_WINDOWS", ["7d_click", "1d_view"])
+
+    # testing keep live and ids
+    adset_id = _cfg(settings, "ids.testing_adset_id")
+    validation_campaign_id = _cfg(settings, "ids.validation_campaign_id")
+
+    # prefer consolidated policy location
+    keep_live = int(_cfg(settings, "queue_policies.keep_active_ads", _cfg(settings, "testing.keep_ads_live", 4)))
 
     copy_bank = _load_copy_bank(settings)
     copy_strategy = (settings.get("copy_bank") or {}).get("strategy", "round_robin")
@@ -398,7 +476,7 @@ def run_testing_tick(
         except Exception:
             pass
 
-    # Any ad that is ACTIVE should reset the paused-alert flag (so a future pause alerts once)
+    # Any ad that is ACTIVE should reset the paused-alert flag
     for aid, st in status_by_ad_id.items():
         if st == "ACTIVE":
             _set_paused_alerted(store, aid, 0)
@@ -422,7 +500,7 @@ def run_testing_tick(
                 "reach",
                 "unique_clicks",
             ],
-            action_attribution_windows=list(_ATTR_WINDOWS),
+            action_attribution_windows=list(attr_windows),
             paginate=True,
             date_preset="today",
         )
@@ -431,7 +509,7 @@ def run_testing_tick(
             level="ad",
             filtering=[{"field": "adset.id", "operator": "IN", "value": [adset_id]}],
             fields=["ad_id", "ad_name", "spend", "actions", "action_values"],
-            action_attribution_windows=list(_ATTR_WINDOWS),
+            action_attribution_windows=list(attr_windows),
             date_preset="lifetime",
             paginate=True,
         )
@@ -443,7 +521,7 @@ def run_testing_tick(
     for lr in rows_lifetime or []:
         lifetime_by_id[str(lr.get("ad_id") or "")] = lr
 
-    ctr_floor = _adaptive_ctr_floor(rows_today, min_impressions)
+    ctr_floor = _adaptive_ctr_floor(rows_today, min_imps_for_floor, floor_min, floor_scale)
 
     for r in rows_today:
         ad_id = r.get("ad_id")
@@ -454,9 +532,8 @@ def run_testing_tick(
         # -------- HARD SKIP anything currently PAUSED --------
         cur_status = status_by_ad_id.get(str(ad_id), "")
         if cur_status == "PAUSED":
-            # ensure we don't re-alert on already-paused ads
             _set_paused_alerted(store, ad_id, 1)
-            continue  # no ℹ️ logs, no rules, no alerts
+            continue
 
         spend_today = _safe_f(r.get("spend"))
         ctr_today = _ctr(r)
@@ -472,18 +549,18 @@ def run_testing_tick(
         except Exception:
             pass
 
-        # Gate on minimums only if BOTH today's and lifetime spend are below the kill budget.
+        # Gate on minimums only if both today's and lifetime spend are below the fairness budget
         if (spend_today < min_spend_before_kill and spend_life < min_spend_before_kill) and \
            not _meets_minimums(r, min_impressions, min_clicks, min_spend):
             continue
 
-        dq = _data_quality_sentry(r)
+        dq = _data_quality_sentry(r, min_spend_for_alert=20.0)  # can be lifted to YAML if you want
         if dq:
             notify(f"🩺 [TEST] {name}: {dq}")
             summary["data_quality_alerts"] += 1
 
         # ---------- Fatigue (count once per ad per day) ----------
-        if _fatigue_detect(store, ad_id, ctr_today):
+        if _fatigue_detect(store, ad_id, ctr_today, ewma_alpha=ewma_alpha, drop_pct=fatigue_drop_pct):
             flag_key = _ad_day_flag_key(ad_id, "fatigue")
             first_time_today = False
             try:
@@ -491,7 +568,6 @@ def run_testing_tick(
                     store.set_counter(flag_key, 1)
                     first_time_today = True
             except Exception:
-                # best effort: treat as first time and try to set
                 first_time_today = True
                 try:
                     store.set_counter(flag_key, 1)
@@ -505,21 +581,26 @@ def run_testing_tick(
             notify(f"🟡 [TEST] Fatigue signal on {name} (CTR drop vs trend).")
             summary["fatigue_flags"] += 1
 
-        bayes_p = _bayes_kill_prob(_safe_f(r.get("clicks")), _safe_f(r.get("impressions")), ctr_floor)
-        bayes_kill = bayes_p >= _BAYES_KILL_PROB
+        bayes_p = _bayes_kill_prob(
+            _safe_f(r.get("clicks")),
+            _safe_f(r.get("impressions")),
+            ctr_floor,
+            prior_a=prior_a,
+            prior_b=prior_b,
+            sample_count=sample_count,
+        )
+        bayes_kill = bayes_p >= kill_prob
         try:
             kill, reason_engine = engine.should_kill_testing(r)
         except Exception:
             kill, reason_engine = False, ""
 
         # ---------------- Tripwire kill (once-per-pause alert) ----------------
-        if spend_life >= _SPEND_NO_PURCHASE_EUR and purch_life == 0:
-            reason = f"Lifetime spend≥€{int(_SPEND_NO_PURCHASE_EUR)} & no purchase"
+        if spend_life >= lifetime_spend_no_purchase_eur and purch_life == 0:
+            reason = f"Lifetime spend≥{ACCOUNT_CURRENCY_SYMBOL}{int(lifetime_spend_no_purchase_eur)} & no purchase"
             try:
-                # Only pause if not already paused (we're in ACTIVE branch)
                 _pause_ad(meta, ad_id)
 
-                # One-shot paused alert per event
                 if _get_paused_alerted(store, ad_id) == 0:
                     try:
                         alert_kill("TEST", name, reason, {"CTR": f"{ctr_today:.2%}", "ROAS": f"{_roas(r):.2f}"})
@@ -527,7 +608,6 @@ def run_testing_tick(
                         notify(f"🛑 [TEST] Killed {name} — {reason}")
                     _set_paused_alerted(store, ad_id, 1)
 
-                # daily counter: kills++
                 try:
                     store.incr(_daily_key("TEST", "kills"), 1)
                 except Exception:
@@ -541,7 +621,7 @@ def run_testing_tick(
                     level="warn",
                     stage="TEST",
                     rule_type="testing_kill_tripwire",
-                    thresholds={"spend_no_purchase_eur": _SPEND_NO_PURCHASE_EUR},
+                    thresholds={"spend_no_purchase_eur": lifetime_spend_no_purchase_eur},
                     observed={
                         "spend_lifetime": spend_life,
                         "purchases_lifetime": purch_life,
@@ -552,11 +632,11 @@ def run_testing_tick(
                 summary["kills"] += 1
             except Exception as e:
                 notify(f"❗ [TEST] Failed to pause {name}: {e}")
-            continue  # don't consider promotion after a kill
+            continue  # do not consider promotion after a kill
 
         # ---------------- Other kill paths (with stability) ----------------
         should_kill_other = kill or bayes_kill
-        if should_kill_other and _stable_pass(store, ad_id, "kill_test", True):
+        if should_kill_other and _stable_pass(store, ad_id, "kill_test", True, consec_required):
             try:
                 _pause_ad(meta, ad_id)
                 reason = (
@@ -564,7 +644,6 @@ def run_testing_tick(
                     or ("CTR<{:.2%} (p={:.2f})".format(ctr_floor, bayes_p) if bayes_kill else "Rule-based kill")
                 )
 
-                # One-shot paused alert per event
                 if _get_paused_alerted(store, ad_id) == 0:
                     try:
                         alert_kill("TEST", name, reason, {"CTR": f"{ctr_today:.2%}", "ROAS": f"{_roas(r):.2f}"})
@@ -572,7 +651,6 @@ def run_testing_tick(
                         notify(f"🛑 [TEST] Killed {name} — {reason}")
                     _set_paused_alerted(store, ad_id, 1)
 
-                # daily counter: kills++
                 try:
                     store.incr(_daily_key("TEST", "kills"), 1)
                 except Exception:
@@ -586,7 +664,7 @@ def run_testing_tick(
                     level="warn",
                     stage="TEST",
                     rule_type="testing_kill",
-                    thresholds={"ctr_floor": ctr_floor, "bayes_prob": _BAYES_KILL_PROB},
+                    thresholds={"ctr_floor": ctr_floor, "bayes_prob_threshold": kill_prob},
                     observed={
                         "CTR_today": f"{ctr_today:.2%}",
                         "spend_today": spend_today,
@@ -598,7 +676,7 @@ def run_testing_tick(
                 notify(f"❗ [TEST] Failed to pause {name}: {e}")
             continue
         else:
-            _stable_pass(store, ad_id, "kill_test", False)
+            _stable_pass(store, ad_id, "kill_test", False, consec_required)
 
         # ---------------- Promotion ----------------
         try:
@@ -606,19 +684,18 @@ def run_testing_tick(
         except Exception:
             adv, adv_reason = False, ""
 
-        if adv and _stable_pass(store, ad_id, "adv_test", True):
+        if adv and _stable_pass(store, ad_id, "adv_test", True, consec_required):
             label = name.replace("[TEST]", "").strip() or f"Ad_{ad_id}"
             try:
                 valid_as = meta.create_validation_adset(
-    validation_campaign_id,
-    label,
-    daily_budget=40.0,
-    placements=["facebook", "instagram"],
-)
+                    validation_campaign_id,
+                    label,
+                    daily_budget=float(validation_budget_eur),
+                    placements=list(promotion_placements),
+                )
             except Exception:
                 valid_as = None
 
-            # daily counter: promotions++
             try:
                 store.incr(_daily_key("TEST", "promotions"), 1)
             except Exception:
@@ -634,18 +711,18 @@ def run_testing_tick(
                 meta={"validation_adset": valid_as},
             )
             try:
-                alert_promote("TEST", "VALID", label, budget=40.0)
+                alert_promote("TEST", "VALID", label, budget=float(validation_budget_eur))
             except Exception:
-                notify(f"✅ [TEST→VALID] {label} — {adv_reason} (Budget: {ACCOUNT_CURRENCY_SYMBOL}40/day)")
-            if _PAUSE_AFTER_PROMOTION:
+                notify(f"✅ [TEST→VALID] {label} — {adv_reason} (Budget: {ACCOUNT_CURRENCY_SYMBOL}{validation_budget_eur:.0f}/day)")
+            if pause_after_promotion:
                 try:
                     _pause_ad(meta, ad_id)
-                    _set_paused_alerted(store, ad_id, 1)  # avoid duplicate pause alert for the auto-pause after promotion
+                    _set_paused_alerted(store, ad_id, 1)
                 except Exception:
                     pass
             summary["promotions"] += 1
         else:
-            _stable_pass(store, ad_id, "adv_test", False)
+            _stable_pass(store, ad_id, "adv_test", False, consec_required)
 
     # -------- Top-up launches --------
     if not current_ads:
@@ -656,7 +733,7 @@ def run_testing_tick(
             return summary
 
     active_count = _active_count(current_ads)
-    need = max(0, min(_MAX_LAUNCHES_PER_TICK, keep_live - active_count))
+    need = max(0, min(max_launches_per_tick, keep_live - active_count))
     if need <= 0:
         return summary
 
@@ -682,7 +759,12 @@ def run_testing_tick(
 
     ranked = sorted(
         candidates,
-        key=lambda r: _bandit_score_for_queue_item(store, str(r.get("_label_core") or _label_from_row(r)).strip()),
+        key=lambda r: _bandit_score_for_queue_item(
+            store,
+            str(r.get("_label_core") or _label_from_row(r)).strip(),
+            prior_a=prior_a,
+            prior_b=prior_b,
+        ),
         reverse=True,
     )
     picks = ranked[:need]
@@ -694,7 +776,7 @@ def run_testing_tick(
         video_id_raw = p.get("video_id")
         video_id = _normalize_video_id_cell(video_id_raw)
         if not label_core or not video_id or not video_id.isdigit():
-            notify(f"⚠️ [TEST] Skipping '{label_core or 'UNNAMED'}' — missing/invalid video_id (got: {video_id_raw!r}).")
+            notify(f"⚠️ [TEST] Skipping '{label_core or 'UNNAMED'}' — missing or invalid video_id (got: {video_id_raw!r}).")
             continue
 
         try:
@@ -720,21 +802,20 @@ def run_testing_tick(
 
         try:
             creative = meta.create_video_creative(
-    page_id=p.get("page_id"),
-    name=cname,
-    video_library_id=video_id,
-    primary_text=primary_text,
-    headline=headline,
-    description=description,
-    call_to_action="SHOP_NOW",
-    link_url=os.getenv("STORE_URL"),
-    utm_params=p.get("utm_params") or None,
-    thumbnail_url=p.get("thumbnail_url") or None,
-    instagram_actor_id=os.getenv("IG_ACTOR_ID"),
-)
+                page_id=p.get("page_id"),
+                name=cname,
+                video_library_id=video_id,
+                primary_text=primary_text,
+                headline=headline,
+                description=description,
+                call_to_action="SHOP_NOW",
+                link_url=os.getenv("STORE_URL"),
+                utm_params=p.get("utm_params") or None,
+                thumbnail_url=p.get("thumbnail_url") or None,
+                instagram_actor_id=os.getenv("IG_ACTOR_ID"),
+            )
             ad = meta.create_ad(adset_id, cname, creative_id=creative["id"], status="ACTIVE")
 
-            # daily counter: launched++
             try:
                 store.incr(_daily_key("TEST", "launched"), 1)
             except Exception:
@@ -769,4 +850,3 @@ def run_testing_tick(
             notify(f"❗ [TEST] Failed to launch '{label_core}': {e}")
 
     return summary
-
