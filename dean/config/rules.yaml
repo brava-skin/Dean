@@ -10,6 +10,7 @@ audit:
     - Clarify launch defer uses account local time; all spend/caps/CPA/ROAS thresholds are in EUR.
     - Centralize testing engine tunables under testing.engine.
     - Centralize validation engine tunables under validation.engine and add scaling.adset_start_budget_eur.
+    - NEW: Centralize scaling engine tunables under scaling.engine to control scaling.py behavior without env vars.
 
 # Optional IDs used by code
 ids:
@@ -106,9 +107,9 @@ testing:
 
 validation:
   minimums:
-    min_impressions: 600            # maps to _MIN_IMPRESSIONS
-    min_clicks: 30                  # maps to _MIN_CLICKS
-    min_spend: 40                   # EUR — maps to _MIN_SPEND
+    min_impressions: 600
+    min_clicks: 30
+    min_spend: 40   # EUR
   kill:
     - {type: "spend_no_purchase", spend_gte: 40}                          # EUR
     - {type: "cpa_gte", cpa_gte: 32}                                      # EUR
@@ -126,35 +127,81 @@ validation:
   strictness:
     min_days_with_purchase: 2
   engine:
-    # Validation-stage specific tunables from validation.py
-    attribution_windows: ["7d_click", "1d_view"]   # maps to _ATTR_WINDOWS
+    attribution_windows: ["7d_click", "1d_view"]   # maps to VALID_ATTR_WINDOWS
     stability:
-      consecutive_ticks: 2                         # maps to _CONSEC_TICKS_REQUIRED (overrides global if used)
+      consecutive_ticks: 2                         # maps to VALID_CONSEC_TICKS_REQUIRED
     fairness:
-      min_spend_before_kill_eur: 40               # maps to _MIN_FAIR_SPEND_BEFORE_KILL
+      min_spend_before_kill_eur: 40               # VALID_MIN_FAIR_SPEND_BEFORE_KILL
     tripwires:
-      lifetime_spend_no_purchase_eur: 40          # maps to _SPEND_NO_PURCHASE_EUR (defaults to same as fairness)
+      lifetime_spend_no_purchase_eur: 40          # VALID_SPEND_NO_PURCHASE_EUR
     promotion:
-      pause_after_promotion: true                 # maps to _PAUSE_AFTER_PROMOTION
-      cooldown_hours: 24                          # maps to _PROMO_COOLDOWN_HOURS
-      allow_create_on_promo_check: false          # maps to _ALLOW_CREATE_ON_PROMO_CHECK
+      pause_after_promotion: true                 # VALID_PAUSE_AFTER_PROMOTION
+      cooldown_hours: 24                          # VALID_PROMO_COOLDOWN_HOURS
+      allow_create_on_promo_check: false          # VALID_ALLOW_CREATE_ON_PROMO_CHECK
     soft_pass:
-      max_budget_eur: 40                          # maps to _SOFT_PASS_MAX_BUDGET
-      max_cpa_eur: 36                             # maps to _SOFT_PASS_MAX_CPA
-      min_roas: 1.5                               # maps to _SOFT_PASS_MIN_ROAS
-      min_ctr: 0.008                              # maps to _SOFT_PASS_MIN_CTR
+      max_budget_eur: 40                          # VALID_SOFT_PASS_MAX_BUDGET
+      max_cpa_eur: 36                             # VALID_SOFT_PASS_MAX_CPA
+      min_roas: 1.5                               # VALID_SOFT_PASS_MIN_ROAS
+      min_ctr: 0.008                              # VALID_SOFT_PASS_MIN_CTR
 
 scaling:
+  # Start budget used by validation promotion when creating a SCALE ad set
+  adset_start_budget_eur: 100
+
+  # Engine: all knobs referenced by scaling.py (env fallbacks remain supported)
+  engine:
+    attribution_windows: ["7d_click", "1d_view"]     # SCALE_ATTR_WINDOWS
+
+    minimums:                                        # SCALE_MIN_*
+      min_impressions: 1000                          # SCALE_MIN_IMPRESSIONS
+      min_clicks: 50                                 # SCALE_MIN_CLICKS
+      min_spend: 50                                  # EUR — SCALE_MIN_SPEND
+
+    hysteresis:                                      # downscale guards
+      roas_down_band: 1.7                            # SCALE_HYST_ROAS_DOWN
+      cpa_up_band: 33                                # EUR — SCALE_HYST_CPA_UP
+      downscale_factor: 0.5                          # (not in code yet; reserved for -50% step)
+
+    kills:
+      cpa_days: 2                                    # SCALE_KILL_CPA_DAYS
+      roas_days: 3                                   # SCALE_KILL_ROAS_DAYS
+      lifetime_tripwires:
+        spend_no_purchase_eur: 150                   # SCALE_SPEND_NO_PURCHASE_EUR
+
+    scale_up:
+      cooldown_hours: 24                             # SCALE_COOLDOWN_H
+      max_scale_step_pct: 200                        # SCALE_MAX_SCALE_STEP_PCT
+      bands:                                         # used by _scale_step()
+        - {cpa_lte: 22, roas_gte: 3.0, inc_pct: 100}
+        - {cpa_lte: 27, roas_gte: 2.0, inc_pct: 50}
+
+    duplication:
+      max_duplicates_per_24h: 3                      # SCALE_DUP_CAP_24H
+      purchases_gte: 5                               # condition to duplicate
+      cpa_lte: 27                                    # condition to duplicate
+      max_each_action: 2                             # cap per tick when eligible
+
+    reinvest:                                        # portfolio allocator
+      share: 0.5                                     # SCALE_REINVEST_SHARE
+      min_bump_eur: 10                               # SCALE_REINVEST_MIN_BUMP
+      portfolio_max_moves: 6                         # SCALE_PORTFOLIO_MAX_MOVES
+      strategy: "proportional_to_roas"               # informational (current allocator)
+
+    pacing_freeze:                                   # orchestration guard (_pacing_freeze)
+      enabled: true
+      growth_pct_24h_warn: 150                       # mirrors pacing.spend_velocity
+      growth_pct_48h_warn: 250
+
   minimums:
     min_impressions: 1000
     min_clicks: 50
     min_spend: 50   # EUR
-  # Start budget used by validation promotion when creating a SCALE ad set
-  adset_start_budget_eur: 100
+
   kill:
     - {type: "cpa_gte_consecutive_days", cpa_gte: 40, days: 2}             # EUR
     - {type: "roas_lt_over_days", roas_lt: 1.2, days: 3}
     - {type: "spend_no_purchase", spend_gte: 150}                          # EUR
+
   scale_up:
     cooldown_hours: 24
     hysteresis:
@@ -163,6 +210,7 @@ scaling:
     steps:
       - {type: "cpa_lte_and_roas_gte_over_days", cpa_lte: 27, roas_gte: 2.0, days: 2, budget_increase_pct: [50, 100]}
       - {type: "cpa_lte_and_roas_gte_over_days", cpa_lte: 22, roas_gte: 3.0, days: 2, budget_increase_pct: [100, 200]}
+
   duplicate_on_fire:
     max_duplicates_per_24h: 3
     rules:
