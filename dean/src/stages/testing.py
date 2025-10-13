@@ -609,7 +609,12 @@ def run_testing_tick(
         if adv and _stable_pass(store, ad_id, "adv_test", True):
             label = name.replace("[TEST]", "").strip() or f"Ad_{ad_id}"
             try:
-                valid_as = meta.create_validation_adset(validation_campaign_id, label, daily_budget=40.0)
+                valid_as = meta.create_validation_adset(
+    validation_campaign_id,
+    label,
+    daily_budget=40.0,
+    placements=["facebook", "instagram"],
+)
             except Exception:
                 valid_as = None
 
@@ -715,17 +720,18 @@ def run_testing_tick(
 
         try:
             creative = meta.create_video_creative(
-                page_id=p.get("page_id"),
-                name=cname,
-                video_library_id=video_id,
-                primary_text=primary_text,
-                headline=headline,
-                description=description,
-                call_to_action="SHOP_NOW",
-                link_url=os.getenv("STORE_URL"),
-                utm_params=p.get("utm_params") or None,
-                thumbnail_url=p.get("thumbnail_url") or None,
-            )
+    page_id=p.get("page_id"),
+    name=cname,
+    video_library_id=video_id,
+    primary_text=primary_text,
+    headline=headline,
+    description=description,
+    call_to_action="SHOP_NOW",
+    link_url=os.getenv("STORE_URL"),
+    utm_params=p.get("utm_params") or None,
+    thumbnail_url=p.get("thumbnail_url") or None,
+    instagram_actor_id=os.getenv("IG_ACTOR_ID"),
+)
             ad = meta.create_ad(adset_id, cname, creative_id=creative["id"], status="ACTIVE")
 
             # daily counter: launched++
@@ -763,3 +769,4 @@ def run_testing_tick(
             notify(f"❗ [TEST] Failed to launch '{label_core}': {e}")
 
     return summary
+
