@@ -12,11 +12,11 @@ audit:
     - Centralize validation engine tunables under validation.engine and add scaling.adset_start_budget_eur.
     - NEW: Centralize scaling engine tunables under scaling.engine to control scaling.py behavior without env vars.
 
-# Optional IDs used by code
 ids:
-  testing_adset_id: "000000000000000"          # replace
-  validation_campaign_id: "000000000000000"    # replace
-  scaling_campaign_id: "000000000000000"       # replace
+  testing_campaign_id: "120231486463120192"
+  testing_adset_id: "120231486463140192"
+  validation_campaign_id: "120231533068950192"
+  scaling_campaign_id: "120231533113610192"
 
 timezones:
   account_tz: "Europe/Amsterdam"
@@ -304,3 +304,4 @@ redistribution:
   on_pause_winner_reinvest: true
   strategy: "proportional_to_roas"
   min_increment_per_winner: 10   # EUR
+
