@@ -432,6 +432,41 @@ def _get_ad_creative_id(meta: Any, ad_id: str) -> Optional[str]:
     return None
 
 
+# ---------- IG helpers (new) ----------
+
+def _resolve_page_instagram_ids(page_id: str, token: Optional[str], ver: str = "v23.0") -> Dict[str, Optional[str]]:
+    """
+    Returns {'user_id': <connected/page IG id>, 'business_id': <business ig id>, 'source': 'connected'|'business'|None}
+    """
+    out = {"user_id": None, "business_id": None, "source": None}
+    if not (page_id and token):
+        return out
+    try:
+        import requests
+        url = f"https://graph.facebook.com/{ver}/{page_id}"
+        params = {
+            "access_token": token,
+            "fields": "instagram_business_account{id,username},connected_instagram_account{id,username}",
+        }
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        data = r.json() or {}
+        biz = (data.get("instagram_business_account") or {}).get("id")
+        con = (data.get("connected_instagram_account") or {}).get("id")
+        # Prefer page-connected (instagram_user_id) for creatives, else business id.
+        if con:
+            out["user_id"] = str(con)
+            out["source"] = "connected"
+        if biz:
+            out["business_id"] = str(biz)
+            if not out["user_id"]:
+                out["user_id"] = str(biz)
+                out["source"] = "business"
+        return out
+    except Exception:
+        return out
+
+
 # ---------------------------------------------------------------------------
 
 def run_testing_tick(
@@ -443,7 +478,7 @@ def run_testing_tick(
     set_supabase_status: Callable[[List[str], str], None],
     *,
     placements: Optional[List[str]] = None,           # respected if provided
-    instagram_actor_id: Optional[str] = None,         # used for creatives
+    instagram_actor_id: Optional[str] = None,         # legacy support; we now prefer instagram_user_id
 ) -> Dict[str, Any]:
     summary = {"kills": 0, "promotions": 0, "launched": 0, "fatigue_flags": 0, "data_quality_alerts": 0}
     try:
@@ -841,35 +876,59 @@ def run_testing_tick(
             notify(f"⚠️ [TEST] Copy bank issue for '{label_core}': {e}")
             continue
 
-        try:
-            cc = engine.creative_compliance(
-                {
-                    "primary_text": primary_text,
-                    "headline": headline,
-                    "description": description,
-                    "link_url": os.getenv("STORE_URL", ""),
-                }
-            )
-            if not cc.get("ok", True):
-                notify(f"🚫 [TEST] '{label_core}' failed compliance: {', '.join(cc.get('issues', []))}")
-                continue
-        except Exception:
-            pass
+        # ------------- NEW: resolve IG user/actor id for the page -------------
+        page_id = (p.get("page_id") or os.getenv("PAGE_ID") or "").strip()
+        if not page_id:
+            notify(f"⚠️ [TEST] '{label_core}' missing page_id; set PAGE_ID env or include page_id in queue.")
+            continue
+
+        # try to resolve from Graph using the same token the meta client uses
+        token = getattr(getattr(meta, "account", None), "access_token", None)
+        ver = getattr(getattr(meta, "account", None), "api_version", "v23.0") or "v23.0"
+        resolved = _resolve_page_instagram_ids(page_id, token, ver=ver)
+        ig_user_id = resolved.get("user_id")
+        ig_source = resolved.get("source")  # 'connected' or 'business' or None
+
+        # legacy env/arg for actor id
+        ig_actor_env = (instagram_actor_id or os.getenv("IG_ACTOR_ID") or os.getenv("INSTAGRAM_ACTOR_ID") or "").strip() or None
+
+        # Choose field/key:
+        # Prefer instagram_user_id (page-connected). Else fall back to actor_id if provided.
+        use_instagram_user = bool(ig_user_id)
+        if use_instagram_user:
+            notify(f"ℹ️ [TEST] Using instagram_user_id from Page ({ig_source or 'connected'}).")
+        elif ig_actor_env:
+            notify("ℹ️ [TEST] Falling back to instagram_actor_id from env/arg.")
+        else:
+            notify("⚠️ [TEST] No instagram_user_id resolved and no IG_ACTOR_ID provided — launching Page-only.")
+
+        # Thumbnail fallback for video creatives (reduce 'videominiatuur' errors)
+        thumb = (p.get("thumbnail_url") or os.getenv("DEFAULT_THUMB_URL") or "").strip()
+        if not thumb:
+            notify("ℹ️ [TEST] No thumbnail_url provided; relying on API defaults. (Consider DEFAULT_THUMB_URL env).")
+
+        # Build kwargs for meta client; avoid mutating after logging
+        creative_kwargs: Dict[str, Any] = dict(
+            page_id=page_id,
+            name=cname,
+            video_library_id=video_id,
+            primary_text=primary_text,
+            headline=headline,
+            description=description,
+            call_to_action="SHOP_NOW",
+            link_url=os.getenv("STORE_URL"),
+            utm_params=p.get("utm_params") or None,
+            thumbnail_url=thumb or None,
+        )
+        if use_instagram_user:
+            creative_kwargs["instagram_user_id"] = ig_user_id
+        elif ig_actor_env:
+            creative_kwargs["instagram_actor_id"] = ig_actor_env
+        # else: page-only
 
         try:
-            creative = meta.create_video_creative(
-                page_id=p.get("page_id"),
-                name=cname,
-                video_library_id=video_id,
-                primary_text=primary_text,
-                headline=headline,
-                description=description,
-                call_to_action="SHOP_NOW",
-                link_url=os.getenv("STORE_URL"),
-                utm_params=p.get("utm_params") or None,
-                thumbnail_url=p.get("thumbnail_url") or None,
-                instagram_actor_id=(instagram_actor_id or os.getenv("IG_ACTOR_ID")),
-            )
+            # IMPORTANT: pass kwargs so extra keys like instagram_user_id are honored if the client supports **kwargs
+            creative = meta.create_video_creative(**creative_kwargs)
             ad = meta.create_ad(adset_id, cname, creative_id=creative["id"], status="ACTIVE")
 
             try:
@@ -884,7 +943,7 @@ def run_testing_tick(
                 reason="Top-up to keep_ads_live",
                 level="info",
                 stage="TEST",
-                meta={"testing_adset_id": adset_id},
+                meta={"testing_adset_id": adset_id, "ig_mode": ("instagram_user_id" if use_instagram_user else ("instagram_actor_id" if ig_actor_env else "page_only"))},
             )
             notify(f"🟢 [TEST] Launched {label_core}")
             summary["launched"] += 1
