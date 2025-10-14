@@ -876,17 +876,13 @@ def run_testing_tick(
             notify(f"⚠️ [TEST] Copy bank issue for '{label_core}': {e}")
             continue
 
-        # ------------- NEW: resolve IG user/actor id for the page -------------
-        page_id = (
-    p.get("page_id")
-    or os.getenv("FB_PAGE_ID")
-    or os.getenv("PAGE_ID")
-    or _cfg(settings, "ids.page_id")
-    or ""
-).strip()
-if not page_id:
-    notify(f"⚠️ [TEST] '{label_core}' missing page_id; set FB_PAGE_ID (or PAGE_ID) env, ids.page_id in YAML, or include page_id in the queue row.")
-    continue
+        # ------------- resolve IG user/actor id for the page (FB_PAGE_ID only) -------------
+        page_id = (p.get("page_id") or os.getenv("FB_PAGE_ID") or "").strip()
+        if not page_id:
+            notify(
+                f"⚠️ [TEST] '{label_core}' missing page_id; set FB_PAGE_ID env or include page_id in the queue row."
+            )
+            continue
 
         # try to resolve from Graph using the same token the meta client uses
         token = getattr(getattr(meta, "account", None), "access_token", None)
@@ -896,7 +892,11 @@ if not page_id:
         ig_source = resolved.get("source")  # 'connected' or 'business' or None
 
         # legacy env/arg for actor id
-        ig_actor_env = (instagram_actor_id or os.getenv("IG_ACTOR_ID") or os.getenv("INSTAGRAM_ACTOR_ID") or "").strip() or None
+        ig_actor_env = (
+            (instagram_actor_id or os.getenv("IG_ACTOR_ID") or os.getenv("INSTAGRAM_ACTOR_ID") or "")
+            .strip()
+            or None
+        )
 
         # Choose field/key:
         # Prefer instagram_user_id (page-connected). Else fall back to actor_id if provided.
@@ -971,4 +971,3 @@ if not page_id:
             notify(f"❗ [TEST] Failed to launch '{label_core}': {e}")
 
     return summary
-
