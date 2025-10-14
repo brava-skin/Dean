@@ -877,10 +877,16 @@ def run_testing_tick(
             continue
 
         # ------------- NEW: resolve IG user/actor id for the page -------------
-        page_id = (p.get("page_id") or os.getenv("PAGE_ID") or "").strip()
-        if not page_id:
-            notify(f"⚠️ [TEST] '{label_core}' missing page_id; set PAGE_ID env or include page_id in queue.")
-            continue
+        page_id = (
+    p.get("page_id")
+    or os.getenv("FB_PAGE_ID")
+    or os.getenv("PAGE_ID")
+    or _cfg(settings, "ids.page_id")
+    or ""
+).strip()
+if not page_id:
+    notify(f"⚠️ [TEST] '{label_core}' missing page_id; set FB_PAGE_ID (or PAGE_ID) env, ids.page_id in YAML, or include page_id in the queue row.")
+    continue
 
         # try to resolve from Graph using the same token the meta client uses
         token = getattr(getattr(meta, "account", None), "access_token", None)
@@ -965,3 +971,4 @@ def run_testing_tick(
             notify(f"❗ [TEST] Failed to launch '{label_core}': {e}")
 
     return summary
+
