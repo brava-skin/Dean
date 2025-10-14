@@ -467,6 +467,75 @@ def _resolve_page_instagram_ids(page_id: str, token: Optional[str], ver: str = "
         return out
 
 
+def _get_ad_account_id(meta: Any) -> Optional[str]:
+    """Return ad account id without 'act_' prefix if possible."""
+    try:
+        acct = getattr(meta, "account", None)
+        if not acct:
+            return None
+        # common attrs seen in wrappers
+        cand = getattr(acct, "ad_account_id", None) or getattr(acct, "id", None) or getattr(acct, "account_id", None)
+        if not cand:
+            return None
+        s = str(cand)
+        return s[4:] if s.startswith("act_") else s
+    except Exception:
+        return None
+
+
+def _graph_create_video_creative_instagram_user(
+    *,
+    token: str,
+    api_version: str,
+    ad_account_id: str,
+    page_id: str,
+    instagram_user_id: str,
+    video_id: str,
+    link_url: str,
+    message: str = "",
+    link_description: str = "",
+    thumbnail_url: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Direct Graph call to create a video creative using instagram_user_id (for page-connected IG).
+    Returns {'id': '<creative_id>'} on success; raises on errors.
+    """
+    import requests
+
+    # Build object_story_spec for video
+    video_data: Dict[str, Any] = {
+        "video_id": str(video_id),
+        "call_to_action": {"type": "SHOP_NOW", "value": {"link": link_url}},
+    }
+    if thumbnail_url:
+        video_data["image_url"] = thumbnail_url
+    if message:
+        video_data["message"] = message
+    if link_description:
+        video_data["link_description"] = link_description
+
+    spec = {
+        "page_id": str(page_id),
+        "instagram_user_id": str(instagram_user_id),
+        "video_data": video_data,
+    }
+
+    url = f"https://graph.facebook.com/{api_version}/act_{ad_account_id}/adcreatives"
+    payload = {
+        "name": "IGUserCreative",
+        "object_story_spec": json.dumps(spec, separators=(",", ":")),
+        "access_token": token,
+    }
+    r = requests.post(url, data=payload, timeout=30)
+    try:
+        j = r.json()
+    except Exception:
+        j = {"error": {"message": r.text}}
+    if r.status_code >= 400 or "error" in j:
+        raise RuntimeError(f"Graph create creative failed ({r.status_code}): {j}")
+    return j
+
+
 # ---------------------------------------------------------------------------
 
 def run_testing_tick(
@@ -898,22 +967,10 @@ def run_testing_tick(
             or None
         )
 
-        # Choose field/key:
-        # Prefer instagram_user_id (page-connected). Else fall back to actor_id if provided.
-        use_instagram_user = bool(ig_user_id)
-        if use_instagram_user:
-            notify(f"ℹ️ [TEST] Using instagram_user_id from Page ({ig_source or 'connected'}).")
-        elif ig_actor_env:
-            notify("ℹ️ [TEST] Falling back to instagram_actor_id from env/arg.")
-        else:
-            notify("⚠️ [TEST] No instagram_user_id resolved and no IG_ACTOR_ID provided — launching Page-only.")
-
-        # Thumbnail fallback for video creatives (reduce 'videominiatuur' errors)
+        # Thumbnail fallback for video creatives
         thumb = (p.get("thumbnail_url") or os.getenv("DEFAULT_THUMB_URL") or "").strip()
-        if not thumb:
-            notify("ℹ️ [TEST] No thumbnail_url provided; relying on API defaults. (Consider DEFAULT_THUMB_URL env).")
 
-        # Build kwargs for meta client; avoid mutating after logging
+        # Build meta client kwargs (used for non-user_id path)
         creative_kwargs: Dict[str, Any] = dict(
             page_id=page_id,
             name=cname,
@@ -926,15 +983,32 @@ def run_testing_tick(
             utm_params=p.get("utm_params") or None,
             thumbnail_url=thumb or None,
         )
-        if use_instagram_user:
-            creative_kwargs["instagram_user_id"] = ig_user_id
-        elif ig_actor_env:
-            creative_kwargs["instagram_actor_id"] = ig_actor_env
-        # else: page-only
 
         try:
-            # IMPORTANT: pass kwargs so extra keys like instagram_user_id are honored if the client supports **kwargs
-            creative = meta.create_video_creative(**creative_kwargs)
+            if ig_user_id:
+                # Our client doesn't accept instagram_user_id; use Graph fallback for this path
+                ad_account_id = _get_ad_account_id(meta)
+                if not (token and ad_account_id):
+                    raise RuntimeError("Missing token or ad_account_id for Graph fallback.")
+                link_url = os.getenv("STORE_URL") or ""
+                creative = _graph_create_video_creative_instagram_user(
+                    token=token,
+                    api_version=ver,
+                    ad_account_id=str(ad_account_id),
+                    page_id=str(page_id),
+                    instagram_user_id=str(ig_user_id),
+                    video_id=str(video_id),
+                    link_url=link_url,
+                    message=primary_text or "",
+                    link_description=headline or "",
+                    thumbnail_url=(thumb or None),
+                )
+            else:
+                # Fall back to actor if provided, else Page-only
+                if ig_actor_env:
+                    creative_kwargs["instagram_actor_id"] = ig_actor_env
+                creative = meta.create_video_creative(**creative_kwargs)
+
             ad = meta.create_ad(adset_id, cname, creative_id=creative["id"], status="ACTIVE")
 
             try:
@@ -942,6 +1016,7 @@ def run_testing_tick(
             except Exception:
                 pass
 
+            mode = "instagram_user_id" if ig_user_id else ("instagram_actor_id" if ig_actor_env else "page_only")
             store.log(
                 entity_type="ad",
                 entity_id=ad["id"],
@@ -949,7 +1024,7 @@ def run_testing_tick(
                 reason="Top-up to keep_ads_live",
                 level="info",
                 stage="TEST",
-                meta={"testing_adset_id": adset_id, "ig_mode": ("instagram_user_id" if use_instagram_user else ("instagram_actor_id" if ig_actor_env else "page_only"))},
+                meta={"testing_adset_id": adset_id, "ig_mode": mode},
             )
             notify(f"🟢 [TEST] Launched {label_core}")
             summary["launched"] += 1
