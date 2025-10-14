@@ -482,6 +482,25 @@ def _get_ad_account_id(meta: Any) -> Optional[str]:
     except Exception:
         return None
 
+def _resolve_video_thumbnail_url(token: Optional[str], ver: str, video_id: str) -> Optional[str]:
+    """Return a usable thumbnail URL for a video_id, or None."""
+    if not (token and video_id):
+        return None
+    try:
+        import requests
+        url = f"https://graph.facebook.com/{ver}/{video_id}/thumbnails"
+        params = {"access_token": token, "fields": "uri,is_preferred", "limit": 5}
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        data = r.json() or {}
+        items = data.get("data") or []
+        if not items:
+            return None
+        # pick preferred first, else first available
+        pref = next((i for i in items if i.get("is_preferred")), None)
+        return (pref or items[0]).get("uri")
+    except Exception:
+        return None
 
 def _graph_create_video_creative_instagram_user(
     *,
@@ -967,8 +986,17 @@ def run_testing_tick(
             or None
         )
 
-        # Thumbnail fallback for video creatives
-        thumb = (p.get("thumbnail_url") or os.getenv("DEFAULT_THUMB_URL") or "").strip()
+        # Thumbnail fallback for video creatives (required by Graph for video_data)
+thumb = (p.get("thumbnail_url") or os.getenv("DEFAULT_THUMB_URL") or "").strip()
+if not thumb:
+    # try to fetch the video's own thumbnail from Graph
+    token = getattr(getattr(meta, "account", None), "access_token", None)
+    ver = getattr(getattr(meta, "account", None), "api_version", "v23.0") or "v23.0"
+    auto_thumb = _resolve_video_thumbnail_url(token, ver, str(video_id))
+    if auto_thumb:
+        thumb = auto_thumb
+    else:
+        notify("ℹ️ [TEST] Could not auto-resolve video thumbnail; consider setting DEFAULT_THUMB_URL.")
 
         # Build meta client kwargs (used for non-user_id path)
         creative_kwargs: Dict[str, Any] = dict(
@@ -1046,3 +1074,4 @@ def run_testing_tick(
             notify(f"❗ [TEST] Failed to launch '{label_core}': {e}")
 
     return summary
+
