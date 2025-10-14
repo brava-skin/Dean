@@ -473,7 +473,6 @@ def _get_ad_account_id(meta: Any) -> Optional[str]:
         acct = getattr(meta, "account", None)
         if not acct:
             return None
-        # common attrs seen in wrappers
         cand = getattr(acct, "ad_account_id", None) or getattr(acct, "id", None) or getattr(acct, "account_id", None)
         if not cand:
             return None
@@ -481,6 +480,7 @@ def _get_ad_account_id(meta: Any) -> Optional[str]:
         return s[4:] if s.startswith("act_") else s
     except Exception:
         return None
+
 
 def _resolve_video_thumbnail_url(token: Optional[str], ver: str, video_id: str) -> Optional[str]:
     """Return a usable thumbnail URL for a video_id, or None."""
@@ -496,11 +496,11 @@ def _resolve_video_thumbnail_url(token: Optional[str], ver: str, video_id: str) 
         items = data.get("data") or []
         if not items:
             return None
-        # pick preferred first, else first available
         pref = next((i for i in items if i.get("is_preferred")), None)
         return (pref or items[0]).get("uri")
     except Exception:
         return None
+
 
 def _graph_create_video_creative_instagram_user(
     *,
@@ -521,7 +521,6 @@ def _graph_create_video_creative_instagram_user(
     """
     import requests
 
-    # Build object_story_spec for video
     video_data: Dict[str, Any] = {
         "video_id": str(video_id),
         "call_to_action": {"type": "SHOP_NOW", "value": {"link": link_url}},
@@ -838,13 +837,11 @@ def run_testing_tick(
         if adv and _stable_pass(store, ad_id, "adv_test", True, consec_required):
             label = name.replace("[TEST]", "").strip() or f"Ad_{ad_id}"
 
-            # resolve placements: function arg takes precedence, else YAML, else default
             promo_places = list(placements) if placements else list(promotion_placements)
 
             valid_as = None
             val_ad = None
             try:
-                # 1) create validation ad set
                 valid_as = meta.create_validation_adset(
                     validation_campaign_id,
                     label,
@@ -852,16 +849,13 @@ def run_testing_tick(
                     placements=promo_places,
                 )
 
-                # 2) get creative id of the testing ad
                 creative_id = _get_ad_creative_id(meta, ad_id)
                 if not creative_id:
                     raise RuntimeError("Could not fetch creative id to promote.")
 
-                # 3) create an active validation ad using the same creative
                 val_ad_name = f"[VALID] {label}"
                 val_ad = meta.create_ad(valid_as["id"], val_ad_name, creative_id=creative_id, status="ACTIVE")
 
-                # 4) only now pause the test ad if configured
                 if pause_after_promotion:
                     try:
                         _pause_ad(meta, ad_id)
@@ -889,7 +883,6 @@ def run_testing_tick(
                     meta={"validation_adset": valid_as, "placements": promo_places},
                 )
 
-                # 5) Supabase status for visibility
                 try:
                     set_supabase_status([creative_id], "promoted")
                 except Exception:
@@ -899,7 +892,6 @@ def run_testing_tick(
 
             except Exception as e:
                 notify(f"❗ [VALID] Promotion failed for '{label}': {e}")
-                # do not pause the test ad on failure
         else:
             _stable_pass(store, ad_id, "adv_test", False, consec_required)
 
@@ -964,41 +956,29 @@ def run_testing_tick(
             notify(f"⚠️ [TEST] Copy bank issue for '{label_core}': {e}")
             continue
 
-        # ------------- resolve IG user/actor id for the page (FB_PAGE_ID only) -------------
+        # Resolve FB Page and IG
         page_id = (p.get("page_id") or os.getenv("FB_PAGE_ID") or "").strip()
         if not page_id:
-            notify(
-                f"⚠️ [TEST] '{label_core}' missing page_id; set FB_PAGE_ID env or include page_id in the queue row."
-            )
+            notify("⚠️ [TEST] '{label}' missing page_id; set FB_PAGE_ID env or include page_id in the queue row.")
             continue
 
-        # try to resolve from Graph using the same token the meta client uses
         token = getattr(getattr(meta, "account", None), "access_token", None)
         ver = getattr(getattr(meta, "account", None), "api_version", "v23.0") or "v23.0"
         resolved = _resolve_page_instagram_ids(page_id, token, ver=ver)
         ig_user_id = resolved.get("user_id")
-        ig_source = resolved.get("source")  # 'connected' or 'business' or None
 
-        # legacy env/arg for actor id
-        ig_actor_env = (
-            (instagram_actor_id or os.getenv("IG_ACTOR_ID") or os.getenv("INSTAGRAM_ACTOR_ID") or "")
-            .strip()
-            or None
-        )
+        ig_actor_env = ((instagram_actor_id or os.getenv("IG_ACTOR_ID") or os.getenv("INSTAGRAM_ACTOR_ID") or "").strip() or None)
 
-        # Thumbnail fallback for video creatives (required by Graph for video_data)
-thumb = (p.get("thumbnail_url") or os.getenv("DEFAULT_THUMB_URL") or "").strip()
-if not thumb:
-    # try to fetch the video's own thumbnail from Graph
-    token = getattr(getattr(meta, "account", None), "access_token", None)
-    ver = getattr(getattr(meta, "account", None), "api_version", "v23.0") or "v23.0"
-    auto_thumb = _resolve_video_thumbnail_url(token, ver, str(video_id))
-    if auto_thumb:
-        thumb = auto_thumb
-    else:
-        notify("ℹ️ [TEST] Could not auto-resolve video thumbnail; consider setting DEFAULT_THUMB_URL.")
+        # Thumbnail (video_data requires image_url or image_hash in many cases)
+        thumb = (p.get("thumbnail_url") or os.getenv("DEFAULT_THUMB_URL") or "").strip()
+        if not thumb:
+            auto_thumb = _resolve_video_thumbnail_url(token, ver, str(video_id))
+            if auto_thumb:
+                thumb = auto_thumb
+            else:
+                notify("ℹ️ [TEST] Could not auto-resolve video thumbnail; consider setting DEFAULT_THUMB_URL.")
 
-        # Build meta client kwargs (used for non-user_id path)
+        # Build client kwargs (used when not using instagram_user_id path)
         creative_kwargs: Dict[str, Any] = dict(
             page_id=page_id,
             name=cname,
@@ -1014,7 +994,7 @@ if not thumb:
 
         try:
             if ig_user_id:
-                # Our client doesn't accept instagram_user_id; use Graph fallback for this path
+                # Graph fallback because client doesn't accept instagram_user_id
                 ad_account_id = _get_ad_account_id(meta)
                 if not (token and ad_account_id):
                     raise RuntimeError("Missing token or ad_account_id for Graph fallback.")
@@ -1032,7 +1012,6 @@ if not thumb:
                     thumbnail_url=(thumb or None),
                 )
             else:
-                # Fall back to actor if provided, else Page-only
                 if ig_actor_env:
                     creative_kwargs["instagram_actor_id"] = ig_actor_env
                 creative = meta.create_video_creative(**creative_kwargs)
@@ -1058,7 +1037,6 @@ if not thumb:
             summary["launched"] += 1
             _record_queue_feedback(store, label_core, clicks=1, imps=200)
 
-            # mark Supabase row as launched using your status column
             try:
                 cid = str(p.get("creative_id") or "").strip()
                 if cid:
@@ -1074,4 +1052,3 @@ if not thumb:
             notify(f"❗ [TEST] Failed to launch '{label_core}': {e}")
 
     return summary
-
