@@ -1,0 +1,92 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-json
+      - id: check-toml
+      - id: check-xml
+      - id: debug-statements
+      - id: check-docstring-first
+      - id: requirements-txt-fixer
+
+  - repo: https://github.com/psf/black
+    rev: 23.7.0
+    hooks:
+      - id: black
+        language_version: python3.9
+
+  - repo: https://github.com/pycqa/isort
+    rev: 5.12.0
+    hooks:
+      - id: isort
+        args: ["--profile", "black"]
+
+  - repo: https://github.com/pycqa/flake8
+    rev: 6.0.0
+    hooks:
+      - id: flake8
+        args: [--max-line-length=88, --extend-ignore=E203,W503]
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.5.1
+    hooks:
+      - id: mypy
+        additional_dependencies: [types-requests, types-PyYAML]
+        args: [--ignore-missing-imports]
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.5
+    hooks:
+      - id: bandit
+        args: [-r, src/, -f, json, -o, bandit-report.json]
+        exclude: tests/
+
+  - repo: https://github.com/Lucas-C/pre-commit-hooks-safety
+    rev: v1.3.2
+    hooks:
+      - id: python-safety-dependencies-check
+        files: requirements.txt
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.4.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: package.lock.json
+
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v3.13.0
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
+
+  - repo: local
+    hooks:
+      - id: check-imports
+        name: Check imports
+        entry: python -c "import ast; import sys; [ast.parse(open(f).read()) for f in sys.argv[1:]]"
+        language: system
+        files: \.py$
+        pass_filenames: true
+
+      - id: check-config-files
+        name: Check configuration files
+        entry: python -c "
+        import yaml
+        import json
+        import sys
+        for f in sys.argv[1:]:
+            if f.endswith('.yaml') or f.endswith('.yml'):
+                yaml.safe_load(open(f))
+            elif f.endswith('.json'):
+                json.load(open(f))
+        print('Configuration files are valid')
+        "
+        language: system
+        files: \.(yaml|yml|json)$
+        pass_filenames: true

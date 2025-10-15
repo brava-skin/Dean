@@ -1,0 +1,102 @@
+name: Dependency Review
+
+on:
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Dependency Review
+      uses: actions/dependency-review-action@v3
+      with:
+        fail-on-severity: moderate
+        allow-licenses: MIT, Apache-2.0, BSD-3-Clause, BSD-2-Clause, ISC, Python-2.0
+        deny-licenses: GPL-2.0, GPL-3.0, AGPL-3.0
+        comment-summary-in-pr: always
+
+    - name: Check for security vulnerabilities
+      run: |
+        echo "Checking for security vulnerabilities in dependencies..."
+        
+        # Install safety for vulnerability checking
+        pip install safety
+        
+        # Check for known vulnerabilities
+        safety check --json --output safety-pr-report.json || true
+        
+        if [ -f safety-pr-report.json ]; then
+          vuln_count=$(jq -r 'length' safety-pr-report.json)
+          echo "Found $vuln_count vulnerabilities"
+          
+          if [ "$vuln_count" -gt 0 ]; then
+            echo "vulnerabilities_found=true" >> $GITHUB_ENV
+            echo "vulnerability_count=$vuln_count" >> $GITHUB_ENV
+          fi
+        fi
+
+    - name: Comment on PR with vulnerability report
+      if: env.vulnerabilities_found == 'true'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          const safetyReport = JSON.parse(fs.readFileSync('safety-pr-report.json', 'utf8'));
+          
+          const criticalVulns = safetyReport.filter(vuln => 
+            vuln.severity === 'critical' || vuln.severity === 'high'
+          );
+          
+          const moderateVulns = safetyReport.filter(vuln => 
+            vuln.severity === 'medium' || vuln.severity === 'moderate'
+          );
+          
+          let commentBody = `## 🔍 Dependency Security Review
+          
+          **⚠️ Security vulnerabilities detected in this PR:**
+          
+          ### Critical/High Severity (${criticalVulns.length}):
+          ${criticalVulns.length > 0 ? criticalVulns.map(vuln => 
+            `- **${vuln.package}** (${vuln.installed_version}): ${vuln.vulnerability}`
+          ).join('\n') : 'None'}
+          
+          ### Medium/Moderate Severity (${moderateVulns.length}):
+          ${moderateVulns.length > 0 ? moderateVulns.map(vuln => 
+            `- **${vuln.package}** (${vuln.installed_version}): ${vuln.vulnerability}`
+          ).join('\n') : 'None'}
+          
+          ### Recommendations:
+          1. **Immediate Action Required** for Critical/High severity issues
+          2. **Review and Update** Medium severity issues when possible
+          3. **Consider Alternatives** for packages with frequent vulnerabilities
+          4. **Pin Versions** to specific secure versions
+          
+          ### Full Report:
+          \`\`\`json
+          ${JSON.stringify(safetyReport, null, 2)}
+          \`\`\`
+          `;
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: commentBody
+          });
+
+    - name: Fail PR if critical vulnerabilities found
+      if: env.vulnerabilities_found == 'true'
+      run: |
+        echo "Critical vulnerabilities found in dependencies"
+        echo "Please address these security issues before merging"
+        exit 1
