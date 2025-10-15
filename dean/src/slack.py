@@ -957,6 +957,108 @@ def alert_insights_warning(warning_type: str = "date_preset format, retried") ->
     )
     client().notify(msg)
 
+def build_ads_snapshot(rows_today: List[Dict[str, Any]], rows_lifetime: List[Dict[str, Any]], local_tz: str) -> List[str]:
+    """
+    Build the ads snapshot for thread reply with proper today/lifetime separation.
+    """
+    from datetime import datetime, timezone
+    import re
+    
+    def _safe_f(v: Any, default: float = 0.0) -> float:
+        try:
+            if v is None:
+                return default
+            if isinstance(v, (int, float)):
+                return float(v)
+            return float(str(v).replace(",", "").strip())
+        except Exception:
+            return default
+    
+    def _prettify_ad_name(name: str) -> str:
+        """Clean up ad display names for mobile-friendly display."""
+        # Remove leading [TEST], [VALID], [SCALE] tags
+        name = re.sub(r'^\[(TEST|VALID|SCALE)\]\s*', '', name)
+        
+        # Compress long visual style tokens
+        name = re.sub(r'DynamicGreenScreenEffect', 'DGS Effect', name)
+        name = re.sub(r'Green Screen Effect Template', 'Green Screen Template', name)
+        
+        # Truncate if too long for mobile
+        if len(name) > 50:
+            name = name[:47] + "..."
+        
+        return name
+    
+    def _fmt_eur(amount: Optional[float]) -> str:
+        """Format currency with Euro symbol."""
+        if amount is None:
+            return "–"
+        return f"€{amount:,.2f}"
+    
+    # Build lifetime lookup by ad_id
+    lifetime_by_id = {}
+    for row in rows_lifetime or []:
+        ad_id = row.get("ad_id")
+        if ad_id:
+            lifetime_by_id[str(ad_id)] = row
+    
+    # Process today's ads
+    ad_lines = []
+    integrity_issues = 0
+    
+    for today_row in rows_today or []:
+        ad_id = today_row.get("ad_id")
+        ad_name = today_row.get("ad_name", "")
+        spend_today = _safe_f(today_row.get("spend"))
+        
+        # Get lifetime data
+        lifetime_row = lifetime_by_id.get(str(ad_id), {})
+        spend_life = _safe_f(lifetime_row.get("spend")) if lifetime_row else None
+        
+        # Check for integrity issues
+        if spend_life is not None and spend_life < spend_today:
+            integrity_issues += 1
+        
+        # Get purchase counts
+        purch_today = 0
+        for action in (today_row.get("actions") or []):
+            if action.get("action_type") == "purchase":
+                purch_today += int(action.get("value", 0))
+        
+        # Format the line
+        clean_name = _prettify_ad_name(ad_name)
+        life_str = _fmt_eur(spend_life) if spend_life is not None else "–"
+        ad_lines.append(f"• {clean_name}, spend {_fmt_eur(spend_today)} today, life {life_str}, purch {purch_today}")
+    
+    # Sort by spend_today desc, then spend_life desc
+    def sort_key(item):
+        parts = item.split(", spend ")
+        if len(parts) < 2:
+            return (0, 0)
+        try:
+            today_part = parts[1].split(" today")[0]
+            today_val = float(today_part.replace("€", "").replace(",", ""))
+            life_part = parts[1].split("life ")[1].split(",")[0] if "life " in parts[1] else "–"
+            life_val = float(life_part.replace("€", "").replace(",", "")) if life_part != "–" else 0
+            return (-today_val, -life_val)
+        except Exception:
+            return (0, 0)
+    
+    ad_lines.sort(key=sort_key)
+    
+    # Limit to 4 lines, show "more" if needed
+    if len(ad_lines) > 6:
+        display_lines = ad_lines[:4]
+        display_lines.append(f"+ {len(ad_lines) - 4} more in thread")
+    else:
+        display_lines = ad_lines[:4]
+    
+    # Add integrity note if needed
+    if integrity_issues > 0:
+        display_lines.append(f"note: {integrity_issues} ad shows lifetime < today (API window or join issue)")
+    
+    return display_lines
+
 __all__ = [
     "SlackClient",
     "SlackMessage",
@@ -970,6 +1072,7 @@ __all__ = [
     "alert_data_quality",
     "alert_error",
     "alert_insights_warning",
+    "build_ads_snapshot",
     "post_digest",
     "format_run_header",
     "format_stage_line",
