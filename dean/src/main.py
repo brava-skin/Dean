@@ -246,6 +246,48 @@ def _get_supabase():
         return None
 
 
+def setup_supabase_table():
+    """
+    Helper function to create the required Supabase table schema.
+    Run this once to set up your Supabase table with the correct columns.
+    """
+    sb = _get_supabase()
+    if not sb:
+        notify("❌ Supabase client not available. Check your SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables.")
+        return False
+    
+    table = os.getenv("SUPABASE_TABLE", "meta_creatives")
+    
+    # SQL to create the table with required columns
+    create_table_sql = f"""
+    CREATE TABLE IF NOT EXISTS {table} (
+        id SERIAL PRIMARY KEY,
+        video_id TEXT,
+        filename TEXT,
+        avatar TEXT,
+        visual_style TEXT,
+        script TEXT,
+        status TEXT DEFAULT 'pending',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+    """
+    
+    try:
+        # Note: This requires SQL execution permissions in Supabase
+        # You might need to run this manually in your Supabase SQL editor
+        notify(f"📋 To set up your Supabase table, run this SQL in your Supabase SQL editor:")
+        notify(f"```sql")
+        notify(f"{create_table_sql}")
+        notify(f"```")
+        notify(f"📝 Table name: {table}")
+        notify(f"🔑 Required columns: id, video_id, filename, avatar, visual_style, script, status")
+        return True
+    except Exception as e:
+        notify(f"❗ Failed to create table: {e}")
+        return False
+
+
 def load_queue_supabase(
     table: str = None,
     status_filter: str = "pending",
@@ -283,9 +325,34 @@ def load_queue_supabase(
 
     table = table or os.getenv("SUPABASE_TABLE", "meta_creatives")
     try:
+        # First, let's check what columns exist in the table
+        try:
+            # Try to get table info to see what columns exist
+            table_info = sb.table(table).select("*").limit(1).execute()
+            if table_info.data:
+                available_columns = list(table_info.data[0].keys())
+                notify(f"📋 Available columns in {table}: {available_columns}")
+            else:
+                available_columns = ["id", "video_id", "filename", "avatar", "visual_style", "script", "status"]
+        except Exception:
+            available_columns = ["id", "video_id", "filename", "avatar", "visual_style", "script", "status"]
+        
+        # Build select query with only available columns
+        select_columns = []
+        for col in ["id", "video_id", "filename", "avatar", "visual_style", "script", "status"]:
+            if col in available_columns:
+                select_columns.append(col)
+        
+        if not select_columns:
+            notify(f"❗ No valid columns found in table {table}")
+            return pd.DataFrame(columns=cols)
+        
+        select_str = ", ".join(select_columns)
+        notify(f"🔍 Selecting columns: {select_str}")
+        
         q = (
             sb.table(table)
-            .select("id, video_id, filename, avatar, visual_style, script, status")
+            .select(select_str)
             .or_("status.is.null,status.eq.{}".format(status_filter))
             .limit(limit)
         )

@@ -21,7 +21,7 @@ IG_ACTOR_ID=your_instagram_actor_id_here
 SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK
 SLACK_WEBHOOK_URL_ERRORS=https://hooks.slack.com/services/YOUR/ERRORS/WEBHOOK
 
-# Supabase Configuration (optional - will use CSV queue if not set)
+# Supabase Configuration (REQUIRED - main queue source)
 SUPABASE_URL=your_supabase_url_here
 SUPABASE_SERVICE_ROLE_KEY=your_supabase_key_here
 SUPABASE_TABLE=meta_creatives
@@ -52,10 +52,11 @@ DRY_RUN=false
 3. Enable Incoming Webhooks
 4. Create webhook URLs for notifications
 
-### Supabase (Optional)
-1. Create a Supabase project
-2. Get the project URL and service role key
-3. Create a table called `meta_creatives` with columns: `video_id`, `filename`, `avatar`, `visual_style`, `script`, `status`
+### Supabase (Required)
+1. Create a Supabase project at [supabase.com](https://supabase.com)
+2. Get the project URL and service role key from Settings > API
+3. Run the setup script: `python setup_supabase.py`
+4. Follow the instructions to create the table with the correct schema
 
 ## Testing Without Full Setup
 
@@ -68,9 +69,11 @@ If you want to test the system without all credentials:
 
 ## Queue Configuration
 
-The system will automatically use:
-- **Supabase queue** if `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are set
-- **CSV queue** if Supabase is not configured (uses `data/creatives_queue.csv`)
+The system uses **Supabase as the primary queue source**. Make sure to:
+1. Set up your Supabase project
+2. Configure the environment variables
+3. Run `python setup_supabase.py` to create the table schema
+4. Add creative data to your Supabase table
 
 ## Copy Bank
 
