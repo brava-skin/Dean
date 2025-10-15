@@ -44,7 +44,7 @@ except Exception:
 
 # Local modules (expected to be available in the project)
 from storage import Store
-from slack import notify
+from slack import notify, post_run_header_and_get_thread_ts, post_thread_ads_snapshot, prettify_ad_name, fmt_eur, fmt_pct, fmt_roas, fmt_int
 from meta_client import MetaClient, AccountAuth, ClientConfig
 from rules import RuleEngine
 from stages.testing import run_testing_tick
@@ -707,15 +707,17 @@ def main() -> None:
         queue_df = load_queue(queue_path)
         queue_len_before = len(queue_df)
 
-    # Context ping
+    # Context ping - now using consolidated messaging
     local_now = now_local(tz_name)
     acct = account_guardrail_ping(client, settings)
-    notify(
-        f"🕒 Tick @ {local_now:%Y-%m-%d %H:%M %Z}  PROFILE={profile}  "
-        f"DRY_RUN={client.dry_run}  SIMULATE={shadow_mode}\n"
-        f"Acct: spend={acct.get('spend')}  purch={acct.get('purchases')}  "
-        f"CPA={acct.get('cpa')}  BE={acct.get('breakeven')}"
-    )
+    
+    # Store account info for later use in consolidated message
+    account_info = {
+        'spend': acct.get('spend', 0.0),
+        'purchases': acct.get('purchases', 0),
+        'cpa': acct.get('cpa'),
+        'breakeven': acct.get('breakeven')
+    }
 
     # Idempotency (tick-level) and process lock (multi-runner safety)
     try:
@@ -770,6 +772,9 @@ def main() -> None:
 
         stage_choice = args.stage
 
+        # Collect stage summaries for consolidated messaging
+        stage_summaries = []
+        
         if stage_choice in ("all", "testing"):
             overall["testing"] = run_stage(
                 run_testing_tick,
@@ -783,14 +788,29 @@ def main() -> None:
                 placements=["facebook", "instagram"],  # NEW
                 instagram_actor_id=os.getenv("IG_ACTOR_ID"),  # NEW
             )
+            if overall["testing"]:
+                stage_summaries.append({
+                    "stage": "TEST",
+                    "counts": overall["testing"]
+                })
 
         if stage_choice in ("all", "validation"):
             overall["validation"] = run_stage(
                 run_validation_tick, "VALIDATION", client, settings, engine, store
             )
+            if overall["validation"]:
+                stage_summaries.append({
+                    "stage": "VALID", 
+                    "counts": overall["validation"]
+                })
 
         if stage_choice in ("all", "scaling"):
             overall["scaling"] = run_stage(run_scaling_tick, "SCALING", client, settings, store)
+            if overall["scaling"]:
+                stage_summaries.append({
+                    "stage": "SCALE",
+                    "counts": overall["scaling"]
+                })
 
     # Queue persist (only if changed length; cheap heuristic).
     # When using Supabase, this block normally will not run (DF length does not change in-place).
@@ -818,6 +838,27 @@ def main() -> None:
             )
         except Exception:
             pass
+
+    # Post consolidated run summary
+    if not shadow_mode:
+        time_str = local_now.strftime("%H:%M %Z")
+        status = "OK"  # Simplified status logic - could be enhanced based on failures_in_row
+        
+        # Post the main run header and get thread timestamp
+        thread_ts = post_run_header_and_get_thread_ts(
+            status=status,
+            time_str=time_str,
+            profile=profile,
+            spend=account_info['spend'],
+            purch=account_info['purchases'],
+            cpa=account_info['cpa'],
+            be=account_info['breakeven'],
+            stage_summaries=stage_summaries
+        )
+        
+        # TODO: Collect ad insights and post as thread reply
+        # This would require fetching ad insights and formatting them
+        # For now, we'll skip the thread reply as it requires more complex data collection
 
     # Console summary
     print("---- RUN SUMMARY ----")
