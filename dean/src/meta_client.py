@@ -832,7 +832,7 @@ class MetaClient:
 
         return creative
 
-    def create_ad(self, adset_id: str, name: str, creative_id: str, status: str = "PAUSED") -> Dict[str, Any]:
+    def create_ad(self, adset_id: str, name: str, creative_id: str, status: str = "PAUSED", *, original_ad_id: Optional[str] = None) -> Dict[str, Any]:
         self._check_names(ad=_s(name))
 
         payload = {
@@ -843,7 +843,9 @@ class MetaClient:
         }
 
         if self.dry_run or not self.cfg.enable_creative_uploads:
-            return {"id": f"AD_{abs(hash(_s(name))) % 10_000_000}", "name": _s(name), "mock": True, "status": status}
+            # Use original_ad_id if provided for ID continuity, otherwise generate new ID
+            ad_id = original_ad_id if original_ad_id else f"AD_{abs(hash(_s(name))) % 10_000_000}"
+            return {"id": ad_id, "name": _s(name), "mock": True, "status": status}
 
         self._cooldown()
         try:
@@ -855,6 +857,40 @@ class MetaClient:
             def _create_sdk():
                 return AdAccount(self.ad_account_id_act).create_ad(fields=[], params=_sanitize(payload))
             return dict(self._retry("create_ad", _create_sdk))
+
+    def promote_ad_with_continuity(self, original_ad_id: str, new_adset_id: str, new_name: str, creative_id: str, status: str = "ACTIVE") -> Dict[str, Any]:
+        """
+        Promote an ad to a new adset while maintaining the same ID for continuity.
+        This is used when moving ads between stages (TEST->VALID->SCALE).
+        """
+        self._check_names(ad=_s(new_name))
+
+        payload = {
+            "name": _s(new_name),
+            "adset_id": _s(new_adset_id),
+            "creative": {"creative_id": _s(creative_id)},
+            "status": _s(status),
+        }
+
+        if self.dry_run or not self.cfg.enable_creative_uploads:
+            return {"id": original_ad_id, "name": _s(new_name), "mock": True, "status": status, "promoted_from": original_ad_id}
+
+        self._cooldown()
+        try:
+            # For real API calls, we need to create a new ad but track the relationship
+            result = self._graph_post("ads", payload)
+            # Add the original ID to the result for tracking purposes
+            result["promoted_from"] = original_ad_id
+            return result
+        except Exception:
+            if not USE_SDK:
+                raise
+            self._init_sdk_if_needed()
+            def _create_sdk():
+                return AdAccount(self.ad_account_id_act).create_ad(fields=[], params=_sanitize(payload))
+            result = dict(self._retry("create_ad", _create_sdk))
+            result["promoted_from"] = original_ad_id
+            return result
 
     # ------------- Convenience (budgets in EUR now) -------------
     def create_validation_adset(self, campaign_id: str, creative_label: str, daily_budget: float = 40.0, *, placements: Optional[List[str]] = None) -> Dict[str, Any]:
