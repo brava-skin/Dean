@@ -248,8 +248,8 @@ def _metrics_compact_line(metrics: Dict[str, Any]) -> str:
 
     parts: List[str] = []
     if spend_today is not None or spend_life is not None:
-        left = _fmt_currency(spend_today) if spend_today not in (None, "") else "—"
-        right = _fmt_currency(spend_life) if spend_life not in (None, "") else "—"
+        left = _fmt_currency(spend_today) if spend_today not in (None, "") else "–"
+        right = _fmt_currency(spend_life) if spend_life not in (None, "") else "–"
         parts.append(f"{left} / {right}")
     if ctr not in (None, ""):
         parts.append(f"CTR {_fmt_pct(ctr)}")
@@ -319,7 +319,7 @@ def format_stage_line(stage: str, counts: Dict[str, int]) -> str:
         elif key == "fatigue_flags":
             parts.append(f"fatigue {value}")
         elif key == "data_quality_alerts":
-            parts.append(f"dq {value}")
+            parts.append(f"tracking {value}")
         elif key == "soft_passes":
             parts.append(f"soft passes {value}")
         elif key == "scaled":
@@ -944,6 +944,19 @@ def alert_error(error_msg: str) -> None:
     )
     client().notify(msg)
 
+def alert_insights_warning(warning_type: str = "date_preset format, retried") -> None:
+    """
+    Consolidated insights warning using new format.
+    """
+    text = f"❗ Insights warning, {warning_type}"
+    
+    msg = SlackMessage(
+        text=text,
+        severity="warn",
+        topic="alerts",
+    )
+    client().notify(msg)
+
 __all__ = [
     "SlackClient",
     "SlackMessage",
@@ -956,6 +969,7 @@ __all__ = [
     "alert_fatigue",
     "alert_data_quality",
     "alert_error",
+    "alert_insights_warning",
     "post_digest",
     "format_run_header",
     "format_stage_line",
