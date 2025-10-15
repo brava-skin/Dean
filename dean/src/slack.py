@@ -156,11 +156,14 @@ def _ts_footer() -> str:
     return f"Sent {now_local.strftime('%Y-%m-%d %H:%M')} {tz_name}"
 
 def _env_webhooks() -> Dict[str, str]:
+    # Get the main webhook URL
+    main_webhook = os.getenv("SLACK_WEBHOOK_URL", "") or ""
+    
     return {
-        "default": os.getenv("SLACK_WEBHOOK_URL", "") or "",
-        "alerts": os.getenv("SLACK_WEBHOOK_ALERTS", "") or "",
-        "digest": os.getenv("SLACK_WEBHOOK_DIGEST", "") or "",
-        "scale": os.getenv("SLACK_WEBHOOK_SCALE", "") or "",
+        "default": main_webhook,
+        "alerts": os.getenv("SLACK_WEBHOOK_ALERTS", "") or main_webhook,
+        "digest": os.getenv("SLACK_WEBHOOK_DIGEST", "") or main_webhook,
+        "scale": os.getenv("SLACK_WEBHOOK_SCALE", "") or main_webhook,
     }
 
 def _slack_enabled_now() -> bool:
@@ -449,8 +452,8 @@ def template_kill(stage: str, entity_name: str, reason: str, metrics: Dict[str, 
     else:
         roas_str = fmt_roas(roas) if roas is not None else "–"
     
-    # New format: 🛑 Kill, TEST, Keith - DGS Effect - ProductHighlights
-    text = f"🛑 Kill, {stage}, {clean_name}\nreason {reason}\ntoday ctr {ctr_str}, roas {roas_str}"
+    # Humanized message - like a media buyer colleague texting
+    text = f"🚨 Hey! Had to kill {clean_name} in {stage}\n{reason}\nCTR was {ctr_str}, ROAS {roas_str} - not hitting our targets"
     
     return SlackMessage(
         text=text,
@@ -465,13 +468,13 @@ def template_promote(src: str, dst: str, entity_name: str, budget: Optional[floa
     # Clean up the ad name for display
     clean_name = prettify_ad_name(entity_name)
     
-    # New format: 📈 Promote, TEST → VALID, Ty - ProblemSolution
-    text = f"📈 Promote, {src} → {dst}, {clean_name}"
+    # Humanized message - like a media buyer colleague texting
+    text = f"🎉 Great news! {clean_name} is performing well\nMoving from {src} to {dst} stage"
     
     if budget is not None:
-        text += f"\nbudget {fmt_eur(budget)} per day, placements facebook, instagram"
+        text += f"\nSetting budget to {fmt_eur(budget)}/day on FB + IG"
     
-    text += "\nid continuity on"
+    text += "\nKeeping the same ad ID for tracking"
     
     return SlackMessage(
         text=text,
@@ -486,8 +489,13 @@ def template_scale(entity_name: str, pct: int, new_budget: Optional[float] = Non
     # Clean up the ad name for display
     clean_name = prettify_ad_name(entity_name)
     
-    # New format: 📈 Promote, SCALE, Ad Name
-    text = f"📈 Promote, SCALE, {clean_name}\nbudget {fmt_eur(new_budget)} per day, placements facebook, instagram\nid continuity on"
+    # Humanized message - like a media buyer colleague texting
+    text = f"🚀 {clean_name} is crushing it! Scaling up by {pct}%"
+    
+    if new_budget is not None:
+        text += f"\nNew budget: {fmt_eur(new_budget)}/day on FB + IG"
+    
+    text += "\nThis one's a winner!"
     
     return SlackMessage(
         text=text,
@@ -498,14 +506,18 @@ def template_digest(date_label: str, stage_stats: Dict[str, Dict[str, Any]]) -> 
     """
     Human daily digest.
     """
-    title = f"Daily Digest • {date_label}"
+    title = f"📊 Daily Report • {date_label}"
     lines = []
     for stage, stats in stage_stats.items():
         nice = " | ".join(f"{k}={v}" for k, v in stats.items())
         lines.append(f"*{stage}:* {nice}")
+    
+    # Humanized intro
+    intro = f"Hey! Here's what happened yesterday ({date_label}):"
+    
     return SlackMessage(
-        text=f"[DIGEST] {date_label}",
-        blocks=build_basic_blocks(title, lines, severity="info", footer=_ts_footer()),
+        text=f"📊 Daily Report - {date_label}",
+        blocks=build_basic_blocks(title, [intro] + lines, severity="info", footer=_ts_footer()),
         topic="digest",
     )
 
@@ -911,7 +923,7 @@ def alert_fatigue(stage: str, entity_name: str, reason: str = "ctr drop vs trend
     Fatigue alert using new format.
     """
     clean_name = prettify_ad_name(entity_name)
-    text = f"🟡 Fatigue, {stage}, {clean_name}\n{reason}"
+    text = f"⚠️ {clean_name} in {stage} is showing fatigue\n{reason}\nMight need fresh creative soon"
     
     msg = SlackMessage(
         text=text,
@@ -925,7 +937,7 @@ def alert_data_quality(stage: str, entity_name: str, reason: str) -> None:
     Data quality alert using new format.
     """
     clean_name = prettify_ad_name(entity_name)
-    text = f"🩺 Tracking check, {stage}, {clean_name}\n{reason}"
+    text = f"🔍 Tracking issue with {clean_name} in {stage}\n{reason}\nCheck your pixel setup"
     
     msg = SlackMessage(
         text=text,
@@ -938,7 +950,7 @@ def alert_error(error_msg: str) -> None:
     """
     Error alert using new format.
     """
-    text = f"❗ Error, {error_msg}"
+    text = f"🚨 Something went wrong: {error_msg}\nNeed to check this ASAP"
     
     msg = SlackMessage(
         text=text,
@@ -951,7 +963,7 @@ def alert_insights_warning(warning_type: str = "date_preset format, retried") ->
     """
     Consolidated insights warning using new format.
     """
-    text = f"❗ Insights warning, {warning_type}"
+    text = f"⚠️ Meta API had an issue: {warning_type}\nRetrying automatically"
     
     msg = SlackMessage(
         text=text,
@@ -1062,6 +1074,63 @@ def build_ads_snapshot(rows_today: List[Dict[str, Any]], rows_lifetime: List[Dic
     
     return display_lines
 
+def alert_queue_empty() -> None:
+    """
+    Alert when creative queue is empty.
+    """
+    text = "🚨 URGENT: No more creatives in the queue!\nNeed to upload new videos ASAP or we'll run out of tests"
+    
+    msg = SlackMessage(
+        text=text,
+        severity="error",
+        topic="alerts",
+    )
+    client().notify(msg)
+
+def alert_new_launch(entity_name: str, stage: str) -> None:
+    """
+    Alert when a new ad is launched.
+    """
+    clean_name = prettify_ad_name(entity_name)
+    text = f"🚀 New ad launched: {clean_name}\nStarting in {stage} stage - let's see how it performs!"
+    
+    msg = SlackMessage(
+        text=text,
+        severity="info",
+        topic="alerts",
+    )
+    client().notify(msg)
+
+def alert_system_health(issue: str) -> None:
+    """
+    Alert for system health issues.
+    """
+    text = f"🔧 System issue detected: {issue}\nThe automation might be affected"
+    
+    msg = SlackMessage(
+        text=text,
+        severity="warn",
+        topic="alerts",
+    )
+    client().notify(msg)
+
+def alert_budget_alert(entity_name: str, current_budget: float, target_budget: float) -> None:
+    """
+    Alert for significant budget changes.
+    """
+    clean_name = prettify_ad_name(entity_name)
+    change_pct = ((target_budget - current_budget) / current_budget) * 100
+    direction = "up" if change_pct > 0 else "down"
+    
+    text = f"💰 Budget change for {clean_name}\n{change_pct:+.1f}% {direction} to {fmt_eur(target_budget)}/day"
+    
+    msg = SlackMessage(
+        text=text,
+        severity="info",
+        topic="alerts",
+    )
+    client().notify(msg)
+
 __all__ = [
     "SlackClient",
     "SlackMessage",
@@ -1075,6 +1144,10 @@ __all__ = [
     "alert_data_quality",
     "alert_error",
     "alert_insights_warning",
+    "alert_queue_empty",
+    "alert_new_launch",
+    "alert_system_health",
+    "alert_budget_alert",
     "build_ads_snapshot",
     "post_digest",
     "format_run_header",

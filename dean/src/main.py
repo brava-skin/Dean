@@ -51,6 +51,7 @@ from stages.testing import run_testing_tick
 from stages.validation import run_validation_tick
 from stages.scaling import run_scaling_tick
 from utils import now_local, getenv_f, getenv_i, getenv_b, cfg, cfg_or_env_f, cfg_or_env_i, cfg_or_env_b, cfg_or_env_list, safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name
+from scheduler import start_background_scheduler, stop_background_scheduler, get_scheduler
 
 # ------------------------------- Constants --------------------------------
 REQUIRED_ENVS = [
@@ -650,6 +651,9 @@ def main() -> None:
     parser.add_argument(
         "--explain", action="store_true", help="print decisions without acting"
     )
+    parser.add_argument(
+        "--background", action="store_true", help="run in background mode with automated scheduling"
+    )
     args = parser.parse_args()
 
     # Load environment first (for dynamic .env overrides)
@@ -964,6 +968,34 @@ def main() -> None:
             indent=2,
         )
     )
+
+    # Background mode handling
+    if args.background:
+        notify("🤖 Starting background scheduler mode")
+        start_background_scheduler(settings, rules_cfg, store)
+        
+        try:
+            # Keep the process running
+            import signal
+            def signal_handler(sig, frame):
+                notify("🛑 Background scheduler stopping...")
+                stop_background_scheduler()
+                sys.exit(0)
+            
+            signal.signal(signal.SIGINT, signal_handler)
+            signal.signal(signal.SIGTERM, signal_handler)
+            
+            # Keep running
+            while True:
+                time.sleep(60)
+                
+        except KeyboardInterrupt:
+            notify("🛑 Background scheduler stopped by user")
+            stop_background_scheduler()
+        except Exception as e:
+            notify(f"❌ Background scheduler error: {e}")
+            stop_background_scheduler()
+            sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -9,4 +9,5 @@ SQLAlchemy==2.0.35
 prometheus-client==0.20.0
 jsonschema==4.23.0
 supabase>=2.5.0
+schedule==1.2.0
 
