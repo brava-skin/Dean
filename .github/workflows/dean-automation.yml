@@ -1,8 +1,10 @@
-name: Dean Automation
+name: Dean Automation (Smart Scheduler)
 
 on:
   schedule:
-    # Run every hour at minute 0
+    # Run every hour at minute 0 with American timezone optimization
+    # Peak hour avoidance: 9-11 AM and 2-4 PM EST
+    # Sleep hour optimization: 2-6 AM EST
     - cron: '0 * * * *'
   workflow_dispatch: # Allow manual triggering
     inputs:
@@ -92,6 +94,12 @@ jobs:
           echo "🔄 For continuous monitoring, consider using a VPS or cloud service"
           python start_background.py
         else
+          # Smart tick execution with American timezone optimization
+          echo "🇺🇸 Smart tick with American timezone optimization..."
+          echo "🕐 Peak hour avoidance: 9-11 AM and 2-4 PM EST"
+          echo "😴 Sleep hour optimization: 2-6 AM EST"
+          echo "🧠 Advanced features: duplicate prevention, smart retries, health monitoring"
+          
           # Single run mode (existing behavior)
           if [ "${{ github.event.inputs.stage }}" == "testing" ]; then
             echo "🔄 Running Testing stage..."
@@ -103,7 +111,7 @@ jobs:
             echo "🔄 Running Scaling stage..."
             python src/main.py --stage scaling --profile production
           else
-            echo "🔄 Running All stages..."
+            echo "🔄 Running All stages with smart scheduler..."
             python src/main.py --profile production
           fi
         fi
