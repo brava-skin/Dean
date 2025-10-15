@@ -118,6 +118,8 @@ except Exception:  # pragma: no cover
 
 def _log(msg: str) -> None:
     if LOG_STDOUT:
+        # Replace Unicode emojis with text equivalents for Windows console compatibility
+        msg = msg.replace("🛑", "[STOP]").replace("⚠️", "[WARN]").replace("🚀", "[LAUNCH]").replace("⬆️", "[SCALE]").replace("🧬", "[DUP]")
         print(msg, flush=True)
 
 
