@@ -13,6 +13,10 @@ import pandas as pd
 from zoneinfo import ZoneInfo  # account-local timezone
 
 from slack import alert_kill, alert_promote, alert_fatigue, alert_data_quality, alert_error, notify
+from utils import (
+    getenv_f, getenv_i, getenv_b, cfg, cfg_or_env_f, cfg_or_env_i, cfg_or_env_b, cfg_or_env_list,
+    safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name
+)
 
 UTC = timezone.utc
 LOCAL_TZ = ZoneInfo(os.getenv("ACCOUNT_TZ", os.getenv("ACCOUNT_TIMEZONE", "Europe/Amsterdam")))
@@ -20,103 +24,12 @@ ACCOUNT_CURRENCY = os.getenv("ACCOUNT_CURRENCY", "EUR")
 ACCOUNT_CURRENCY_SYMBOL = os.getenv("ACCOUNT_CURRENCY_SYMBOL", "€")
 
 
-# ------------------------- config helpers -------------------------
-
-def _getenv_f(name: str, default: float) -> float:
-    try:
-        return float(os.getenv(name, str(default)))
-    except Exception:
-        return default
-
-
-def _getenv_i(name: str, default: int) -> int:
-    try:
-        return int(float(os.getenv(name, str(default))))
-    except Exception:
-        return default
-
-
-def _cfg(settings: Dict[str, Any], path: str, default: Any = None) -> Any:
-    cur: Any = settings
-    for part in path.split("."):
-        if not isinstance(cur, dict) or part not in cur:
-            return default
-        cur = cur[part]
-    return cur
-
-
-def _cfg_or_env_f(settings: Dict[str, Any], path: str, env: str, default: float) -> float:
-    v = _cfg(settings, path, None)
-    if v is None:
-        return _getenv_f(env, default)
-    try:
-        return float(v)
-    except Exception:
-        return default
-
-
-def _cfg_or_env_i(settings: Dict[str, Any], path: str, env: str, default: int) -> int:
-    v = _cfg(settings, path, None)
-    if v is None:
-        return _getenv_i(env, default)
-    try:
-        return int(v)
-    except Exception:
-        return default
-
-
-def _cfg_or_env_b(settings: Dict[str, Any], path: str, env: str, default: bool) -> bool:
-    v = _cfg(settings, path, None)
-    if v is None:
-        raw = os.getenv(env, str(int(default))).lower()
-        return raw in ("1", "true", "yes", "y")
-    if isinstance(v, bool):
-        return v
-    return str(v).lower() in ("1", "true", "yes", "y")
-
-
-def _cfg_or_env_list(settings: Dict[str, Any], path: str, env: str, default: List[str]) -> List[str]:
-    v = _cfg(settings, path, None)
-    if v is None:
-        raw = os.getenv(env, ",".join(default))
-        return [s.strip() for s in (raw or "").split(",") if s.strip()]
-    if isinstance(v, (list, tuple)):
-        return list(v)
-    return [str(v).strip()]
-
-
 # ------------------------- small helpers -------------------------
-
-def _today_str() -> str:
-    return datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
-
-
-def _daily_key(stage: str, metric: str) -> str:
-    return f"daily::{_today_str()}::{stage}::{metric}"
-
-
-def _ad_day_flag_key(ad_id: str, flag: str) -> str:
-    return f"ad::{ad_id}::{flag}::{_today_str()}"
-
-
-def _now_minute_key(prefix: str) -> str:
-    return f"{prefix}::{datetime.now(LOCAL_TZ).strftime('%Y-%m-%dT%H:%M')}"
-
-
-def _safe_f(v: Any, default: float = 0.0) -> float:
-    try:
-        if v is None:
-            return default
-        if isinstance(v, (int, float)):
-            return float(v)
-        return float(str(v).replace(",", "").strip())
-    except Exception:
-        return default
 
 
 def _ctr(row: Dict[str, Any]) -> float:
-    imps = _safe_f(row.get("impressions"))
-    clicks = _safe_f(row.get("clicks"))
+    imps = safe_f(row.get("impressions"))
+    clicks = safe_f(row.get("clicks"))
     return (clicks / imps) if imps > 0 else 0.0
 
 
@@ -136,7 +49,7 @@ def _purchase_and_atc_counts(row: Dict[str, Any]) -> Tuple[int, int]:
     atc = 0
     for a in acts:
         t = a.get("action_type")
-        v = _safe_f(a.get("value"), 0.0)
+        v = safe_f(a.get("value"), 0.0)
         if t == "purchase":
             purch += int(v)
         elif t == "add_to_cart":
@@ -146,9 +59,9 @@ def _purchase_and_atc_counts(row: Dict[str, Any]) -> Tuple[int, int]:
 
 def _meets_minimums(row: Dict[str, Any], min_impressions: int, min_clicks: int, min_spend: float) -> bool:
     return (
-        _safe_f(row.get("spend")) >= min_spend
-        and _safe_f(row.get("impressions")) >= min_impressions
-        and _safe_f(row.get("clicks")) >= min_clicks
+        safe_f(row.get("spend")) >= min_spend
+        and safe_f(row.get("impressions")) >= min_impressions
+        and safe_f(row.get("clicks")) >= min_clicks
     )
 
 
@@ -221,7 +134,7 @@ def _adaptive_ctr_floor(
     floor_min: float,
     floor_scale: float,
 ) -> float:
-    ctrs = sorted((_ctr(r) for r in rows if _safe_f(r.get("impressions")) >= min_impressions_for_floor), reverse=True)
+    ctrs = sorted((_ctr(r) for r in rows if safe_f(r.get("impressions")) >= min_impressions_for_floor), reverse=True)
     if not ctrs:
         return floor_min
     mid = ctrs[len(ctrs) // 2]
@@ -229,7 +142,7 @@ def _adaptive_ctr_floor(
 
 
 def _data_quality_sentry(row: Dict[str, Any], min_spend_for_alert: float) -> Optional[str]:
-    spend = _safe_f(row.get("spend"))
+    spend = safe_f(row.get("spend"))
     purch, atc = _purchase_and_atc_counts(row)
     if spend >= min_spend_for_alert and purch == 0 and atc == 0:
         return "Spend present but no actions, check tracking"
@@ -255,16 +168,10 @@ def _record_queue_feedback(store: Any, label: str, clicks: float, imps: float) -
         pass
 
 
-def _clean_text_token(v: Any) -> str:
-    s = str(v or "")
-    s = s.replace("_", " ")
-    return " ".join(s.split()).strip()
-
-
 def _label_from_row(row: Dict[str, Any]) -> str:
-    avatar = _clean_text_token(row.get("avatar"))
-    vis = _clean_text_token(row.get("visual_style"))
-    script = _clean_text_token(row.get("script"))
+    avatar = clean_text_token(row.get("avatar"))
+    vis = clean_text_token(row.get("visual_style"))
+    script = clean_text_token(row.get("script"))
     if avatar and vis and script:
         return f"{avatar} - {vis} - {script}"
     fname = str(row.get("filename") or "").strip()
@@ -274,9 +181,9 @@ def _label_from_row(row: Dict[str, Any]) -> str:
         parts = [p for p in stem.split("_") if p]
         if len(parts) >= 3:
             a, v, s = parts[-3], parts[-2], parts[-1]
-            return f"{_clean_text_token(a)} - {_clean_text_token(v)} - {_clean_text_token(s)}"
+            return f"{clean_text_token(a)} - {clean_text_token(v)} - {clean_text_token(s)}"
         if stem:
-            return _clean_text_token(stem)
+            return clean_text_token(stem)
     return "UNNAMED"
 
 
@@ -569,7 +476,7 @@ def run_testing_tick(
 ) -> Dict[str, Any]:
     summary = {"kills": 0, "promotions": 0, "launched": 0, "fatigue_flags": 0, "data_quality_alerts": 0}
     try:
-        tk = _now_minute_key("testing")
+        tk = now_minute_key("testing")
         if hasattr(store, "tick_seen") and store.tick_seen(tk):
             notify(f"ℹ️ [TEST] Tick {tk} already processed; skipping.")
             return summary
@@ -578,40 +485,40 @@ def run_testing_tick(
 
     # --- Resolve config from YAML with env fallbacks ---
     tmin = (settings.get("testing") or {}).get("minimums") or {}
-    min_impressions = int(tmin.get("min_impressions", _getenv_i("TEST_MIN_IMPRESSIONS", 300)))
-    min_clicks = int(tmin.get("min_clicks", _getenv_i("TEST_MIN_CLICKS", 10)))
-    min_spend = float(tmin.get("min_spend_eur", tmin.get("min_spend", _getenv_f("TEST_MIN_SPEND", 10.0))))
+    min_impressions = int(tmin.get("min_impressions", getenv_i("TEST_MIN_IMPRESSIONS", 300)))
+    min_clicks = int(tmin.get("min_clicks", getenv_i("TEST_MIN_CLICKS", 10)))
+    min_spend = float(tmin.get("min_spend_eur", tmin.get("min_spend", getenv_f("TEST_MIN_SPEND", 10.0))))
 
-    min_spend_before_kill = _cfg_or_env_f(settings, "testing.engine.fairness.min_spend_before_kill_eur", "TEST_MIN_SPEND_BEFORE_KILL", 20.0)
+    min_spend_before_kill = cfg_or_env_f(settings, "testing.engine.fairness.min_spend_before_kill_eur", "TEST_MIN_SPEND_BEFORE_KILL", 20.0)
 
-    consec_required = _cfg_or_env_i(settings, "stability.consecutive_ticks", "TEST_CONSEC_TICKS_REQUIRED", 2)
+    consec_required = cfg_or_env_i(settings, "stability.consecutive_ticks", "TEST_CONSEC_TICKS_REQUIRED", 2)
 
-    lifetime_spend_no_purchase_eur = _cfg_or_env_f(settings, "testing.engine.tripwires.lifetime_spend_no_purchase_eur", "TEST_SPEND_NO_PURCHASE_EUR", 32.0)
+    lifetime_spend_no_purchase_eur = cfg_or_env_f(settings, "testing.engine.tripwires.lifetime_spend_no_purchase_eur", "TEST_SPEND_NO_PURCHASE_EUR", 32.0)
 
-    prior_a = _cfg_or_env_f(settings, "testing.engine.bayes.prior_a", "TEST_BETA_PRIOR_A", 2.0)
-    prior_b = _cfg_or_env_f(settings, "testing.engine.bayes.prior_b", "TEST_BETA_PRIOR_B", 300.0)
-    sample_count = _cfg_or_env_i(settings, "testing.engine.bayes.sample_count", "TEST_BANDIT_SAMPLE_COUNT", 32)
-    kill_prob = _cfg_or_env_f(settings, "testing.engine.bayes.kill_prob", "TEST_BAYES_KILL_PROB", 0.90)
+    prior_a = cfg_or_env_f(settings, "testing.engine.bayes.prior_a", "TEST_BETA_PRIOR_A", 2.0)
+    prior_b = cfg_or_env_f(settings, "testing.engine.bayes.prior_b", "TEST_BETA_PRIOR_B", 300.0)
+    sample_count = cfg_or_env_i(settings, "testing.engine.bayes.sample_count", "TEST_BANDIT_SAMPLE_COUNT", 32)
+    kill_prob = cfg_or_env_f(settings, "testing.engine.bayes.kill_prob", "TEST_BAYES_KILL_PROB", 0.90)
 
-    floor_min = _cfg_or_env_f(settings, "testing.engine.adaptive_ctr.floor_min", "TEST_ADAPTIVE_CTR_FLOOR_MIN", 0.008)
-    floor_scale = _cfg_or_env_f(settings, "testing.engine.adaptive_ctr.floor_scale", "TEST_ADAPTIVE_CTR_FLOOR_SCALE", 0.70)
-    min_imps_for_floor = _cfg_or_env_i(settings, "testing.engine.adaptive_ctr.min_impressions", "TEST_MIN_IMPRESSIONS_FOR_FLOOR", 300)
+    floor_min = cfg_or_env_f(settings, "testing.engine.adaptive_ctr.floor_min", "TEST_ADAPTIVE_CTR_FLOOR_MIN", 0.008)
+    floor_scale = cfg_or_env_f(settings, "testing.engine.adaptive_ctr.floor_scale", "TEST_ADAPTIVE_CTR_FLOOR_SCALE", 0.70)
+    min_imps_for_floor = cfg_or_env_i(settings, "testing.engine.adaptive_ctr.min_impressions", "TEST_MIN_IMPRESSIONS_FOR_FLOOR", 300)
 
-    ewma_alpha = _cfg_or_env_f(settings, "testing.engine.fatigue.ewma_alpha", "TEST_EWMA_ALPHA", 0.30)
-    fatigue_drop_pct = _cfg_or_env_f(settings, "testing.engine.fatigue.drop_pct", "TEST_FATIGUE_DROP_PCT", 0.35)
+    ewma_alpha = cfg_or_env_f(settings, "testing.engine.fatigue.ewma_alpha", "TEST_EWMA_ALPHA", 0.30)
+    fatigue_drop_pct = cfg_or_env_f(settings, "testing.engine.fatigue.drop_pct", "TEST_FATIGUE_DROP_PCT", 0.35)
 
-    pause_after_promotion = _cfg_or_env_b(settings, "testing.engine.promotion.pause_after_promotion", "TEST_PAUSE_AFTER_PROMOTION", True)
-    validation_budget_eur = _cfg_or_env_f(settings, "testing.engine.promotion.validation_budget_eur", "TEST_VALIDATION_BUDGET_EUR", 40.0)
-    promotion_placements = _cfg_or_env_list(settings, "testing.engine.promotion.placements", "TEST_PROMOTION_PLACEMENTS", ["facebook", "instagram"])
+    pause_after_promotion = cfg_or_env_b(settings, "testing.engine.promotion.pause_after_promotion", "TEST_PAUSE_AFTER_PROMOTION", True)
+    validation_budget_eur = cfg_or_env_f(settings, "testing.engine.promotion.validation_budget_eur", "TEST_VALIDATION_BUDGET_EUR", 40.0)
+    promotion_placements = cfg_or_env_list(settings, "testing.engine.promotion.placements", "TEST_PROMOTION_PLACEMENTS", ["facebook", "instagram"])
 
-    max_launches_per_tick = _cfg_or_env_i(settings, "testing.engine.queue.max_launches_per_tick", "TEST_MAX_LAUNCHES_PER_TICK", 8)
+    max_launches_per_tick = cfg_or_env_i(settings, "testing.engine.queue.max_launches_per_tick", "TEST_MAX_LAUNCHES_PER_TICK", 8)
 
-    attr_windows = _cfg_or_env_list(settings, "testing.engine.attribution_windows", "TEST_ATTR_WINDOWS", ["7d_click", "1d_view"])
+    attr_windows = cfg_or_env_list(settings, "testing.engine.attribution_windows", "TEST_ATTR_WINDOWS", ["7d_click", "1d_view"])
 
-    adset_id = _cfg(settings, "ids.testing_adset_id")
-    validation_campaign_id = _cfg(settings, "ids.validation_campaign_id")
+    adset_id = cfg(settings, "ids.testing_adset_id")
+    validation_campaign_id = cfg(settings, "ids.validation_campaign_id")
 
-    keep_live = int(_cfg(settings, "queue_policies.keep_active_ads", _cfg(settings, "testing.keep_ads_live", 4)))
+    keep_live = int(cfg(settings, "queue_policies.keep_active_ads", cfg(settings, "testing.keep_ads_live", 4)))
 
     copy_bank = _load_copy_bank(settings)
     copy_strategy = (settings.get("copy_bank") or {}).get("strategy", "round_robin")
@@ -687,12 +594,12 @@ def run_testing_tick(
             _set_paused_alerted(store, ad_id, 1)
             continue
 
-        spend_today = _safe_f(r.get("spend"))
+        spend_today = safe_f(r.get("spend"))
         ctr_today = _ctr(r)
         purch_today, atc_today = _purchase_and_atc_counts(r)
 
         lr = lifetime_by_id.get(str(ad_id), {}) or {}
-        spend_life = _safe_f(lr.get("spend"))
+        spend_life = safe_f(lr.get("spend"))
         purch_life, atc_life = _purchase_and_atc_counts(lr)
 
         # Removed per-ad informational messages - now handled in consolidated run summary
@@ -708,7 +615,7 @@ def run_testing_tick(
 
         # fatigue
         if _fatigue_detect(store, ad_id, ctr_today, ewma_alpha=ewma_alpha, drop_pct=fatigue_drop_pct):
-            flag_key = _ad_day_flag_key(ad_id, "fatigue")
+            flag_key = ad_day_flag_key(ad_id, "fatigue")
             first_time_today = False
             try:
                 if int(store.get_counter(flag_key) or 0) == 0:
@@ -722,15 +629,15 @@ def run_testing_tick(
                     pass
             if first_time_today:
                 try:
-                    store.incr(_daily_key("TEST", "fatigued"), 1)
+                    store.incr(daily_key("TEST", "fatigued"), 1)
                 except Exception:
                     pass
             alert_fatigue("TEST", name, "ctr drop vs trend, monitor")
             summary["fatigue_flags"] += 1
 
         bayes_p = _bayes_kill_prob(
-            _safe_f(r.get("clicks")),
-            _safe_f(r.get("impressions")),
+            safe_f(r.get("clicks")),
+            safe_f(r.get("impressions")),
             ctr_floor,
             prior_a=prior_a,
             prior_b=prior_b,
@@ -756,7 +663,7 @@ def run_testing_tick(
                     _set_paused_alerted(store, ad_id, 1)
 
                 try:
-                    store.incr(_daily_key("TEST", "kills"), 1)
+                    store.incr(daily_key("TEST", "kills"), 1)
                 except Exception:
                     pass
 
@@ -799,7 +706,7 @@ def run_testing_tick(
                     _set_paused_alerted(store, ad_id, 1)
 
                 try:
-                    store.incr(_daily_key("TEST", "kills"), 1)
+                    store.incr(daily_key("TEST", "kills"), 1)
                 except Exception:
                     pass
 
@@ -877,7 +784,7 @@ def run_testing_tick(
                     alert_promote("TEST", "VALID", label, budget=float(validation_budget_eur))
 
                 try:
-                    store.incr(_daily_key("TEST", "promotions"), 1)
+                    store.incr(daily_key("TEST", "promotions"), 1)
                 except Exception:
                     pass
 
@@ -963,7 +870,7 @@ def run_testing_tick(
         video_id_raw = p.get("video_id")
         video_id = _normalize_video_id_cell(video_id_raw)
         if not label_core or not video_id or not video_id.isdigit():
-            notify(f"⚠️ [TEST] Skipping '{label_core or 'UNNAMED'}' — invalid video_id (got: {video_id_raw!r}).")
+            notify(f"⚠️ [TEST] Skipping '{label_core or 'UNNAMED'}' - invalid video_id (got: {video_id_raw!r}).")
             continue
 
         try:
@@ -1035,7 +942,7 @@ def run_testing_tick(
             ad = meta.create_ad(adset_id, cname, creative_id=creative["id"], status="ACTIVE")
 
             try:
-                store.incr(_daily_key("TEST", "launched"), 1)
+                store.incr(daily_key("TEST", "launched"), 1)
             except Exception:
                 pass
 
