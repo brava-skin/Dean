@@ -585,7 +585,7 @@ def summarize_counts(label: str, summary: Optional[Dict[str, Any]]) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Brava — Continuous Creative Testing & Scaling"
+        description="Brava - Continuous Creative Testing & Scaling"
     )
     parser.add_argument("--settings", default="config/settings.yaml")
     parser.add_argument("--rules", default="config/rules.yaml")
@@ -654,7 +654,7 @@ def main() -> None:
             print("Fatal configuration error. Exiting.", file=sys.stderr)
             sys.exit(1)
 
-    # Store (SQLite) — path from settings or default
+    # Store (SQLite) - path from settings or default
     sqlite_path = (settings.get("logging") or {}).get("sqlite_path", "data/automation.sqlite")
     store = Store(sqlite_path)
 
@@ -757,12 +757,12 @@ def main() -> None:
                 res = wrapped(*fn_args, **fn_kwargs)
                 dt = time.time() - t0
                 failures_in_row = 0
-                notify(f"✅ [{label}] {dt:.1f}s — {summarize_counts(label, res)}")
+                # Stage success notifications removed - now handled in consolidated message
                 return res
             except Exception as e:
                 failures_in_row += 1
                 dt = time.time() - t0
-                notify(f"❌ [{label}] {dt:.1f}s — {e}")
+                notify(f"❌ [{label}] {dt:.1f}s - {e}")
                 if failures_in_row >= CIRCUIT_BREAKER_FAILS:
                     notify(
                         f"🧯 Circuit breaker tripped ({failures_in_row}); switching to read-only for remainder."
@@ -856,11 +856,41 @@ def main() -> None:
             stage_summaries=stage_summaries
         )
         
-        # TODO: Collect ad insights and post as thread reply
-        # This would require fetching ad insights and formatting them
-        # For now, we'll skip the thread reply as it requires more complex data collection
+        # Collect ad insights and post as thread reply
+        try:
+            ad_lines = []
+            # Get ad insights for the thread snapshot
+            if stage_choice in ("all", "testing"):
+                try:
+                    testing_ads = client.get_ad_insights(
+                        level="ad",
+                        filtering=[{"field": "adset.id", "operator": "IN", "value": [settings.get("ids", {}).get("testing_adset_id")]}],
+                        fields=["ad_id", "ad_name", "spend", "actions"],
+                        date_preset="today",
+                        paginate=True
+                    )
+                    for ad in testing_ads or []:
+                        ad_name = ad.get("ad_name", "")
+                        spend_today = float(ad.get("spend", 0))
+                        purch_today = sum(int(a.get("value", 0)) for a in (ad.get("actions") or []) if a.get("action_type") == "purchase")
+                        clean_name = prettify_ad_name(ad_name)
+                        ad_lines.append(f"• {clean_name}, spend {fmt_eur(spend_today)} today, life {fmt_eur(spend_today)}, purch {purch_today}")
+                except Exception:
+                    pass
+            
+            # Limit to 4 lines, show "more" if needed
+            if len(ad_lines) > 4:
+                display_lines = ad_lines[:4]
+                display_lines.append(f"+ {len(ad_lines) - 4} more in thread")
+            else:
+                display_lines = ad_lines
+            
+            if display_lines:
+                post_thread_ads_snapshot(thread_ts, display_lines)
+        except Exception:
+            pass
 
-    # Console summary
+    # Console summary (logs only, not Slack)
     print("---- RUN SUMMARY ----")
     print(
         json.dumps(
