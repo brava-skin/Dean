@@ -349,5 +349,5 @@ cbo:
 
 # ── Copy bank ────────────────────────────────────────────────────────────────
 copy_bank:
-  path: "dean/data/copy_bank.json"
+  path: "data/copy_bank.json"
   strategy: "round_robin"
