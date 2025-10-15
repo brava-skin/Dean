@@ -336,7 +336,7 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
 
     # ----- Fetch TODAY (default window) and LIFETIME (since ad launch) -----
     try:
-        # Today/default — used for performance metrics, promotion logic, etc.
+        # Today/default - used for performance metrics, promotion logic, etc.
         rows = meta.get_ad_insights(
             level="ad",
             filtering=[{"field": "campaign.id", "operator": "IN", "value": [validation_campaign_id]}],
@@ -357,7 +357,7 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
             action_attribution_windows=list(attr_windows),
             paginate=True,
         )
-        # Lifetime — used to decide kills on total spend since launch
+        # Lifetime - used to decide kills on total spend since launch
         rows_life = meta.get_ad_insights(
             level="ad",
             filtering=[{"field": "campaign.id", "operator": "IN", "value": [validation_campaign_id]}],
