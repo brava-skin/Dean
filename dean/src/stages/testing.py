@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple, Callable
 import pandas as pd
 from zoneinfo import ZoneInfo  # account-local timezone
 
-from slack import alert_kill, alert_promote, notify
+from slack import alert_kill, alert_promote, alert_fatigue, alert_data_quality, alert_error, notify
 
 UTC = timezone.utc
 LOCAL_TZ = ZoneInfo(os.getenv("ACCOUNT_TZ", os.getenv("ACCOUNT_TIMEZONE", "Europe/Amsterdam")))
@@ -695,10 +695,7 @@ def run_testing_tick(
         spend_life = _safe_f(lr.get("spend"))
         purch_life, atc_life = _purchase_and_atc_counts(lr)
 
-        try:
-            notify(f"ℹ️ [TEST] {name}: lifetime_spend={spend_life:.2f} purchases={purch_life} today_spend={spend_today:.2f}")
-        except Exception:
-            pass
+        # Removed per-ad informational messages - now handled in consolidated run summary
 
         if (spend_today < min_spend_before_kill and spend_life < min_spend_before_kill) and \
            not _meets_minimums(r, min_impressions, min_clicks, min_spend):
@@ -706,7 +703,7 @@ def run_testing_tick(
 
         dq = _data_quality_sentry(r, min_spend_for_alert=20.0)
         if dq:
-            notify(f"🩺 [TEST] {name}: {dq}")
+            alert_data_quality("TEST", name, dq)
             summary["data_quality_alerts"] += 1
 
         # fatigue
@@ -728,7 +725,7 @@ def run_testing_tick(
                     store.incr(_daily_key("TEST", "fatigued"), 1)
                 except Exception:
                     pass
-            notify(f"🟡 [TEST] Fatigue signal on {name} (CTR drop vs trend).")
+            alert_fatigue("TEST", name, "ctr drop vs trend, monitor")
             summary["fatigue_flags"] += 1
 
         bayes_p = _bayes_kill_prob(
@@ -755,7 +752,7 @@ def run_testing_tick(
                     try:
                         alert_kill("TEST", name, reason, {"CTR": f"{ctr_today:.2%}", "ROAS": f"{_roas(r):.2f}"})
                     except Exception:
-                        notify(f"🛑 [TEST] Killed {name} — {reason}")
+                        alert_kill("TEST", name, reason, {"CTR": f"{ctr_today:.2%}", "ROAS": f"{_roas(r):.2f}"})
                     _set_paused_alerted(store, ad_id, 1)
 
                 try:
@@ -798,7 +795,7 @@ def run_testing_tick(
                     try:
                         alert_kill("TEST", name, reason, {"CTR": f"{ctr_today:.2%}", "ROAS": f"{_roas(r):.2f}"})
                     except Exception:
-                        notify(f"🛑 [TEST] Killed {name} — {reason}")
+                        alert_kill("TEST", name, reason, {"CTR": f"{ctr_today:.2%}", "ROAS": f"{_roas(r):.2f}"})
                     _set_paused_alerted(store, ad_id, 1)
 
                 try:
@@ -877,7 +874,7 @@ def run_testing_tick(
                 try:
                     alert_promote("TEST", "VALID", label, budget=float(validation_budget_eur))
                 except Exception:
-                    notify(f"✅ [TEST→VALID] {label} — {adv_reason} (Budget: {ACCOUNT_CURRENCY_SYMBOL}{validation_budget_eur:.0f}/day)")
+                    alert_promote("TEST", "VALID", label, budget=float(validation_budget_eur))
 
                 try:
                     store.incr(_daily_key("TEST", "promotions"), 1)
@@ -1052,7 +1049,7 @@ def run_testing_tick(
                 stage="TEST",
                 meta={"testing_adset_id": adset_id, "ig_mode": mode},
             )
-            notify(f"🟢 [TEST] Launched {label_core}")
+            # Launch notification removed - now handled in consolidated run summary
             summary["launched"] += 1
             _record_queue_feedback(store, label_core, clicks=1, imps=200)
 
