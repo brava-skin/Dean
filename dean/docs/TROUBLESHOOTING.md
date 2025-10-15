@@ -388,7 +388,7 @@ except Exception as e:
 "
 
 # Check webhook URL format
-# Should be: https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX
+# Should be: https://hooks.slack.com/services/YOUR/TEAM/TOKEN
 echo $SLACK_WEBHOOK_URL
 
 # Verify webhook is active
@@ -409,7 +409,7 @@ echo $SLACK_WEBHOOK_URL
 # Check channel permissions
 
 # Test with different webhook
-export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/YOUR/NEW/WEBHOOK"
+export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/YOUR/TEAM/TOKEN"
 python -c "
 from src.slack import notify
 notify('Test with new webhook')
