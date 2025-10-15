@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from slack import alert_kill, alert_promote, notify
+from slack import alert_kill, alert_promote, alert_error, notify
 
 UTC = timezone.utc
 
@@ -394,11 +394,7 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
         spend_life = _safe_f(lr.get("spend"))
         purch_life, _atc_life = _purchase_and_atc_counts(lr)
 
-        # Quick log
-        try:
-            notify(f"ℹ️ [VALID] {ad_name}: lifetime_spend={spend_life:.2f} purchases={purch_life} today_spend={spend_today:.2f}")
-        except Exception:
-            pass
+        # Removed per-ad informational messages - now handled in consolidated run summary
 
         # Fairness gating
         if (spend_today < fair_min_spend_before_kill and spend_life < fair_min_spend_before_kill) and not _meets_minimums(r, min_spend, min_imps, min_clicks):
@@ -471,7 +467,12 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
                             {"spend_life": f"{spend_life:.0f}", "CTR": f"{ctr_today:.2%}", "ROAS": f"{roas_today:.2f}"},
                         )
                     except Exception:
-                        notify(f"🛑 [VALID] Killed {ad_name} — {reason}")
+                        alert_kill(
+                            "VALID",
+                            ad_name,
+                            reason,
+                            {"spend_life": f"{spend_life:.0f}", "CTR": f"{ctr_today:.2%}", "ROAS": f"{roas_today:.2f}"},
+                        )
                     summary["kills"] += 1
                 except Exception as e:
                     notify(f"❗ [VALID] Pause failed for {ad_name}: {e}")
@@ -574,7 +575,7 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
                 try:
                     alert_promote("VALID", "SCALE", creative_label, budget=start_budget)
                 except Exception:
-                    notify(f"🚀 [VALID→SCALE] {creative_label} — {adv_reason} (start {ACCOUNT_CURRENCY_SYMBOL}{start_budget:.0f}/d)")
+                    alert_promote("VALID", "SCALE", creative_label, budget=start_budget)
                 if pause_after_promotion:
                     try:
                         meta.pause_ad(ad_id)
