@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 """
-Production-ready advanced scaler with lifetime-aware tripwires — now fully tunable via rules.yaml.
+Production-ready advanced scaler with lifetime-aware tripwires - now fully tunable via rules.yaml.
 
 What changed (high level):
 - All knobs can be driven from settings["scaling"]["engine"] with sensible env-var fallbacks.
@@ -648,7 +648,7 @@ class AdvancedScalerRunner:
         scaling_campaign_id = settings["ids"]["scaling_campaign_id"]
         freeze, velo = self._pacing_freeze(scaling_campaign_id, cfg)
         if freeze:
-            notify(f"🧯 [SCALE] velocity high (24h×{velo['g24']:.2f}, 48h×{velo['g48']:.2f}) — freeze scale-ups")
+            notify(f"🧯 [SCALE] velocity high (24h×{velo['g24']:.2f}, 48h×{velo['g48']:.2f}) - freeze scale-ups")
 
         try:
             # Today/default
