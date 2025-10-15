@@ -305,3 +305,93 @@ redistribution:
   strategy: "proportional_to_roas"
   min_increment_per_winner: 10   # EUR
 
+config_refs:
+  testing:
+    daily_budget_eur: 50
+    daily_budget_usd: 50
+    keep_ads_live: 4
+    max_active_ads: 4
+    minimums:
+      min_impressions: 300
+      min_clicks: 0
+      min_spend_eur: 10
+      min_spend_usd: 10
+    fairness:
+      min_spend_before_kill_eur: 20
+      min_spend_before_kill_usd: 20
+      min_runtime_hours: 12
+    queue_rotation:
+      max_launches_per_day: 8
+
+  validation:
+    adset_budget_eur: 40
+    adset_budget_usd: 40
+    min_days: 2
+    max_days: 3
+    total_spend_cap_eur: 120
+    total_spend_cap_usd: 120
+    minimums:
+      min_impressions: 600
+      min_clicks: 30
+      min_spend_eur: 40
+      min_spend_usd: 40
+
+  scaling:
+    adset_start_budget_eur: 100
+    adset_start_budget_usd: 100
+    cbo_entry_budget_eur: 400
+    cbo_entry_budget_usd: 400
+    cbo_increment_pct: [50, 100]
+    budget:
+      min_eur: 10
+      max_eur: 5000
+      min_usd: 10
+      max_usd: 5000
+      max_step_pct: 100
+      cooldown_hours_after_scale: 24
+    hysteresis:
+      roas_down_band: 1.7
+      cpa_up_band: 33
+    reinvestment:
+      allocate_pct_of_freed: 50
+      min_increment_eur: 10
+      min_increment_usd: 10
+    refresh_winner:
+      after_good_days: 7
+      cpa_max: 22
+      roas_min: 3.0
+
+  guardrails:
+    account_cpa_pause_factor: 1.5
+    account_cpa_window_days: 2
+    no_purchases_tripwire_hours: 48
+    global_daily_cap_eur: 3000
+    global_daily_cap_usd: 3000
+    spend_velocity:
+      warn_24h_growth_x: 1.5
+      warn_48h_growth_x: 2.5
+    scaling_freeze_days_on_worsen: 3
+
+  overrides:
+    emergency_stop:
+      api_error_rate_threshold_pct: 40
+      tracking_flatline_hours: 24
+      api_error_rate_window_minutes: 15
+
+  data_quality:
+    missing_actions_min_spend_eur: 20
+    missing_actions_min_spend_usd: 20
+    tracking_drop_pct_vs_7d_avg: 60
+
+  queue_validation:
+    min_duration_sec: 5
+    max_duration_sec: 120
+
+  cbo:
+    min_adsets: 2
+    max_adsets: 8
+    min_per_adset_eur: 80
+    min_per_adset_usd: 80
+    budget_increment_pct: [50, 100]
+    cooldown_hours: 24
+
