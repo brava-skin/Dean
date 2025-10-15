@@ -290,7 +290,6 @@ notifications:
 reporting:
   exports:
     daily_digest_jsonl: "dean/data/digests/digest_{date}.jsonl"
-    dayparting_log_jsonl: "dean/data/dayparting_actions.log.jsonl"
   fields_in_digest: ["stage", "action", "entities", "ctr", "cpa", "roas", "reason"]
 
 # ── Economics ────────────────────────────────────────────────────────────────
