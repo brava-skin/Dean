@@ -49,6 +49,10 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from metrics import Metrics, MetricsConfig, metrics_from_row
 from slack import notify, alert_kill, alert_scale, alert_error
+from utils import (
+    getenv_f, getenv_i, getenv_b, cfg, cfg_or_env_f, cfg_or_env_i, cfg_or_env_b, cfg_or_env_list,
+    safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name
+)
 
 # ====== Time ======
 UTC = timezone.utc
@@ -66,22 +70,22 @@ LOCAL_TZ = ZoneInfo(ACCOUNT_TZ_NAME) if ZoneInfo else None
 def _now_local() -> datetime:
     return datetime.now(LOCAL_TZ) if LOCAL_TZ else _now()
 
-def _today_str() -> str:
+def today_str() -> str:
     return _now_local().strftime("%Y-%m-%d")
 
-def _daily_key(stage: str, metric: str) -> str:
+def daily_key(stage: str, metric: str) -> str:
     # daily::<YYYY-MM-DD>::STAGE::metric
-    return f"daily::{_today_str()}::{stage}::{metric}"
+    return f"daily::{today_str()}::{stage}::{metric}"
 
 # ====== Helpers for config resolution ======
-def _env_bool(name: str, default: bool) -> bool:
+def getenv_b(name: str, default: bool) -> bool:
     return (os.getenv(name, str(int(default))) or "").lower() in ("1", "true", "yes", "y")
 
-def _env_f(name: str, default: float) -> float:
+def getenv_f(name: str, default: float) -> float:
     try: return float(os.getenv(name, str(default)))
     except Exception: return default
 
-def _env_i(name: str, default: int) -> int:
+def getenv_i(name: str, default: int) -> int:
     try: return int(os.getenv(name, str(default)))
     except Exception: return default
 
@@ -140,40 +144,40 @@ class ScaleConfig:
         eng = _get(settings, ["scaling", "engine"], {}) or {}
 
         # minimums
-        min_imps  = int(_get(eng, ["minimums", "min_impressions"], _env_i("SCALE_MIN_IMPRESSIONS", 1000)))
-        min_click = int(_get(eng, ["minimums", "min_clicks"], _env_i("SCALE_MIN_CLICKS", 50)))
-        min_spend = float(_get(eng, ["minimums", "min_spend"], _env_f("SCALE_MIN_SPEND", 50.0)))
+        min_imps  = int(_get(eng, ["minimums", "min_impressions"], getenv_i("SCALE_MIN_IMPRESSIONS", 1000)))
+        min_click = int(_get(eng, ["minimums", "min_clicks"], getenv_i("SCALE_MIN_CLICKS", 50)))
+        min_spend = float(_get(eng, ["minimums", "min_spend"], getenv_f("SCALE_MIN_SPEND", 50.0)))
 
         # hysteresis
-        roas_down = float(_get(eng, ["hysteresis", "roas_down_band"], _env_f("SCALE_HYST_ROAS_DOWN", 1.7)))
-        cpa_up    = float(_get(eng, ["hysteresis", "cpa_up_band"], _env_f("SCALE_HYST_CPA_UP", 33.0)))
+        roas_down = float(_get(eng, ["hysteresis", "roas_down_band"], getenv_f("SCALE_HYST_ROAS_DOWN", 1.7)))
+        cpa_up    = float(_get(eng, ["hysteresis", "cpa_up_band"], getenv_f("SCALE_HYST_CPA_UP", 33.0)))
         dwn_fac   = float(_get(eng, ["hysteresis", "downscale_factor"], 0.5))
 
         # kills + thresholds
-        kill_cpa_days = int(_get(eng, ["kills", "cpa_days"], _env_i("SCALE_KILL_CPA_DAYS", 2)))
-        kill_roas_days = int(_get(eng, ["kills", "roas_days"], _env_i("SCALE_KILL_ROAS_DAYS", 3)))
+        kill_cpa_days = int(_get(eng, ["kills", "cpa_days"], getenv_i("SCALE_KILL_CPA_DAYS", 2)))
+        kill_roas_days = int(_get(eng, ["kills", "roas_days"], getenv_i("SCALE_KILL_ROAS_DAYS", 3)))
         kill_cpa_thresh = float(_get(eng, ["kills", "thresholds", "cpa_gte"], 40.0))
         kill_roas_min = float(_get(eng, ["kills", "thresholds", "roas_lt"], 1.2))
-        life_tripwire = float(_get(eng, ["kills", "lifetime_tripwires", "spend_no_purchase_eur"], _env_f("SCALE_SPEND_NO_PURCHASE_EUR", 150.0)))
+        life_tripwire = float(_get(eng, ["kills", "lifetime_tripwires", "spend_no_purchase_eur"], getenv_f("SCALE_SPEND_NO_PURCHASE_EUR", 150.0)))
 
         # scale up
-        cooldown = int(_get(eng, ["scale_up", "cooldown_hours"], _env_i("SCALE_COOLDOWN_H", 24)))
-        max_step = int(_get(eng, ["scale_up", "max_scale_step_pct"], _env_i("SCALE_MAX_SCALE_STEP_PCT", 200)))
+        cooldown = int(_get(eng, ["scale_up", "cooldown_hours"], getenv_i("SCALE_COOLDOWN_H", 24)))
+        max_step = int(_get(eng, ["scale_up", "max_scale_step_pct"], getenv_i("SCALE_MAX_SCALE_STEP_PCT", 200)))
         bands = list(_get(eng, ["scale_up", "bands"], [])) or [
             {"cpa_lte": 22.0, "roas_gte": 3.0, "inc_pct": 100.0},
             {"cpa_lte": 27.0, "roas_gte": 2.0, "inc_pct": 50.0},
         ]
 
         # duplication
-        dup_cap = int(_get(eng, ["duplication", "max_duplicates_per_24h"], _env_i("SCALE_DUP_CAP_24H", 3)))
+        dup_cap = int(_get(eng, ["duplication", "max_duplicates_per_24h"], getenv_i("SCALE_DUP_CAP_24H", 3)))
         dup_p = int(_get(eng, ["duplication", "purchases_gte"], 5))
         dup_cpa = float(_get(eng, ["duplication", "cpa_lte"], 27.0))
         dup_each = int(_get(eng, ["duplication", "max_each_action"], 2))
 
         # reinvest
-        r_share = float(_get(eng, ["reinvest", "share"], _env_f("SCALE_REINVEST_SHARE", 0.5)))
-        r_min = float(_get(eng, ["reinvest", "min_bump_eur"], _env_f("SCALE_REINVEST_MIN_BUMP", 10.0)))
-        r_moves = int(_get(eng, ["reinvest", "portfolio_max_moves"], _env_i("SCALE_PORTFOLIO_MAX_MOVES", 6)))
+        r_share = float(_get(eng, ["reinvest", "share"], getenv_f("SCALE_REINVEST_SHARE", 0.5)))
+        r_min = float(_get(eng, ["reinvest", "min_bump_eur"], getenv_f("SCALE_REINVEST_MIN_BUMP", 10.0)))
+        r_moves = int(_get(eng, ["reinvest", "portfolio_max_moves"], getenv_i("SCALE_PORTFOLIO_MAX_MOVES", 6)))
 
         # attr windows
         attr = tuple(_get(eng, ["attribution_windows"], None) or (os.getenv("SCALE_ATTR_WINDOWS", "7d_click,1d_view") or "7d_click,1d_view").split(","))
@@ -421,7 +425,7 @@ class SmartScaler:
 
                     # daily counter: SCALING kills++
                     try:
-                        self.store.incr(_daily_key("SCALING", "kills"), 1)
+                        self.store.incr(daily_key("SCALING", "kills"), 1)
                     except Exception:
                         pass
 
@@ -485,7 +489,7 @@ class SmartScaler:
                     summary["downscaled"] += 1
                     # daily counter: SCALING downscaled++
                     try:
-                        self.store.incr(_daily_key("SCALING", "downscaled"), 1)
+                        self.store.incr(daily_key("SCALING", "downscaled"), 1)
                     except Exception:
                         pass
                 except Exception:
@@ -509,7 +513,7 @@ class SmartScaler:
                         summary["scaled"] += 1
                         # daily counter: SCALING scaled++
                         try:
-                            self.store.incr(_daily_key("SCALING", "scaled"), 1)
+                            self.store.incr(daily_key("SCALING", "scaled"), 1)
                         except Exception:
                             pass
                     except Exception:
@@ -541,7 +545,7 @@ class SmartScaler:
                         summary["duped"] += allow
                         # daily counter: SCALING duped += allow
                         try:
-                            self.store.incr(_daily_key("SCALING", "duped"), allow)
+                            self.store.incr(daily_key("SCALING", "duped"), allow)
                         except Exception:
                             pass
                     except Exception:
@@ -562,7 +566,7 @@ class SmartScaler:
                         summary["refreshed"] += 1
                         # daily counter: SCALING refreshed++
                         try:
-                            self.store.incr(_daily_key("SCALING", "refreshed"), 1)
+                            self.store.incr(daily_key("SCALING", "refreshed"), 1)
                         except Exception:
                             pass
                     except Exception:
