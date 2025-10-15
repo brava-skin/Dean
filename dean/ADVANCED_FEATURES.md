@@ -10,8 +10,8 @@ This document describes the advanced features of the Smart Scheduler system that
 - **Smart Detection**: Automatically skips already-processed ticks
 
 ### **2. Intelligent Timing**
-- **Peak Hour Avoidance**: Delays execution during high-traffic business hours
-- **Timezone Optimization**: Avoids running during likely sleep hours
+- **American Peak Hour Avoidance**: Delays execution during US business hours (9-11 AM and 2-4 PM EST)
+- **American Timezone Optimization**: Avoids running during US sleep hours (2-6 AM EST)
 - **Adaptive Delays**: Adjusts timing based on system performance
 
 ### **3. Advanced Reliability**
@@ -99,12 +99,13 @@ Get intelligent recommendations:
 
 ### **1. Smart Timing**
 ```python
-# Automatic peak hour avoidance
-if hour in [9, 10, 11, 14, 15, 16]:  # Peak business hours
+# American peak hour avoidance (EST)
+est_hour = (amsterdam_hour + 6) % 24  # Convert Amsterdam to EST
+if est_hour in [9, 10, 11, 14, 15, 16]:  # US business hours
     delay_execution(300)  # 5 minute delay
 
-# Timezone optimization
-if 2 <= current_time.hour <= 6:  # Sleep hours
+# American timezone optimization (EST)
+if 2 <= est_hour <= 6:  # US sleep hours (2-6 AM EST = 8-12 PM Amsterdam)
     delay_execution(600)  # 10 minute delay
 ```
 

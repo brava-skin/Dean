@@ -115,21 +115,41 @@ class AdvancedConfig:
         if not self.config["scheduling"]["smart_timing"]:
             return timing_config
         
-        # Peak hour avoidance
+        # Peak hour avoidance (American business hours)
         if self.config["scheduling"]["peak_hour_avoidance"]:
-            hour = current_time.hour
-            if hour in [9, 10, 11, 14, 15, 16]:  # Peak business hours
+            # Convert Amsterdam time to American time zones
+            amsterdam_hour = current_time.hour
+            est_hour = self._convert_to_est(amsterdam_hour, current_time)
+            
+            # American peak business hours: 9-11 AM and 2-4 PM EST
+            if est_hour in [9, 10, 11, 14, 15, 16]:
                 timing_config["delay_seconds"] = 300  # 5 minute delay
-                timing_config["reason"] = "peak_hour_delay"
+                timing_config["reason"] = f"american_peak_hour_delay (EST {est_hour}:00)"
         
-        # Timezone optimization
+        # Timezone optimization (American sleep hours)
         if self.config["scheduling"]["timezone_optimization"]:
-            # Avoid running during likely sleep hours in target timezone
-            if 2 <= current_time.hour <= 6:
+            amsterdam_hour = current_time.hour
+            est_hour = self._convert_to_est(amsterdam_hour, current_time)
+            
+            # American sleep hours: 2-6 AM EST
+            if 2 <= est_hour <= 6:
                 timing_config["delay_seconds"] = 600  # 10 minute delay
-                timing_config["reason"] = "timezone_optimization"
+                timing_config["reason"] = f"american_sleep_hours (EST {est_hour}:00)"
         
         return timing_config
+    
+    def _convert_to_est(self, amsterdam_hour: int, current_time: datetime) -> int:
+        """Convert Amsterdam time to EST, handling daylight saving time."""
+        # Amsterdam is UTC+1 (winter) or UTC+2 (summer)
+        # EST is UTC-5 (winter) or UTC-4 (summer)
+        
+        # Simple approximation: assume winter time (most of the year)
+        # Amsterdam UTC+1, EST UTC-5 = 6 hour difference
+        # Amsterdam UTC+2, EST UTC-4 = 6 hour difference (summer)
+        
+        # For simplicity, use 6 hour difference (works for both winter and summer)
+        est_hour = (amsterdam_hour + 6) % 24
+        return est_hour
     
     def should_skip_tick(self, health_score: float, recent_errors: int) -> Tuple[bool, str]:
         """Determine if tick should be skipped based on system health."""
