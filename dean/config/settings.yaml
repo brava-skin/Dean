@@ -19,10 +19,10 @@ notifications_timezone: "Europe/Amsterdam"
 dst_note: "Windows are interpreted in account timezone; notifications in EU/AMS."
 
 ids:
-  testing_campaign_id: {{rules.ids.testing_campaign_id}}
-  testing_adset_id: {{rules.ids.testing_adset_id}}
-  validation_campaign_id: {{rules.ids.validation_campaign_id}}
-  scaling_campaign_id: {{rules.ids.scaling_campaign_id}}
+  testing_campaign_id: "120231486463120192"
+  testing_adset_id: "120231486463140192"
+  validation_campaign_id: "120231533068950192"
+  scaling_campaign_id: "120231533113610192"
 
 profiles:
   production:
