@@ -325,30 +325,9 @@ def load_queue_supabase(
 
     table = table or os.getenv("SUPABASE_TABLE", "meta_creatives")
     try:
-        # First, let's check what columns exist in the table
-        try:
-            # Try to get table info to see what columns exist
-            table_info = sb.table(table).select("*").limit(1).execute()
-            if table_info.data:
-                available_columns = list(table_info.data[0].keys())
-                notify(f"📋 Available columns in {table}: {available_columns}")
-            else:
-                available_columns = ["id", "video_id", "filename", "avatar", "visual_style", "script", "status"]
-        except Exception:
-            available_columns = ["id", "video_id", "filename", "avatar", "visual_style", "script", "status"]
-        
-        # Build select query with only available columns
-        select_columns = []
-        for col in ["id", "video_id", "filename", "avatar", "visual_style", "script", "status"]:
-            if col in available_columns:
-                select_columns.append(col)
-        
-        if not select_columns:
-            notify(f"❗ No valid columns found in table {table}")
-            return pd.DataFrame(columns=cols)
-        
+        # Build select query with required columns
+        select_columns = ["id", "video_id", "filename", "avatar", "visual_style", "script", "status"]
         select_str = ", ".join(select_columns)
-        notify(f"🔍 Selecting columns: {select_str}")
         
         q = (
             sb.table(table)

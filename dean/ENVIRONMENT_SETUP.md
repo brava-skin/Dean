@@ -55,7 +55,7 @@ DRY_RUN=false
 ### Supabase (Required)
 1. Create a Supabase project at [supabase.com](https://supabase.com)
 2. Get the project URL and service role key from Settings > API
-3. Run the setup script: `python setup_supabase.py`
+3. Run the setup script: `python scripts/setup_supabase.py`
 4. Follow the instructions to create the table with the correct schema
 
 ## Testing Without Full Setup
@@ -72,7 +72,7 @@ If you want to test the system without all credentials:
 The system uses **Supabase as the primary queue source**. Make sure to:
 1. Set up your Supabase project
 2. Configure the environment variables
-3. Run `python setup_supabase.py` to create the table schema
+3. Run `python scripts/setup_supabase.py` to create the table schema
 4. Add creative data to your Supabase table
 
 ## Copy Bank
