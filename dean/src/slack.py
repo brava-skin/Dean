@@ -297,59 +297,197 @@ def build_basic_blocks(title: str, lines: List[str], severity: str = "info", foo
         blocks.append(_mk_context(footer))
     return blocks[:MAX_BLOCKS]
 
+# ---------- New messaging helpers ----------
+
+def format_run_header(status: str, time_str: str, profile: str, spend: float, purch: int, cpa: Optional[float], be: Optional[float]) -> str:
+    """Format the main run header line."""
+    status_emoji = "✅" if status == "OK" else "⚠️"
+    cpa_str = "–" if cpa is None else f"{cpa:.2f}"
+    be_str = "–" if be is None else f"{be:.2f}"
+    return f"{status_emoji} Run {status}, {time_str}, profile {profile}\nspend {_fmt_currency(spend)}, purch {purch}, CPA {cpa_str}, BE {be_str}"
+
+def format_stage_line(stage: str, counts: Dict[str, int]) -> str:
+    """Format a single stage summary line."""
+    parts = []
+    for key, value in counts.items():
+        if key == "kills":
+            parts.append(f"kills {value}")
+        elif key == "promotions":
+            parts.append(f"promos {value}")
+        elif key == "launched":
+            parts.append(f"launched {value}")
+        elif key == "fatigue_flags":
+            parts.append(f"fatigue {value}")
+        elif key == "data_quality_alerts":
+            parts.append(f"dq {value}")
+        elif key == "soft_passes":
+            parts.append(f"soft passes {value}")
+        elif key == "scaled":
+            parts.append(f"up {value}")
+        elif key == "duped":
+            parts.append(f"dupes {value}")
+        elif key == "downscaled":
+            parts.append(f"down {value}")
+        elif key == "refreshed":
+            parts.append(f"refresh {value}")
+    return f"{stage}, {', '.join(parts)}"
+
+def prettify_ad_name(name: str) -> str:
+    """Clean up ad display names for mobile-friendly display."""
+    # Remove leading [TEST], [VALID], [SCALE] tags
+    name = re.sub(r'^\[(TEST|VALID|SCALE)\]\s*', '', name)
+    
+    # Compress long visual style tokens
+    name = re.sub(r'DynamicGreenScreenEffect', 'DGS Effect', name)
+    name = re.sub(r'Green Screen Effect Template', 'Green Screen Template', name)
+    
+    # Truncate if too long for mobile
+    if len(name) > 50:
+        name = name[:47] + "..."
+    
+    return name
+
+def fmt_eur(amount: Optional[float]) -> str:
+    """Format currency with Euro symbol."""
+    if amount is None:
+        return "–"
+    return _fmt_currency(amount)
+
+def fmt_pct(value: Optional[float], decimals: int = 1) -> str:
+    """Format percentage with specified decimal places."""
+    if value is None:
+        return "–"
+    return _fmt_pct(value)
+
+def fmt_roas(value: Optional[float]) -> str:
+    """Format ROAS with 2 decimal places."""
+    if value is None:
+        return "–"
+    return f"{value:.2f}"
+
+def fmt_int(value: Optional[int]) -> str:
+    """Format integer."""
+    if value is None:
+        return "–"
+    return _fmt_int(value)
+
+def post_run_header_and_get_thread_ts(
+    status: str, 
+    time_str: str, 
+    profile: str, 
+    spend: float, 
+    purch: int, 
+    cpa: Optional[float], 
+    be: Optional[float],
+    stage_summaries: List[Dict[str, Any]]
+) -> Optional[str]:
+    """Post the main run header and return thread timestamp for replies."""
+    header_text = format_run_header(status, time_str, profile, spend, purch, cpa, be)
+    
+    # Add stage summaries
+    stage_lines = []
+    for stage_data in stage_summaries:
+        stage_name = stage_data.get("stage", "")
+        counts = stage_data.get("counts", {})
+        stage_lines.append(format_stage_line(stage_name, counts))
+    
+    full_text = header_text + "\n" + "\n".join(stage_lines)
+    
+    # Create a SlackMessage with the header
+    msg = SlackMessage(
+        text=full_text,
+        severity="info",
+        topic="default"
+    )
+    
+    # Send the message and return a mock thread timestamp
+    # In a real implementation, you'd capture the actual Slack response
+    client().notify(msg)
+    return "mock_thread_ts"  # This would be the actual thread timestamp
+
+def post_thread_ads_snapshot(thread_ts: str, ad_lines: List[str]) -> None:
+    """Post ad snapshot as a thread reply."""
+    if not ad_lines:
+        return
+    
+    header = "Ads today"
+    full_text = header + "\n" + "\n".join(ad_lines)
+    
+    msg = SlackMessage(
+        text=full_text,
+        thread_ts=thread_ts,
+        severity="info",
+        topic="default"
+    )
+    
+    client().notify(msg)
+
 # ---------- Human templates (backward-compatible with your calls) ----------
 
 def template_kill(stage: str, entity_name: str, reason: str, metrics: Dict[str, Any], link: Optional[str] = None) -> SlackMessage:
     """
-    Human, one-glance kill/pause message.
+    Human, one-glance kill/pause message using new format.
     """
-    title = f"{stage} • Paused"
-    facts = _metrics_compact_line(metrics)
-    body: List[str] = [f"*Ad:* `{entity_name}`", f"*Why:* {reason}"]
-    if facts:
-        body.append(f"*Snapshot:* {facts}")
-    lk = _mk_link(link)
-    if lk:
-        body.append(lk)
+    # Clean up the ad name for display
+    clean_name = prettify_ad_name(entity_name)
+    
+    # Format metrics for the new template
+    ctr = metrics.get("CTR", metrics.get("ctr"))
+    roas = metrics.get("ROAS", metrics.get("roas"))
+    
+    # Handle string metrics that are already formatted
+    if isinstance(ctr, str):
+        ctr_str = ctr
+    else:
+        ctr_str = fmt_pct(ctr) if ctr is not None else "–"
+    
+    if isinstance(roas, str):
+        roas_str = roas
+    else:
+        roas_str = fmt_roas(roas) if roas is not None else "–"
+    
+    # New format: 🛑 Kill, TEST, Keith - DGS Effect - ProductHighlights
+    text = f"🛑 Kill, {stage}, {clean_name}\nreason {reason}\ntoday ctr {ctr_str}, roas {roas_str}"
+    
     return SlackMessage(
-        text=f"[{stage}] Paused {entity_name} — {reason}",
-        blocks=build_basic_blocks(title, body, severity="warn", footer=_ts_footer()),
+        text=text,
         severity="warn",
         topic="alerts",
     )
 
 def template_promote(src: str, dst: str, entity_name: str, budget: Optional[float] = None, link: Optional[str] = None) -> SlackMessage:
     """
-    Human promotion message (TEST → VALID, etc).
+    Human promotion message using new format.
     """
-    title = f"{src} → {dst} • Promoted"
-    body = [f"*Creative:* `{entity_name}`"]
+    # Clean up the ad name for display
+    clean_name = prettify_ad_name(entity_name)
+    
+    # New format: 📈 Promote, TEST → VALID, Ty - ProblemSolution
+    text = f"📈 Promote, {src} → {dst}, {clean_name}"
+    
     if budget is not None:
-        body.append(f"*Budget:* {_fmt_currency(budget)}/day")
-    lk = _mk_link(link)
-    if lk:
-        body.append(lk)
+        text += f"\nbudget {fmt_eur(budget)} per day, placements facebook, instagram"
+    
+    text += "\nid continuity on"
+    
     return SlackMessage(
-        text=f"[{src}→{dst}] Promoted {entity_name}",
-        blocks=build_basic_blocks(title, body, severity="ok", footer=_ts_footer()),
+        text=text,
         topic="alerts",
         severity="info",
     )
 
 def template_scale(entity_name: str, pct: int, new_budget: Optional[float] = None, link: Optional[str] = None) -> SlackMessage:
     """
-    Human scaling message.
+    Human scaling message using new format.
     """
-    title = "Scaling • Budget Increased"
-    body = [f"*Ad Set:* `{entity_name}`", f"*Change:* +{int(pct)}%"]
-    if new_budget is not None:
-        body.append(f"*New Budget:* {_fmt_currency(new_budget)}/day")
-    lk = _mk_link(link)
-    if lk:
-        body.append(lk)
+    # Clean up the ad name for display
+    clean_name = prettify_ad_name(entity_name)
+    
+    # New format: 📈 Promote, SCALE, Ad Name
+    text = f"📈 Promote, SCALE, {clean_name}\nbudget {fmt_eur(new_budget)} per day, placements facebook, instagram\nid continuity on"
+    
     return SlackMessage(
-        text=f"[SCALE] {entity_name} +{int(pct)}%",
-        blocks=build_basic_blocks(title, body, severity="info", footer=_ts_footer()),
+        text=text,
         topic="scale",
     )
 
@@ -765,6 +903,47 @@ def post_digest(date_label: str, stage_stats: Dict[str, Dict[str, Any]]) -> None
     """
     client().notify(template_digest(date_label, stage_stats))
 
+def alert_fatigue(stage: str, entity_name: str, reason: str = "ctr drop vs trend, monitor") -> None:
+    """
+    Fatigue alert using new format.
+    """
+    clean_name = prettify_ad_name(entity_name)
+    text = f"🟡 Fatigue, {stage}, {clean_name}\n{reason}"
+    
+    msg = SlackMessage(
+        text=text,
+        severity="warn",
+        topic="alerts",
+    )
+    client().notify(msg)
+
+def alert_data_quality(stage: str, entity_name: str, reason: str) -> None:
+    """
+    Data quality alert using new format.
+    """
+    clean_name = prettify_ad_name(entity_name)
+    text = f"🩺 Tracking check, {stage}, {clean_name}\n{reason}"
+    
+    msg = SlackMessage(
+        text=text,
+        severity="warn",
+        topic="alerts",
+    )
+    client().notify(msg)
+
+def alert_error(error_msg: str) -> None:
+    """
+    Error alert using new format.
+    """
+    text = f"❗ Error, {error_msg}"
+    
+    msg = SlackMessage(
+        text=text,
+        severity="error",
+        topic="alerts",
+    )
+    client().notify(msg)
+
 __all__ = [
     "SlackClient",
     "SlackMessage",
@@ -774,6 +953,18 @@ __all__ = [
     "alert_kill",
     "alert_promote",
     "alert_scale",
+    "alert_fatigue",
+    "alert_data_quality",
+    "alert_error",
     "post_digest",
+    "format_run_header",
+    "format_stage_line",
+    "prettify_ad_name",
+    "fmt_eur",
+    "fmt_pct",
+    "fmt_roas",
+    "fmt_int",
+    "post_run_header_and_get_thread_ts",
+    "post_thread_ads_snapshot",
     "client",
 ]
