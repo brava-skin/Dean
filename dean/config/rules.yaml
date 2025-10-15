@@ -31,9 +31,9 @@ attribution:
   roas_source: "computed"
 
 minimums:
-  min_impressions: 300
+  min_impressions: 200  # Lowered from 300 to allow earlier evaluation
   min_clicks: 0
-  min_spend: 10   # EUR
+  min_spend: 8   # EUR - Lowered from 10
 
 stability:
   consecutive_ticks: 2
@@ -41,16 +41,16 @@ stability:
 
 thresholds:
   ctr:
-    testing_floor: 0.008
-    validation_floor: 0.010
+    testing_floor: 0.006  # Lowered from 0.008 to give cold pixel more room
+    validation_floor: 0.008  # Lowered from 0.010
   cpa:              # EUR
-    testing_max: 36
-    validation_max: 28
-    scaling_kill_max: 40
+    testing_max: 45  # Increased from 36 to allow higher CPA during learning
+    validation_max: 35  # Increased from 28
+    scaling_kill_max: 50  # Increased from 40
   roas:
-    testing_min: 1.5
-    validation_min: 1.8
-    scaling_kill_min: 1.2
+    testing_min: 1.2  # Lowered from 1.5 to be more lenient
+    validation_min: 1.5  # Lowered from 1.8
+    scaling_kill_min: 1.0  # Lowered from 1.2
   poas:
     validation_min: 0.0
     scaling_min: 0.2
@@ -59,39 +59,39 @@ thresholds:
 
 testing:
   minimums:
-    min_impressions: 300
-    min_spend: 10   # EUR
+    min_impressions: 200  # Lowered from 300 to allow earlier evaluation
+    min_spend: 8   # EUR - Lowered from 10
   kill:
-    - {type: "spend_no_purchase", spend_gte: 45}                          # EUR
-    - {type: "ctr_below", ctr_lt: 0.008, spend_gte: 40}                   # EUR
-    - {type: "spend_no_atc", spend_gte: 50}                               # EUR
-    - {type: "spend_multi_atc_no_purchase", spend_gte: 70, atc_gte: 2}    # EUR
-    - {type: "roas_below_after_days", roas_lt: 1.5, window: "day_3"}
-    - {type: "cpa_gte_over_days", cpa_gte: 38, days: 3}                   # EUR
+    - {type: "spend_no_purchase", spend_gte: 60}                          # EUR - Increased from 45
+    - {type: "ctr_below", ctr_lt: 0.006, spend_gte: 50}                   # EUR - Lowered CTR threshold, increased spend
+    - {type: "spend_no_atc", spend_gte: 70}                               # EUR - Increased from 50
+    - {type: "spend_multi_atc_no_purchase", spend_gte: 90, atc_gte: 2}    # EUR - Increased from 70
+    - {type: "roas_below_after_days", roas_lt: 1.2, window: "day_3"}      # Lowered from 1.5
+    - {type: "cpa_gte_over_days", cpa_gte: 45, days: 3}                   # EUR - Increased from 38
     - {type: "spend_over_2x_price_no_purchase"}                           # uses economics.fx for USD→EUR
   advance:
     operator: "all"
     rules:
       - {type: "purchase_gte", purchases_gte: 1}
-      - {type: "cpa_lte", cpa_lte: 36}                                     # EUR
-      - {type: "ctr_gte", ctr_gte: 0.008}
+      - {type: "cpa_lte", cpa_lte: 45}                                     # EUR - Increased from 36
+      - {type: "ctr_gte", ctr_gte: 0.006}                                 # Lowered from 0.008
   engine:
     tripwires:
-      lifetime_spend_no_purchase_eur: 32
+      lifetime_spend_no_purchase_eur: 70  # Increased from 50 to give more room
     bayes:
-      prior_a: 2.0
-      prior_b: 300.0
-      sample_count: 32
-      kill_prob: 0.90
+      prior_a: 1.5  # Lowered from 2.0 to be less aggressive
+      prior_b: 200.0  # Lowered from 300.0 to be less conservative
+      sample_count: 25  # Lowered from 32 to require less data
+      kill_prob: 0.85  # Lowered from 0.90 to be less aggressive
     adaptive_ctr:
-      floor_min: 0.008
-      floor_scale: 0.70
-      min_impressions: 300
+      floor_min: 0.006  # Lowered from 0.008 to match new thresholds
+      floor_scale: 0.60  # Lowered from 0.70 to be more lenient
+      min_impressions: 200  # Lowered from 300 to match new minimums
     fatigue:
-      ewma_alpha: 0.30
-      drop_pct: 0.35
+      ewma_alpha: 0.25  # Lowered from 0.30 to be less sensitive
+      drop_pct: 0.40  # Increased from 0.35 to require bigger drops
     fairness:
-      min_spend_before_kill_eur: 20
+      min_spend_before_kill_eur: 30  # Increased from 20 to give more learning time
     promotion:
       pause_after_promotion: true
       validation_budget_eur: 40
@@ -102,23 +102,23 @@ testing:
 
 validation:
   minimums:
-    min_impressions: 600
-    min_clicks: 30
-    min_spend: 40   # EUR
+    min_impressions: 400  # Lowered from 600 to allow earlier evaluation
+    min_clicks: 20  # Lowered from 30
+    min_spend: 30   # EUR - Lowered from 40
   kill:
-    - {type: "spend_no_purchase", spend_gte: 40}                          # EUR
-    - {type: "cpa_gte", cpa_gte: 32}                                      # EUR
-    - {type: "ctr_below", ctr_lt: 0.008, spend_gte: 40}                   # EUR
-    - {type: "spend_multi_atc_no_purchase", spend_gte: 80, atc_gte: 2}    # EUR
-    - {type: "roas_below_after_days", roas_lt: 1.5, window: "day_3"}
+    - {type: "spend_no_purchase", spend_gte: 60}                          # EUR - Increased from 40
+    - {type: "cpa_gte", cpa_gte: 40}                                      # EUR - Increased from 32
+    - {type: "ctr_below", ctr_lt: 0.006, spend_gte: 50}                   # EUR - Lowered CTR, increased spend
+    - {type: "spend_multi_atc_no_purchase", spend_gte: 100, atc_gte: 2}    # EUR - Increased from 80
+    - {type: "roas_below_after_days", roas_lt: 1.2, window: "day_3"}      # Lowered from 1.5
     - {type: "spend_over_2x_price_no_purchase"}                           # uses economics.fx for USD→EUR
   advance:
     operator: "all"
     rules:
       - {type: "purchase_gte", purchases_gte: 2}
-      - {type: "cpa_lte", cpa_lte: 28}                                     # EUR
-      - {type: "roas_gte", roas_gte: 1.8}
-      - {type: "ctr_gte", ctr_gte: 0.01}
+      - {type: "cpa_lte", cpa_lte: 35}                                     # EUR - Increased from 28
+      - {type: "roas_gte", roas_gte: 1.5}                                 # Lowered from 1.8
+      - {type: "ctr_gte", ctr_gte: 0.008}                                 # Lowered from 0.01
   strictness:
     min_days_with_purchase: 2
   engine:
@@ -126,18 +126,18 @@ validation:
     stability:
       consecutive_ticks: 2                         # maps to VALID_CONSEC_TICKS_REQUIRED
     fairness:
-      min_spend_before_kill_eur: 40               # VALID_MIN_FAIR_SPEND_BEFORE_KILL
+      min_spend_before_kill_eur: 50               # VALID_MIN_FAIR_SPEND_BEFORE_KILL - Increased from 40
     tripwires:
-      lifetime_spend_no_purchase_eur: 40          # VALID_SPEND_NO_PURCHASE_EUR
+      lifetime_spend_no_purchase_eur: 60          # VALID_SPEND_NO_PURCHASE_EUR - Increased from 40
     promotion:
       pause_after_promotion: true                 # VALID_PAUSE_AFTER_PROMOTION
       cooldown_hours: 24                          # VALID_PROMO_COOLDOWN_HOURS
       allow_create_on_promo_check: false          # VALID_ALLOW_CREATE_ON_PROMO_CHECK
     soft_pass:
-      max_budget_eur: 40                          # VALID_SOFT_PASS_MAX_BUDGET
-      max_cpa_eur: 40                             # VALID_SOFT_PASS_MAX_CPA
-      min_roas: 1.3                               # VALID_SOFT_PASS_MIN_ROAS
-      min_ctr: 0.008                              # VALID_SOFT_PASS_MIN_CTR
+      max_budget_eur: 50                          # VALID_SOFT_PASS_MAX_BUDGET - Increased from 40
+      max_cpa_eur: 45                             # VALID_SOFT_PASS_MAX_CPA - Increased from 40
+      min_roas: 1.2                               # VALID_SOFT_PASS_MIN_ROAS - Lowered from 1.3
+      min_ctr: 0.006                              # VALID_SOFT_PASS_MIN_CTR - Lowered from 0.008
 
 scaling:
   # Start budget used by validation promotion when creating a SCALE ad set

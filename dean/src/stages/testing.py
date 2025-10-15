@@ -684,6 +684,10 @@ def run_testing_tick(
                     },
                 )
                 summary["kills"] += 1
+                
+                # Immediately launch a new creative to replace the killed ad
+                _launch_replacement_creative(meta, store, queue_df, adset_id, settings, instagram_actor_id, summary)
+                
             except Exception as e:
                 notify(f"❗ [TEST] Failed to pause {name}: {e}")
             continue  # do not consider promotion after a kill
@@ -726,6 +730,10 @@ def run_testing_tick(
                     },
                 )
                 summary["kills"] += 1
+                
+                # Immediately launch a new creative to replace the killed ad
+                _launch_replacement_creative(meta, store, queue_df, adset_id, settings, instagram_actor_id, summary)
+                
             except Exception as e:
                 notify(f"❗ [TEST] Failed to pause {name}: {e}")
             continue
@@ -956,7 +964,11 @@ def run_testing_tick(
                 stage="TEST",
                 meta={"testing_adset_id": adset_id, "ig_mode": mode},
             )
-            # Launch notification removed - now handled in consolidated run summary
+            # Send launch alert for new creative
+            try:
+                notify(f"🚀 [TEST] Launched: {label_core}")
+            except Exception:
+                pass
             summary["launched"] += 1
             _record_queue_feedback(store, label_core, clicks=1, imps=200)
 
@@ -975,3 +987,153 @@ def run_testing_tick(
             notify(f"❗ [TEST] Failed to launch '{label_core}': {e}")
 
     return summary
+
+
+def _launch_replacement_creative(meta, store, queue_df, adset_id, settings, instagram_actor_id, summary):
+    """
+    Immediately launch a new creative to replace a killed ad.
+    This ensures we don't wait until the next tick to launch a replacement.
+    """
+    if queue_df is None or queue_df.empty:
+        notify("⚠️ [TEST] Queue empty; cannot launch replacement creative.")
+        return
+
+    # Get current ads to avoid duplicates
+    try:
+        current_ads = meta.list_ads_in_adset(adset_id)
+        existing_names = {str(a.get("name", "")).strip() for a in current_ads}
+    except Exception:
+        existing_names = set()
+
+    # Find a suitable candidate from the queue
+    candidates = []
+    for idx, row in queue_df.iterrows():
+        label_core = _label_from_row(row)
+        cname = f"[TEST] {label_core}"
+        if not label_core or cname in existing_names:
+            continue
+        d = row.to_dict()
+        d["_label_core"] = label_core
+        d["_index"] = idx
+        candidates.append(d)
+
+    if not candidates:
+        notify("ℹ️ [TEST] No eligible queue items for replacement launch.")
+        return
+
+    # Pick the first available candidate
+    p = candidates[0]
+    label_core = str(p.get("_label_core") or _label_from_row(p)).strip()
+    cname = f"[TEST] {label_core}"
+
+    video_id_raw = p.get("video_id")
+    video_id = _normalize_video_id_cell(video_id_raw)
+    if not label_core or not video_id or not video_id.isdigit():
+        notify(f"⚠️ [TEST] Skipping replacement '{label_core or 'UNNAMED'}' - invalid video_id (got: {video_id_raw!r}).")
+        return
+
+    try:
+        # Get copy bank and settings
+        copy_bank = _load_copy_bank(settings)
+        copy_strategy = cfg(settings, "copy_strategy", "mix_and_match")
+        primary_text, headline, description = _choose_mix_and_match(store, copy_bank, label_core, copy_strategy)
+
+        # Resolve FB Page and IG
+        page_id = (p.get("page_id") or os.getenv("FB_PAGE_ID") or "").strip()
+        if not page_id:
+            notify("⚠️ [TEST] Replacement missing page_id; set FB_PAGE_ID env or include page_id in the queue row.")
+            return
+
+        token = getattr(getattr(meta, "account", None), "access_token", None)
+        ver = getattr(getattr(meta, "account", None), "api_version", "v23.0") or "v23.0"
+        resolved = _resolve_page_instagram_ids(page_id, token, ver=ver)
+        ig_user_id = resolved.get("user_id")
+
+        ig_actor_env = ((instagram_actor_id or os.getenv("IG_ACTOR_ID") or os.getenv("INSTAGRAM_ACTOR_ID") or "").strip() or None)
+
+        # Thumbnail
+        thumb = (p.get("thumbnail_url") or os.getenv("DEFAULT_THUMB_URL") or "").strip()
+        if not thumb:
+            auto_thumb = _resolve_video_thumbnail_url(token, ver, str(video_id))
+            if auto_thumb:
+                thumb = auto_thumb
+
+        # Build creative kwargs
+        creative_kwargs: Dict[str, Any] = dict(
+            page_id=page_id,
+            name=cname,
+            video_library_id=video_id,
+            primary_text=primary_text,
+            headline=headline,
+            description=description,
+            call_to_action="SHOP_NOW",
+            link_url=os.getenv("STORE_URL"),
+            utm_params=p.get("utm_params") or None,
+            thumbnail_url=thumb or None,
+        )
+
+        # Create creative and ad
+        if ig_user_id:
+            ad_account_id = _get_ad_account_id(meta)
+            if not (token and ad_account_id):
+                raise RuntimeError("Missing token or ad_account_id for Graph fallback.")
+            link_url = os.getenv("STORE_URL") or ""
+            creative = _graph_create_video_creative_instagram_user(
+                token=token,
+                api_version=ver,
+                ad_account_id=str(ad_account_id),
+                page_id=str(page_id),
+                instagram_user_id=str(ig_user_id),
+                video_id=str(video_id),
+                link_url=link_url,
+                message=primary_text or "",
+                link_description=headline or "",
+                thumbnail_url=(thumb or None),
+            )
+        else:
+            if ig_actor_env:
+                creative_kwargs["instagram_actor_id"] = ig_actor_env
+            creative = meta.create_video_creative(**creative_kwargs)
+
+        ad = meta.create_ad(adset_id, cname, creative_id=creative["id"], status="ACTIVE")
+
+        # Log the launch
+        try:
+            store.incr(daily_key("TEST", "launched"), 1)
+        except Exception:
+            pass
+
+        mode = "instagram_user_id" if ig_user_id else ("instagram_actor_id" if ig_actor_env else "page_only")
+        store.log(
+            entity_type="ad",
+            entity_id=ad["id"],
+            action="CREATE",
+            reason="Immediate replacement for killed ad",
+            level="info",
+            stage="TEST",
+            meta={"testing_adset_id": adset_id, "ig_mode": mode, "replacement": True},
+        )
+
+        # Send launch alert
+        try:
+            notify(f"🚀 [TEST] Launched replacement: {label_core}")
+        except Exception:
+            pass
+
+        summary["launched"] += 1
+        _record_queue_feedback(store, label_core, clicks=1, imps=200)
+
+        # Update Supabase status
+        try:
+            cid = str(p.get("creative_id") or "").strip()
+            if cid:
+                set_supabase_status([cid], "launched")
+            else:
+                vid = _normalize_video_id_cell(p.get("video_id"))
+                if vid:
+                    set_supabase_status([vid], "launched")
+        except Exception:
+            pass
+
+    except Exception as e:
+        notify(f"❗ [TEST] Failed to launch replacement '{label_core}': {e}")

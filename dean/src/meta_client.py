@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 import requests
 
 from utils import today_ymd, yesterday_ymd
+from slack import notify
 
 USE_SDK = False
 try:
@@ -30,10 +31,10 @@ except Exception:  # pragma: no cover
 # -------------------------
 # Environment & guards
 # -------------------------
-META_RETRY_MAX          = int(os.getenv("META_RETRY_MAX", "4") or 4)
-META_BACKOFF_BASE       = float(os.getenv("META_BACKOFF_BASE", "0.4") or 0.4)
+META_RETRY_MAX          = int(os.getenv("META_RETRY_MAX", "6") or 6)
+META_BACKOFF_BASE       = float(os.getenv("META_BACKOFF_BASE", "1.0") or 1.0)
 META_TIMEOUT            = float(os.getenv("META_TIMEOUT", "30") or 30)
-META_WRITE_COOLDOWN_SEC = int(os.getenv("META_WRITE_COOLDOWN_SEC", "5") or 5)
+META_WRITE_COOLDOWN_SEC = int(os.getenv("META_WRITE_COOLDOWN_SEC", "10") or 10)
 
 BUDGET_MIN          = float(os.getenv("BUDGET_MIN", "5") or 5.0)
 BUDGET_MAX          = float(os.getenv("BUDGET_MAX", "50000") or 50000.0)
@@ -293,12 +294,21 @@ class MetaClient:
                     code = _maybe_call(getattr(e, "api_error_code", None))
                     status = _maybe_call(getattr(e, "http_status", None))
                     headers = _maybe_call(getattr(e, "http_headers", None)) or {}
+                    subcode = _maybe_call(getattr(e, "api_error_subcode", None))
                     try:
                         if "Retry-After" in headers:
                             retry_after = float(headers.get("Retry-After"))
                     except Exception:
                         retry_after = None
-                    retriable = (code in (4, 17, 613)) or (isinstance(status, int) and 500 <= status < 600)
+                    
+                    # Handle rate limit errors specifically
+                    if code == 4 and subcode == 1504022:
+                        wait_time = min(60.0, META_BACKOFF_BASE * 8)
+                        notify(f"⏳ Facebook API rate limit hit (SDK). Waiting {wait_time:.1f}s before retry...")
+                        time.sleep(wait_time)
+                        retriable = True
+                    else:
+                        retriable = (code in (4, 17, 613)) or (isinstance(status, int) and 500 <= status < 600)
 
                 if retry_after:
                     time.sleep(max(0.5, retry_after))
@@ -330,29 +340,71 @@ class MetaClient:
         ver = self.account.api_version or "v23.0"
         return f"https://graph.facebook.com/{ver}/{self.ad_account_id_act}/{endpoint.lstrip('/')}"
 
+    def _handle_rate_limit_error(self, error_data: Dict[str, Any], endpoint: str) -> None:
+        """Handle Facebook API rate limit errors with appropriate retry logic."""
+        code = error_data.get("error", {}).get("code")
+        subcode = error_data.get("error", {}).get("error_subcode")
+        message = error_data.get("error", {}).get("message", "")
+        
+        # Handle rate limit errors (code 4, subcode 1504022)
+        if code == 4 and subcode == 1504022:
+            # Rate limit hit - wait longer before retry
+            wait_time = min(60.0, META_BACKOFF_BASE * 8)  # Wait up to 60 seconds
+            notify(f"⏳ Facebook API rate limit hit. Waiting {wait_time:.1f}s before retry...")
+            time.sleep(wait_time)
+            return
+        
+        # Handle other rate limit related errors
+        if code == 4 or "rate" in message.lower() or "limit" in message.lower():
+            wait_time = min(30.0, META_BACKOFF_BASE * 4)
+            notify(f"⏳ Facebook API limit reached. Waiting {wait_time:.1f}s before retry...")
+            time.sleep(wait_time)
+            return
+
     def _graph_post(self, endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         url = self._graph_url(endpoint)
         data = _sanitize(payload)
         data["access_token"] = self.account.access_token
-        r = requests.post(url, json=data, timeout=META_TIMEOUT)
-        if r.status_code >= 400:
+        
+        for attempt in range(META_RETRY_MAX + 1):
             try:
-                err = r.json()
-            except Exception:
-                err = {"error": {"message": r.text}}
-            msg = f"Graph POST {endpoint} {r.status_code}: {err}"
-            try:
-                code = err.get("error", {}).get("code")
-                sub = err.get("error", {}).get("error_subcode")
-                if code == 100 and sub == 33:
-                    msg += " - Hint: check ad account id, token scopes (ads_management), and account access."
-            except Exception:
-                pass
-            raise RuntimeError(msg)
-        try:
-            return r.json()
-        except Exception:
-            return {"ok": True, "text": r.text}
+                r = requests.post(url, json=data, timeout=META_TIMEOUT)
+                if r.status_code >= 400:
+                    try:
+                        err = r.json()
+                    except Exception:
+                        err = {"error": {"message": r.text}}
+                    
+                    # Check for rate limit errors
+                    code = err.get("error", {}).get("code")
+                    subcode = err.get("error", {}).get("error_subcode")
+                    
+                    if code == 4 and subcode == 1504022 and attempt < META_RETRY_MAX:
+                        self._handle_rate_limit_error(err, endpoint)
+                        continue
+                    elif code == 4 and attempt < META_RETRY_MAX:
+                        self._handle_rate_limit_error(err, endpoint)
+                        continue
+                    
+                    msg = f"Graph POST {endpoint} {r.status_code}: {err}"
+                    try:
+                        if code == 100 and subcode == 33:
+                            msg += " - Hint: check ad account id, token scopes (ads_management), and account access."
+                    except Exception:
+                        pass
+                    raise RuntimeError(msg)
+                
+                try:
+                    return r.json()
+                except Exception:
+                    return {"ok": True, "text": r.text}
+                    
+            except Exception as e:
+                if attempt < META_RETRY_MAX:
+                    wait = META_BACKOFF_BASE * (2 ** attempt) * (0.75 + random.random() * 0.5)
+                    time.sleep(min(wait, 30.0))
+                    continue
+                raise e
 
     def _graph_get_object(self, object_path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """GET for absolute objects like '/{id}' or '/{id}/thumbnails' (not under ad account path)."""
@@ -360,14 +412,37 @@ class MetaClient:
         url = f"https://graph.facebook.com/{ver}/{object_path.lstrip('/')}"
         qp = dict(params or {})
         qp["access_token"] = self.account.access_token
-        r = requests.get(url, params=qp, timeout=META_TIMEOUT)
-        if r.status_code >= 400:
+        
+        for attempt in range(META_RETRY_MAX + 1):
             try:
-                err = r.json()
-            except Exception:
-                err = {"error": {"message": r.text}}
-            raise RuntimeError(f"Graph GET {object_path} {r.status_code}: {err}")
-        return r.json()
+                r = requests.get(url, params=qp, timeout=META_TIMEOUT)
+                if r.status_code >= 400:
+                    try:
+                        err = r.json()
+                    except Exception:
+                        err = {"error": {"message": r.text}}
+                    
+                    # Check for rate limit errors
+                    code = err.get("error", {}).get("code")
+                    subcode = err.get("error", {}).get("error_subcode")
+                    
+                    if code == 4 and subcode == 1504022 and attempt < META_RETRY_MAX:
+                        self._handle_rate_limit_error(err, object_path)
+                        continue
+                    elif code == 4 and attempt < META_RETRY_MAX:
+                        self._handle_rate_limit_error(err, object_path)
+                        continue
+                    
+                    raise RuntimeError(f"Graph GET {object_path} {r.status_code}: {err}")
+                
+                return r.json()
+                
+            except Exception as e:
+                if attempt < META_RETRY_MAX:
+                    wait = META_BACKOFF_BASE * (2 ** attempt) * (0.75 + random.random() * 0.5)
+                    time.sleep(min(wait, 30.0))
+                    continue
+                raise e
 
     # ------------- Compliance & idempotency -------------
     def _check_names(self, *, campaign: Optional[str] = None, adset: Optional[str] = None, ad: Optional[str] = None):
