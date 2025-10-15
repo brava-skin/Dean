@@ -608,7 +608,7 @@ def run_testing_tick(
            not _meets_minimums(r, min_impressions, min_clicks, min_spend):
             continue
 
-        dq = _data_quality_sentry(r, min_spend_for_alert=20.0)
+        dq = _data_quality_sentry(r, min_spend_for_alert=50.0)
         if dq:
             alert_data_quality("TEST", name, dq)
             summary["data_quality_alerts"] += 1

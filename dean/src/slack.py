@@ -120,7 +120,13 @@ def _log(msg: str) -> None:
     if LOG_STDOUT:
         # Replace Unicode emojis with text equivalents for Windows console compatibility
         msg = msg.replace("🛑", "[STOP]").replace("⚠️", "[WARN]").replace("🚀", "[LAUNCH]").replace("⬆️", "[SCALE]").replace("🧬", "[DUP]")
-        print(msg, flush=True)
+        msg = msg.replace("🩺", "[HEALTH]").replace("⏳", "[WAIT]").replace("❌", "[ERROR]").replace("ℹ️", "[INFO]")
+        msg = msg.replace("📥", "[LOAD]").replace("📦", "[SAVE]").replace("✅", "[OK]").replace("❗", "[ALERT]")
+        try:
+            print(msg, flush=True)
+        except UnicodeEncodeError:
+            # Fallback: encode as ASCII with error replacement
+            print(msg.encode('ascii', 'replace').decode('ascii'), flush=True)
 
 
 def _now() -> datetime:
