@@ -19,22 +19,17 @@ notifications_timezone: "Europe/Amsterdam"
 dst_note: "Windows are interpreted in account timezone; notifications in EU/AMS."
 
 ids:
-  testing_campaign_id: "120231838265440160"
-  testing_adset_id: "120231838265460160"
-  validation_campaign_id: "120231838417260160"
-  scaling_campaign_id: "120231838441470160"
+  testing_campaign_id: {{rules.ids.testing_campaign_id}}
+  testing_adset_id: {{rules.ids.testing_adset_id}}
+  validation_campaign_id: {{rules.ids.validation_campaign_id}}
+  scaling_campaign_id: {{rules.ids.scaling_campaign_id}}
 
 profiles:
   production:
     dry_run: false
     write_enabled: true
-  staging:
-    dry_run: true
-    write_enabled: false
-    notes: "Safe sandbox; relax thresholds; no writes."
 
-mode:
-  current: production
+mode: "production"
 
 meta_defaults:
   objective: "SALES"
@@ -91,8 +86,7 @@ testing:
   attribution: "7d_click_1d_view"
   bid_strategy: "lowest_cost"
   dynamic_creative: false
-  pause_dead_hours: true
-  dead_hours_window: "02:00-06:00"
+  pause_dead_hours: false
   minimums:
     min_impressions: {{rules.config_refs.testing.minimums.min_impressions}}
     min_clicks: {{rules.config_refs.testing.minimums.min_clicks}}
