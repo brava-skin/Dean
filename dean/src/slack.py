@@ -14,6 +14,12 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import requests
 
+from utils import (
+    getenv_f, getenv_i, getenv_b, cfg, cfg_or_env_f, cfg_or_env_i, cfg_or_env_b, cfg_or_env_list,
+    safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name as utils_prettify_ad_name,
+    fmt_currency, fmt_pct, fmt_int, fmt_roas
+)
+
 # ---- Local time/currency config (AMS + EUR) ----
 try:
     from zoneinfo import ZoneInfo  # py>=3.9
@@ -334,42 +340,31 @@ def format_stage_line(stage: str, counts: Dict[str, int]) -> str:
 
 def prettify_ad_name(name: str) -> str:
     """Clean up ad display names for mobile-friendly display."""
-    # Remove leading [TEST], [VALID], [SCALE] tags
-    name = re.sub(r'^\[(TEST|VALID|SCALE)\]\s*', '', name)
-    
-    # Compress long visual style tokens
-    name = re.sub(r'DynamicGreenScreenEffect', 'DGS Effect', name)
-    name = re.sub(r'Green Screen Effect Template', 'Green Screen Template', name)
-    
-    # Truncate if too long for mobile
-    if len(name) > 50:
-        name = name[:47] + "..."
-    
-    return name
+    return utils_prettify_ad_name(name)
 
 def fmt_eur(amount: Optional[float]) -> str:
     """Format currency with Euro symbol."""
     if amount is None:
         return "–"
-    return _fmt_currency(amount)
+    return fmt_currency(amount)
 
 def fmt_pct(value: Optional[float], decimals: int = 1) -> str:
     """Format percentage with specified decimal places."""
     if value is None:
         return "–"
-    return _fmt_pct(value)
+    return fmt_pct(value, decimals)
 
 def fmt_roas(value: Optional[float]) -> str:
     """Format ROAS with 2 decimal places."""
     if value is None:
         return "–"
-    return f"{value:.2f}"
+    return fmt_roas(value)
 
 def fmt_int(value: Optional[int]) -> str:
     """Format integer."""
     if value is None:
         return "–"
-    return _fmt_int(value)
+    return fmt_int(value)
 
 def post_run_header_and_get_thread_ts(
     status: str, 
@@ -964,7 +959,7 @@ def build_ads_snapshot(rows_today: List[Dict[str, Any]], rows_lifetime: List[Dic
     from datetime import datetime, timezone
     import re
     
-    def _safe_f(v: Any, default: float = 0.0) -> float:
+    def safe_f(v: Any, default: float = 0.0) -> float:
         try:
             if v is None:
                 return default
@@ -1009,11 +1004,11 @@ def build_ads_snapshot(rows_today: List[Dict[str, Any]], rows_lifetime: List[Dic
     for today_row in rows_today or []:
         ad_id = today_row.get("ad_id")
         ad_name = today_row.get("ad_name", "")
-        spend_today = _safe_f(today_row.get("spend"))
+        spend_today = safe_f(today_row.get("spend"))
         
         # Get lifetime data
         lifetime_row = lifetime_by_id.get(str(ad_id), {})
-        spend_life = _safe_f(lifetime_row.get("spend")) if lifetime_row else None
+        spend_life = safe_f(lifetime_row.get("spend")) if lifetime_row else None
         
         # Check for integrity issues
         if spend_life is not None and spend_life < spend_today:
