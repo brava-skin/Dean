@@ -525,13 +525,24 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
                 try:
                     if hasattr(meta, "get_ad_creative_id"):
                         creative_id = meta.get_ad_creative_id(ad_id)
-                    if creative_id and hasattr(meta, "create_ad") and scaling_adset.get("id"):
-                        created_ad = meta.create_ad(
-                            scaling_adset["id"],
-                            f"[SCALE] {creative_label}",
-                            creative_id=creative_id,
-                            status="ACTIVE",
-                        )
+                    if creative_id and scaling_adset.get("id"):
+                        # Use promote_ad_with_continuity to maintain the same ad ID across stages
+                        if hasattr(meta, "promote_ad_with_continuity"):
+                            created_ad = meta.promote_ad_with_continuity(
+                                original_ad_id=ad_id,
+                                new_adset_id=scaling_adset["id"],
+                                new_name=f"[SCALE] {creative_label}",
+                                creative_id=creative_id,
+                                status="ACTIVE",
+                            )
+                        elif hasattr(meta, "create_ad"):
+                            # Fallback to regular create_ad if promote_ad_with_continuity is not available
+                            created_ad = meta.create_ad(
+                                scaling_adset["id"],
+                                f"[SCALE] {creative_label}",
+                                creative_id=creative_id,
+                                status="ACTIVE",
+                            )
                 except Exception:
                     created_ad = None
 
@@ -542,12 +553,21 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
                     pass
 
                 try:
+                    # Include ID continuity information in the promotion log
+                    promotion_meta = {
+                        "scaling_adset": scaling_adset, 
+                        "scaling_ad": created_ad, 
+                        "start_budget_eur": start_budget,
+                        "id_continuity": True,  # Flag indicating this ad maintains the same ID
+                        "original_ad_id": ad_id,
+                        "promoted_ad_id": created_ad.get("id") if created_ad else None,
+                    }
                     store.log_promote(
                         from_stage="VALID",
                         to_stage="SCALE",
                         entity_id=ad_id,
                         reason=adv_reason,
-                        meta={"scaling_adset": scaling_adset, "scaling_ad": created_ad, "start_budget_eur": start_budget},
+                        meta=promotion_meta,
                     )
                 except Exception:
                     pass
