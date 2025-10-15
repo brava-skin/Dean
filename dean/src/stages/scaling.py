@@ -48,7 +48,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from metrics import Metrics, MetricsConfig, metrics_from_row
-from slack import notify, alert_kill, alert_scale
+from slack import notify, alert_kill, alert_scale, alert_error
 
 # ====== Time ======
 UTC = timezone.utc
@@ -385,11 +385,7 @@ class SmartScaler:
             life_spend = float(lr.get("spend") or 0.0)
             life_purchases = _count_purchases(lr.get("actions"))
 
-            # Helpful context line (non-blocking)
-            try:
-                notify(f"ℹ️ [SCALE] {ad_name}: lifetime_spend={life_spend:.2f} purchases={life_purchases} today_spend={(m.spend or 0):.2f}")
-            except Exception:
-                pass
+            # Removed per-ad informational messages - now handled in consolidated run summary
 
             # Consecutive "bad" days counter (based on today metrics)
             bad = 1 if ((m.cpa is not None and m.cpa >= self.cfg.kill_cpa_threshold) or ((m.roas or 0.0) < self.cfg.kill_roas_min)) else 0
@@ -444,7 +440,7 @@ class SmartScaler:
                     try:
                         alert_kill("SCALE", ad_name, reason, {"CPA": f"{(m.cpa or 0):.2f}", "ROAS": f"{(m.roas or 0):.2f}"})
                     except Exception:
-                        notify(f"🛑 [SCALE] {ad_name} — {reason}")
+                        alert_kill("SCALE", ad_name, reason, {"CPA": f"{(m.cpa or 0):.2f}", "ROAS": f"{(m.roas or 0):.2f}"})
                     summary["kills"] += 1
                     if cur_budget:
                         try:
@@ -485,7 +481,7 @@ class SmartScaler:
                         meta={"old_budget": cur, "new_budget": new_budget},
                         dedup_key=dedup_key,
                     )
-                    notify(f"⬇️ [SCALE] {ad_name} → ~€{new_budget:,.0f}/d")
+                    # Downscale notification removed - now handled in consolidated run summary
                     summary["downscaled"] += 1
                     # daily counter: SCALING downscaled++
                     try:
@@ -508,7 +504,7 @@ class SmartScaler:
                         try:
                             alert_scale(ad_name, inc, new_budget=new_budget)
                         except Exception:
-                            notify(f"⬆️ [SCALE] {ad_name} +{inc}% → ~€{new_budget:,.0f}/d")
+                            alert_scale(ad_name, inc, new_budget=new_budget)
                         _mark_scaled(self.store, adset_id)
                         summary["scaled"] += 1
                         # daily counter: SCALING scaled++
@@ -541,7 +537,7 @@ class SmartScaler:
                             reason=f"{allow} copies",
                             dedup_key=dedup_key,
                         )
-                        notify(f"🧬 [SCALE] {ad_name} ×{allow} (PAUSED)")
+                        # Duplication notification removed - now handled in consolidated run summary
                         summary["duped"] += allow
                         # daily counter: SCALING duped += allow
                         try:
@@ -562,7 +558,7 @@ class SmartScaler:
                     try:
                         meta.duplicate_adset(adset_id, count=1, status="PAUSED", prefix="[REFRESH] ")
                         self.store.set_counter(good_key, 0)
-                        notify(f"🆕 [SCALE] Refresh copy for {ad_name}")
+                        # Refresh notification removed - now handled in consolidated run summary
                         summary["refreshed"] += 1
                         # daily counter: SCALING refreshed++
                         try:
@@ -594,7 +590,7 @@ class SmartScaler:
                         meta={"old_budget": cur, "new_budget": new_budget},
                         dedup_key=dedup_key,
                     )
-                    notify(f"💧 [SCALE] +~€{bump:,.0f} → {adset_id}")
+                    # Reinvest notification removed - now handled in consolidated run summary
                 except Exception:
                     pass
 
@@ -678,7 +674,7 @@ class AdvancedScalerRunner:
                 paginate=True,
             )
         except Exception as e:
-            notify(f"❗ [SCALE] Insights error: {e}")
+            alert_error(f"insights fetch failed: {e}")
             return {"kills": 0, "scaled": 0, "duped": 0, "downscaled": 0, "refreshed": 0}
 
         # Build lifetime map
