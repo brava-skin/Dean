@@ -44,7 +44,7 @@ CB_FAILS     = int(os.getenv("META_CB_FAILS", "5") or 5)
 CB_RESET_SEC = int(os.getenv("META_CB_RESET_SEC", "120") or 120)
 
 # Naming & compliance
-CAMPAIGN_NAME_RE = re.compile(r"^\[(TEST|VALID|SCALE|SCALE-CBO)\]\s+Brava\s+—\s+(ABO|CBO)\s+—\s+US Men$")
+CAMPAIGN_NAME_RE = re.compile(r"^\[(TEST|VALID|SCALE|SCALE-CBO)\]\s+Brava\s+-\s+(ABO|CBO)\s+-\s+US Men$")
 ADSET_NAME_RE    = re.compile(r"^\[(TEST|VALID|SCALE)\]\s+.+$")
 AD_NAME_RE       = re.compile(r"^\[(TEST|VALID|SCALE)\]\s+.+$")
 FORBIDDEN_TERMS  = tuple(x.strip().lower() for x in os.getenv("FORBIDDEN_TERMS", "cures,miracle,guaranteed").split(","))
@@ -345,7 +345,7 @@ class MetaClient:
                 code = err.get("error", {}).get("code")
                 sub = err.get("error", {}).get("error_subcode")
                 if code == 100 and sub == 33:
-                    msg += " — Hint: check ad account id, token scopes (ads_management), and account access."
+                    msg += " - Hint: check ad account id, token scopes (ads_management), and account access."
             except Exception:
                 pass
             raise RuntimeError(msg)
