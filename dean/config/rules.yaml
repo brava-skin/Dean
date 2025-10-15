@@ -67,12 +67,12 @@ testing:
     min_impressions: 300
     min_spend: 10   # EUR
   kill:
-    - {type: "spend_no_purchase", spend_gte: 32}                          # EUR
-    - {type: "ctr_below", ctr_lt: 0.008, spend_gte: 30}                   # EUR
+    - {type: "spend_no_purchase", spend_gte: 45}                          # EUR
+    - {type: "ctr_below", ctr_lt: 0.008, spend_gte: 40}                   # EUR
     - {type: "spend_no_atc", spend_gte: 50}                               # EUR
     - {type: "spend_multi_atc_no_purchase", spend_gte: 70, atc_gte: 2}    # EUR
     - {type: "roas_below_after_days", roas_lt: 1.5, window: "day_3"}
-    - {type: "cpa_gte_over_days", cpa_gte: 34, days: 3}                   # EUR
+    - {type: "cpa_gte_over_days", cpa_gte: 38, days: 3}                   # EUR
     - {type: "spend_over_2x_price_no_purchase"}                           # uses economics.fx for USD→EUR
   advance:
     operator: "all"
@@ -140,8 +140,8 @@ validation:
       allow_create_on_promo_check: false          # VALID_ALLOW_CREATE_ON_PROMO_CHECK
     soft_pass:
       max_budget_eur: 40                          # VALID_SOFT_PASS_MAX_BUDGET
-      max_cpa_eur: 36                             # VALID_SOFT_PASS_MAX_CPA
-      min_roas: 1.5                               # VALID_SOFT_PASS_MIN_ROAS
+      max_cpa_eur: 40                             # VALID_SOFT_PASS_MAX_CPA
+      min_roas: 1.3                               # VALID_SOFT_PASS_MIN_ROAS
       min_ctr: 0.008                              # VALID_SOFT_PASS_MIN_CTR
 
 scaling:
