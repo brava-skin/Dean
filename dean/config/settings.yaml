@@ -83,10 +83,10 @@ placements:
 
 # ── Testing ───────────────────────────────────────────────────────────────────
 testing:
-  daily_budget_eur: 50
-  daily_budget_usd: 50
-  keep_ads_live: 4
-  max_active_ads: 4
+  daily_budget_eur: {{rules.config_refs.testing.daily_budget_eur}}
+  daily_budget_usd: {{rules.config_refs.testing.daily_budget_usd}}
+  keep_ads_live: {{rules.config_refs.testing.keep_ads_live}}
+  max_active_ads: {{rules.config_refs.testing.max_active_ads}}
   optimization_goal: "PURCHASE"
   attribution: "7d_click_1d_view"
   bid_strategy: "lowest_cost"
@@ -94,18 +94,18 @@ testing:
   pause_dead_hours: true
   dead_hours_window: "02:00-06:00"
   minimums:
-    min_impressions: 300
-    min_clicks: 0
-    min_spend_eur: 10
-    min_spend_usd: 10
+    min_impressions: {{rules.config_refs.testing.minimums.min_impressions}}
+    min_clicks: {{rules.config_refs.testing.minimums.min_clicks}}
+    min_spend_eur: {{rules.config_refs.testing.minimums.min_spend_eur}}
+    min_spend_usd: {{rules.config_refs.testing.minimums.min_spend_usd}}
   fairness:
-    min_spend_before_kill_eur: 20
-    min_spend_before_kill_usd: 20
-    min_runtime_hours: 12
+    min_spend_before_kill_eur: {{rules.config_refs.testing.fairness.min_spend_before_kill_eur}}
+    min_spend_before_kill_usd: {{rules.config_refs.testing.fairness.min_spend_before_kill_usd}}
+    min_runtime_hours: {{rules.config_refs.testing.fairness.min_runtime_hours}}
   queue_rotation:
     enable: true
     refill_on_kill: true
-    max_launches_per_day: 8
+    max_launches_per_day: {{rules.config_refs.testing.queue_rotation.max_launches_per_day}}
   naming_prefix: "[TEST]"
   # Stage-specific placements (optional; if omitted, uses global placements)
   placements:
@@ -118,21 +118,21 @@ testing:
 
 # ── Validation ────────────────────────────────────────────────────────────────
 validation:
-  adset_budget_eur: 40
-  adset_budget_usd: 40
-  min_days: 2
-  max_days: 3
-  total_spend_cap_eur: 120
-  total_spend_cap_usd: 120
+  adset_budget_eur: {{rules.config_refs.validation.adset_budget_eur}}
+  adset_budget_usd: {{rules.config_refs.validation.adset_budget_usd}}
+  min_days: {{rules.config_refs.validation.min_days}}
+  max_days: {{rules.config_refs.validation.max_days}}
+  total_spend_cap_eur: {{rules.config_refs.validation.total_spend_cap_eur}}
+  total_spend_cap_usd: {{rules.config_refs.validation.total_spend_cap_usd}}
   optimization_goal: "PURCHASE"
   attribution: "7d_click_1d_view"
   bid_strategy: "lowest_cost"
   dynamic_creative: false
   minimums:
-    min_impressions: 600
-    min_clicks: 30
-    min_spend_eur: 40
-    min_spend_usd: 40
+    min_impressions: {{rules.config_refs.validation.minimums.min_impressions}}
+    min_clicks: {{rules.config_refs.validation.minimums.min_clicks}}
+    min_spend_eur: {{rules.config_refs.validation.minimums.min_spend_eur}}
+    min_spend_usd: {{rules.config_refs.validation.minimums.min_spend_usd}}
   promotion:
     pause_validation_on_promotion: true
   naming_prefix: "[VALID]"
@@ -146,37 +146,37 @@ validation:
 
 # ── Scaling ───────────────────────────────────────────────────────────────────
 scaling:
-  adset_start_budget_eur: 100
-  adset_start_budget_usd: 100
+  adset_start_budget_eur: {{rules.config_refs.scaling.adset_start_budget_eur}}
+  adset_start_budget_usd: {{rules.config_refs.scaling.adset_start_budget_usd}}
   allow_cbo: true
-  cbo_entry_budget_eur: 400
-  cbo_entry_budget_usd: 400
-  cbo_increment_pct: [50, 100]
+  cbo_entry_budget_eur: {{rules.config_refs.scaling.cbo_entry_budget_eur}}
+  cbo_entry_budget_usd: {{rules.config_refs.scaling.cbo_entry_budget_usd}}
+  cbo_increment_pct: {{rules.config_refs.scaling.cbo_increment_pct}}
   optimization_goal: "PURCHASE"
   attribution: "7d_click_1d_view"
   bid_strategy: "lowest_cost"
   dynamic_creative: true
   budget:
-    min_eur: 10
-    max_eur: 5000
-    min_usd: 10
-    max_usd: 5000
-    max_step_pct: 100
-    cooldown_hours_after_scale: 24
+    min_eur: {{rules.config_refs.scaling.budget.min_eur}}
+    max_eur: {{rules.config_refs.scaling.budget.max_eur}}
+    min_usd: {{rules.config_refs.scaling.budget.min_usd}}
+    max_usd: {{rules.config_refs.scaling.budget.max_usd}}
+    max_step_pct: {{rules.config_refs.scaling.budget.max_step_pct}}
+    cooldown_hours_after_scale: {{rules.config_refs.scaling.budget.cooldown_hours_after_scale}}
   hysteresis:
-    roas_down_band: 1.7
-    cpa_up_band: 33
+    roas_down_band: {{rules.config_refs.scaling.hysteresis.roas_down_band}}
+    cpa_up_band: {{rules.config_refs.scaling.hysteresis.cpa_up_band}}
   reinvestment:
     enabled: true
     strategy: "proportional_to_roas"
-    allocate_pct_of_freed: 50
-    min_increment_eur: 10
-    min_increment_usd: 10
+    allocate_pct_of_freed: {{rules.config_refs.scaling.reinvestment.allocate_pct_of_freed}}
+    min_increment_eur: {{rules.config_refs.scaling.reinvestment.min_increment_eur}}
+    min_increment_usd: {{rules.config_refs.scaling.reinvestment.min_increment_usd}}
   refresh_winner:
     enabled: true
-    after_good_days: 7
-    cpa_max: 22
-    roas_min: 3.0
+    after_good_days: {{rules.config_refs.scaling.refresh_winner.after_good_days}}
+    cpa_max: {{rules.config_refs.scaling.refresh_winner.cpa_max}}
+    roas_min: {{rules.config_refs.scaling.refresh_winner.roas_min}}
   naming_prefix: "[SCALE]"
   placements:
     publisher_platforms: ["facebook", "instagram"]
@@ -188,18 +188,18 @@ scaling:
 
 # ── Guardrails ────────────────────────────────────────────────────────────────
 guardrails:
-  account_cpa_pause_factor: 1.5
-  account_cpa_window_days: 2
-  no_purchases_tripwire_hours: 48
-  global_daily_cap_eur: 3000
-  global_daily_cap_usd: 3000
+  account_cpa_pause_factor: {{rules.config_refs.guardrails.account_cpa_pause_factor}}
+  account_cpa_window_days: {{rules.config_refs.guardrails.account_cpa_window_days}}
+  no_purchases_tripwire_hours: {{rules.config_refs.guardrails.no_purchases_tripwire_hours}}
+  global_daily_cap_eur: {{rules.config_refs.guardrails.global_daily_cap_eur}}
+  global_daily_cap_usd: {{rules.config_refs.guardrails.global_daily_cap_usd}}
   spend_velocity:
     compare_24h_vs_prev_24h: true
     compare_48h_vs_prev_48h: true
-    warn_24h_growth_x: 1.5
-    warn_48h_growth_x: 2.5
+    warn_24h_growth_x: {{rules.config_refs.guardrails.spend_velocity.warn_24h_growth_x}}
+    warn_48h_growth_x: {{rules.config_refs.guardrails.spend_velocity.warn_48h_growth_x}}
     freeze_scaling_if_exceeds: true
-  scaling_freeze_days_on_worsen: 3
+  scaling_freeze_days_on_worsen: {{rules.config_refs.guardrails.scaling_freeze_days_on_worsen}}
   staging_relax_thresholds: true
 
 overrides:
@@ -211,10 +211,10 @@ overrides:
     enabled: true
     triggers:
       - type: "api_error_rate"
-        threshold_pct: 40
-        window_minutes: 15
+        threshold_pct: {{rules.config_refs.overrides.emergency_stop.api_error_rate_threshold_pct}}
+        window_minutes: {{rules.config_refs.overrides.emergency_stop.api_error_rate_window_minutes}}
       - type: "tracking_flatline"
-        hours: 24
+        hours: {{rules.config_refs.overrides.emergency_stop.tracking_flatline_hours}}
 
 # ── Naming ────────────────────────────────────────────────────────────────────
 naming:
@@ -261,8 +261,8 @@ queue:
     tag_weights: {}
   validation:
     check_media_exists: true
-    min_duration_sec: 5
-    max_duration_sec: 120
+    min_duration_sec: {{rules.config_refs.queue_validation.min_duration_sec}}
+    max_duration_sec: {{rules.config_refs.queue_validation.max_duration_sec}}
 
 # ── Notifications ─────────────────────────────────────────────────────────────
 notifications:
@@ -305,11 +305,11 @@ economics:
 data_quality:
   missing_actions_alert:
     enabled: true
-    min_spend_for_alert_eur: 20
-    min_spend_for_alert_usd: 20
+    min_spend_for_alert_eur: {{rules.config_refs.data_quality.missing_actions_min_spend_eur}}
+    min_spend_for_alert_usd: {{rules.config_refs.data_quality.missing_actions_min_spend_usd}}
   tracking_drop_alert:
     enabled: true
-    drop_pct_vs_7d_avg: 60
+    drop_pct_vs_7d_avg: {{rules.config_refs.data_quality.tracking_drop_pct_vs_7d_avg}}
 
 # ── Execution ────────────────────────────────────────────────────────────────
 execution:
@@ -346,12 +346,12 @@ logging:
 cbo:
   enabled: true
   campaign_name: "[SCALE-CBO] Brava — CBO — US Men"
-  min_adsets: 2
-  max_adsets: 8
-  min_per_adset_eur: 80
-  min_per_adset_usd: 80
-  budget_increment_pct: [50, 100]
-  cooldown_hours: 24
+  min_adsets: {{rules.config_refs.cbo.min_adsets}}
+  max_adsets: {{rules.config_refs.cbo.max_adsets}}
+  min_per_adset_eur: {{rules.config_refs.cbo.min_per_adset_eur}}
+  min_per_adset_usd: {{rules.config_refs.cbo.min_per_adset_usd}}
+  budget_increment_pct: {{rules.config_refs.cbo.budget_increment_pct}}
+  cooldown_hours: {{rules.config_refs.cbo.cooldown_hours}}
 
 # ── Copy bank ────────────────────────────────────────────────────────────────
 copy_bank:
