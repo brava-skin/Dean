@@ -858,35 +858,50 @@ def main() -> None:
         
         # Collect ad insights and post as thread reply
         try:
-            ad_lines = []
-            # Get ad insights for the thread snapshot
             if stage_choice in ("all", "testing"):
-                try:
-                    testing_ads = client.get_ad_insights(
-                        level="ad",
-                        filtering=[{"field": "adset.id", "operator": "IN", "value": [settings.get("ids", {}).get("testing_adset_id")]}],
-                        fields=["ad_id", "ad_name", "spend", "actions"],
-                        date_preset="today",
-                        paginate=True
-                    )
-                    for ad in testing_ads or []:
-                        ad_name = ad.get("ad_name", "")
-                        spend_today = float(ad.get("spend", 0))
-                        purch_today = sum(int(a.get("value", 0)) for a in (ad.get("actions") or []) if a.get("action_type") == "purchase")
-                        clean_name = prettify_ad_name(ad_name)
-                        ad_lines.append(f"• {clean_name}, spend {fmt_eur(spend_today)} today, life {fmt_eur(spend_today)}, purch {purch_today}")
-                except Exception:
-                    pass
-            
-            # Limit to 4 lines, show "more" if needed
-            if len(ad_lines) > 4:
-                display_lines = ad_lines[:4]
-                display_lines.append(f"+ {len(ad_lines) - 4} more in thread")
-            else:
-                display_lines = ad_lines
-            
-            if display_lines:
-                post_thread_ads_snapshot(thread_ts, display_lines)
+                # Get today's insights with local timezone
+                from datetime import datetime, timezone
+                import zoneinfo
+                
+                # Define attribution windows for consistency
+                attr_windows = ["7d_click", "1d_view"]
+                
+                local_tz = zoneinfo.ZoneInfo(tz_name)
+                now = datetime.now(local_tz)
+                midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                
+                # Get today's data
+                rows_today = client.get_ad_insights(
+                    level="ad",
+                    filtering=[{"field": "adset.id", "operator": "IN", "value": [settings.get("ids", {}).get("testing_adset_id")]}],
+                    fields=["ad_id", "ad_name", "spend", "actions"],
+                    time_range={
+                        "since": midnight.strftime("%Y-%m-%d"),
+                        "until": now.strftime("%Y-%m-%d")
+                    },
+                    action_attribution_windows=list(attr_windows),
+                    paginate=True
+                )
+                
+                # Get lifetime data
+                rows_lifetime = client.get_ad_insights(
+                    level="ad",
+                    filtering=[{"field": "adset.id", "operator": "IN", "value": [settings.get("ids", {}).get("testing_adset_id")]}],
+                    fields=["ad_id", "spend", "actions"],
+                    time_range={
+                        "since": "2024-01-01",  # Far back enough to capture all lifetime
+                        "until": now.strftime("%Y-%m-%d")
+                    },
+                    action_attribution_windows=list(attr_windows),
+                    paginate=True
+                )
+                
+                # Build snapshot using helper
+                from slack import build_ads_snapshot
+                ad_lines = build_ads_snapshot(rows_today or [], rows_lifetime or [], tz_name)
+                
+                if ad_lines:
+                    post_thread_ads_snapshot(thread_ts, ad_lines)
         except Exception:
             pass
 
