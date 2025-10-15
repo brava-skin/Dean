@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, date
 from functools import lru_cache
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import pytz
 
@@ -448,6 +448,193 @@ def yesterday_ymd(tz: timezone | None = None) -> str:
     if tz is None:
         return yesterday_ymd_account()
     return (now_utc().astimezone(tz) - timedelta(days=1)).date().isoformat()
+
+
+# -----------------------
+# Config helpers (consolidated from duplicate files)
+# -----------------------
+def getenv_f(name: str, default: float) -> float:
+    """Get environment variable as float with fallback."""
+    try:
+        return float(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+
+def getenv_i(name: str, default: int) -> int:
+    """Get environment variable as int with fallback."""
+    try:
+        return int(float(os.getenv(name, str(default))))
+    except Exception:
+        return default
+
+
+def getenv_b(name: str, default: bool) -> bool:
+    """Get environment variable as bool with fallback."""
+    raw = os.getenv(name, str(int(default))).lower()
+    return raw in ("1", "true", "yes", "y")
+
+
+def cfg(settings: Dict[str, Any], path: str, default: Any = None) -> Any:
+    """Get nested config value by dot-separated path."""
+    cur: Any = settings
+    for part in path.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return default
+        cur = cur[part]
+    return cur
+
+
+def cfg_or_env_f(settings: Dict[str, Any], path: str, env: str, default: float) -> float:
+    """Get config value or environment variable as float."""
+    v = cfg(settings, path, None)
+    if v is None:
+        return getenv_f(env, default)
+    try:
+        return float(v)
+    except Exception:
+        return default
+
+
+def cfg_or_env_i(settings: Dict[str, Any], path: str, env: str, default: int) -> int:
+    """Get config value or environment variable as int."""
+    v = cfg(settings, path, None)
+    if v is None:
+        return getenv_i(env, default)
+    try:
+        return int(v)
+    except Exception:
+        return default
+
+
+def cfg_or_env_b(settings: Dict[str, Any], path: str, env: str, default: bool) -> bool:
+    """Get config value or environment variable as bool."""
+    v = cfg(settings, path, None)
+    if v is None:
+        return getenv_b(env, default)
+    if isinstance(v, bool):
+        return v
+    return str(v).lower() in ("1", "true", "yes", "y")
+
+
+def cfg_or_env_list(settings: Dict[str, Any], path: str, env: str, default: List[str]) -> List[str]:
+    """Get config value or environment variable as list."""
+    v = cfg(settings, path, None)
+    if v is None:
+        raw = os.getenv(env, ",".join(default))
+        return [s.strip() for s in (raw or "").split(",") if s.strip()]
+    if isinstance(v, (list, tuple)):
+        return list(v)
+    return [str(v).strip()]
+
+
+# -----------------------
+# Number formatting helpers (consolidated from slack.py)
+# -----------------------
+def safe_f(v: Any, default: float = 0.0) -> float:
+    """Safely convert any value to float."""
+    try:
+        if v is None:
+            return default
+        if isinstance(v, (int, float)):
+            return float(v)
+        return float(str(v).replace(",", "").strip())
+    except Exception:
+        return default
+
+
+def fmt_currency(amount: Optional[float | str]) -> str:
+    """Format currency with Euro symbol."""
+    if amount is None:
+        return "–"
+    try:
+        val = float(amount)
+        if val == 0:
+            return "€0"
+        return f"€{val:,.2f}".replace(",", " ")
+    except Exception:
+        return "–"
+
+
+def fmt_pct(v: Optional[float | str], decimals: int = 1) -> str:
+    """Format percentage with specified decimal places."""
+    if v is None:
+        return "–"
+    try:
+        val = float(v)
+        return f"{val:.{decimals}%}"
+    except Exception:
+        return "–"
+
+
+def fmt_int(v: Optional[int | float | str]) -> str:
+    """Format integer."""
+    if v is None:
+        return "–"
+    try:
+        return str(int(float(v)))
+    except Exception:
+        return "–"
+
+
+def fmt_roas(value: Optional[float]) -> str:
+    """Format ROAS with 2 decimal places."""
+    if value is None:
+        return "–"
+    return f"{value:.2f}"
+
+
+# -----------------------
+# Time helpers (consolidated from duplicate files)
+# -----------------------
+def today_str() -> str:
+    """Get today's date string in account timezone."""
+    return today_ymd_account()
+
+
+def daily_key(stage: str, metric: str) -> str:
+    """Generate daily counter key."""
+    return f"daily::{today_str()}::{stage}::{metric}"
+
+
+def ad_day_flag_key(ad_id: str, flag: str) -> str:
+    """Generate ad day flag key."""
+    return f"ad::{ad_id}::{flag}::{today_str()}"
+
+
+def now_minute_key(prefix: str) -> str:
+    """Generate minute-based key."""
+    return f"{prefix}::{now_account().strftime('%Y-%m-%dT%H:%M')}"
+
+
+# -----------------------
+# Text cleaning helpers
+# -----------------------
+def clean_text_token(v: Any) -> str:
+    """Clean text token for display."""
+    s = str(v or "")
+    s = s.replace("_", " ")
+    return " ".join(s.split()).strip()
+
+
+def prettify_ad_name(name: str) -> str:
+    """Clean up ad display names for mobile-friendly display."""
+    if not name:
+        return "UNNAMED"
+    
+    # Remove stage prefixes
+    cleaned = re.sub(r'^\[(TEST|VALID|SCALE)\]\s*', '', name.strip())
+    
+    # Clean up common patterns
+    cleaned = cleaned.replace('_', ' ')
+    cleaned = re.sub(r'\s+', ' ', cleaned)  # Multiple spaces to single
+    cleaned = cleaned.strip()
+    
+    # Truncate if too long
+    if len(cleaned) > 30:
+        cleaned = cleaned[:27] + "..."
+    
+    return cleaned or "UNNAMED"
 
 
 # -----------------------
