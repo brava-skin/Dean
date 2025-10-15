@@ -969,7 +969,28 @@ def main() -> None:
         )
     )
 
-    # Background mode handling
+    # Check for periodic summaries (works with GitHub Actions)
+    current_time = now_local(tz_name)
+    
+    # 3-hour summary (every 3 hours at :00)
+    if current_time.hour % 3 == 0 and current_time.minute < 5:  # Within 5 minutes of the hour
+        try:
+            from scheduler import BackgroundScheduler
+            temp_scheduler = BackgroundScheduler(settings, rules_cfg, store)
+            temp_scheduler._run_3h_summary()
+        except Exception as e:
+            notify(f"⚠️ 3-hour summary failed: {e}")
+    
+    # Daily summary (at 8 AM)
+    if current_time.hour == 8 and current_time.minute < 5:  # Within 5 minutes of 8 AM
+        try:
+            from scheduler import BackgroundScheduler
+            temp_scheduler = BackgroundScheduler(settings, rules_cfg, store)
+            temp_scheduler._run_daily_summary()
+        except Exception as e:
+            notify(f"⚠️ Daily summary failed: {e}")
+    
+    # Background mode handling (optional)
     if args.background:
         notify("🤖 Starting background scheduler mode")
         start_background_scheduler(settings, rules_cfg, store)

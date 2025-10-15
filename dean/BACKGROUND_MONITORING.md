@@ -1,13 +1,14 @@
-# Background Monitoring System
+# Enhanced Monitoring System
 
-This system provides automated background monitoring for your Meta advertising automation with intelligent alerts and humanized messaging.
+This system enhances your existing GitHub Actions hourly ticks with intelligent alerts, periodic summaries, and humanized messaging.
 
 ## Features
 
-### 🤖 Automated Scheduling
-- **Hourly Ticks**: Runs testing, validation, and scaling stages every hour
-- **3-Hour Summaries**: Provides metrics overview and active ads status every 3 hours
-- **Daily Summaries**: Morning reports of previous day's performance
+### 🔄 Enhanced Hourly Ticks
+- **Regular Automation**: Your existing testing, validation, and scaling stages
+- **3-Hour Summaries**: Automatic metrics overview every 3 hours (3 AM, 6 AM, 9 AM, etc.)
+- **Daily Summaries**: Morning reports at 8 AM of previous day's performance
+- **Smart Timing**: Summaries only run during the first 5 minutes of their scheduled hour
 
 ### 🚨 Intelligent Alerts
 - **Queue Empty**: Alerts when no more creatives are available for testing
@@ -23,19 +24,25 @@ All alerts are written like a media buyer colleague texting you:
 
 ## Usage
 
-### Start Background Monitoring
+### Automatic with GitHub Actions (Recommended)
+
+Your existing GitHub Actions workflow will automatically:
+- Run hourly ticks as usual
+- Add 3-hour summaries at 3 AM, 6 AM, 9 AM, 12 PM, 3 PM, 6 PM, 9 PM, 12 AM
+- Add daily summaries at 8 AM
+- Send humanized alerts for critical events
+
+**No changes needed** - it just works with your existing setup!
+
+### Manual Testing
 
 ```bash
-# Option 1: Use the convenience script
+# Test a single run with summaries
+python src/main.py --profile production
+
+# Test background mode (for VPS deployment)
 python start_background.py
-
-# Option 2: Use main.py directly
-python src/main.py --background
 ```
-
-### Stop Background Monitoring
-
-Press `Ctrl+C` to gracefully stop the scheduler.
 
 ## Configuration
 
