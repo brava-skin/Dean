@@ -1,0 +1,392 @@
+version: 1.0
+env: prod
+audit:
+  last_changed_at: "2025-10-13T00:00:00Z"
+  last_changed_by: "you@company.com"
+  changelog: |
+    - Switch account to Europe/Amsterdam timezone and EUR currency.
+    - Enable USD→EUR FX for tripwire checks (uses env USD_EUR_RATE if present).
+    - Add explicit timezones (account vs audience) and reporting digest tz.
+    - Clarify launch defer uses account local time; all spend/caps/CPA/ROAS thresholds are in EUR.
+    - Centralize testing engine tunables under testing.engine.
+    - Centralize validation engine tunables under validation.engine and add scaling.adset_start_budget_eur.
+    - NEW: Centralize scaling engine tunables under scaling.engine to control scaling.py behavior without env vars.
+
+
+timezones:
+  account_tz: "Europe/Amsterdam"
+  audience_tz: "America/Chicago"
+
+windows:
+  day_1: {days: 1}
+  day_3: {days: 3}
+  day_7: {days: 7}
+  last_48h: {hours: 48}
+  week_to_date: {wtd: true}
+  month_to_date: {mtd: true}
+
+attribution:
+  click_days: 7
+  view_days: 1
+  roas_source: "computed"
+
+minimums:
+  min_impressions: 300
+  min_clicks: 0
+  min_spend: 10   # EUR
+
+stability:
+  consecutive_ticks: 2
+  smoothing_epsilon: 0.0
+
+thresholds:
+  ctr:
+    testing_floor: 0.008
+    validation_floor: 0.010
+  cpa:              # EUR
+    testing_max: 36
+    validation_max: 28
+    scaling_kill_max: 40
+  roas:
+    testing_min: 1.5
+    validation_min: 1.8
+    scaling_kill_min: 1.2
+  poas:
+    validation_min: 0.0
+    scaling_min: 0.2
+  aov:
+    validation_min: null
+
+testing:
+  minimums:
+    min_impressions: 300
+    min_spend: 10   # EUR
+  kill:
+    - {type: "spend_no_purchase", spend_gte: 45}                          # EUR
+    - {type: "ctr_below", ctr_lt: 0.008, spend_gte: 40}                   # EUR
+    - {type: "spend_no_atc", spend_gte: 50}                               # EUR
+    - {type: "spend_multi_atc_no_purchase", spend_gte: 70, atc_gte: 2}    # EUR
+    - {type: "roas_below_after_days", roas_lt: 1.5, window: "day_3"}
+    - {type: "cpa_gte_over_days", cpa_gte: 38, days: 3}                   # EUR
+    - {type: "spend_over_2x_price_no_purchase"}                           # uses economics.fx for USD→EUR
+  advance:
+    operator: "all"
+    rules:
+      - {type: "purchase_gte", purchases_gte: 1}
+      - {type: "cpa_lte", cpa_lte: 36}                                     # EUR
+      - {type: "ctr_gte", ctr_gte: 0.008}
+  engine:
+    tripwires:
+      lifetime_spend_no_purchase_eur: 32
+    bayes:
+      prior_a: 2.0
+      prior_b: 300.0
+      sample_count: 32
+      kill_prob: 0.90
+    adaptive_ctr:
+      floor_min: 0.008
+      floor_scale: 0.70
+      min_impressions: 300
+    fatigue:
+      ewma_alpha: 0.30
+      drop_pct: 0.35
+    fairness:
+      min_spend_before_kill_eur: 20
+    promotion:
+      pause_after_promotion: true
+      validation_budget_eur: 40
+      placements: ["facebook", "instagram"]
+    queue:
+      max_launches_per_tick: 8
+    attribution_windows: ["7d_click", "1d_view"]
+
+validation:
+  minimums:
+    min_impressions: 600
+    min_clicks: 30
+    min_spend: 40   # EUR
+  kill:
+    - {type: "spend_no_purchase", spend_gte: 40}                          # EUR
+    - {type: "cpa_gte", cpa_gte: 32}                                      # EUR
+    - {type: "ctr_below", ctr_lt: 0.008, spend_gte: 40}                   # EUR
+    - {type: "spend_multi_atc_no_purchase", spend_gte: 80, atc_gte: 2}    # EUR
+    - {type: "roas_below_after_days", roas_lt: 1.5, window: "day_3"}
+    - {type: "spend_over_2x_price_no_purchase"}                           # uses economics.fx for USD→EUR
+  advance:
+    operator: "all"
+    rules:
+      - {type: "purchase_gte", purchases_gte: 2}
+      - {type: "cpa_lte", cpa_lte: 28}                                     # EUR
+      - {type: "roas_gte", roas_gte: 1.8}
+      - {type: "ctr_gte", ctr_gte: 0.01}
+  strictness:
+    min_days_with_purchase: 2
+  engine:
+    attribution_windows: ["7d_click", "1d_view"]   # maps to VALID_ATTR_WINDOWS
+    stability:
+      consecutive_ticks: 2                         # maps to VALID_CONSEC_TICKS_REQUIRED
+    fairness:
+      min_spend_before_kill_eur: 40               # VALID_MIN_FAIR_SPEND_BEFORE_KILL
+    tripwires:
+      lifetime_spend_no_purchase_eur: 40          # VALID_SPEND_NO_PURCHASE_EUR
+    promotion:
+      pause_after_promotion: true                 # VALID_PAUSE_AFTER_PROMOTION
+      cooldown_hours: 24                          # VALID_PROMO_COOLDOWN_HOURS
+      allow_create_on_promo_check: false          # VALID_ALLOW_CREATE_ON_PROMO_CHECK
+    soft_pass:
+      max_budget_eur: 40                          # VALID_SOFT_PASS_MAX_BUDGET
+      max_cpa_eur: 40                             # VALID_SOFT_PASS_MAX_CPA
+      min_roas: 1.3                               # VALID_SOFT_PASS_MIN_ROAS
+      min_ctr: 0.008                              # VALID_SOFT_PASS_MIN_CTR
+
+scaling:
+  # Start budget used by validation promotion when creating a SCALE ad set
+  adset_start_budget_eur: 100
+
+  # Engine: all knobs referenced by scaling.py (env fallbacks remain supported)
+  engine:
+    attribution_windows: ["7d_click", "1d_view"]     # SCALE_ATTR_WINDOWS
+
+    minimums:                                        # SCALE_MIN_*
+      min_impressions: 1000                          # SCALE_MIN_IMPRESSIONS
+      min_clicks: 50                                 # SCALE_MIN_CLICKS
+      min_spend: 50                                  # EUR — SCALE_MIN_SPEND
+
+    hysteresis:                                      # downscale guards
+      roas_down_band: 1.7                            # SCALE_HYST_ROAS_DOWN
+      cpa_up_band: 33                                # EUR — SCALE_HYST_CPA_UP
+      downscale_factor: 0.5                          # (not in code yet; reserved for -50% step)
+
+    kills:
+      cpa_days: 2                                    # SCALE_KILL_CPA_DAYS
+      roas_days: 3                                   # SCALE_KILL_ROAS_DAYS
+      lifetime_tripwires:
+        spend_no_purchase_eur: 150                   # SCALE_SPEND_NO_PURCHASE_EUR
+
+    scale_up:
+      cooldown_hours: 24                             # SCALE_COOLDOWN_H
+      max_scale_step_pct: 200                        # SCALE_MAX_SCALE_STEP_PCT
+      bands:                                         # used by _scale_step()
+        - {cpa_lte: 22, roas_gte: 3.0, inc_pct: 100}
+        - {cpa_lte: 27, roas_gte: 2.0, inc_pct: 50}
+
+    duplication:
+      max_duplicates_per_24h: 3                      # SCALE_DUP_CAP_24H
+      purchases_gte: 5                               # condition to duplicate
+      cpa_lte: 27                                    # condition to duplicate
+      max_each_action: 2                             # cap per tick when eligible
+
+    reinvest:                                        # portfolio allocator
+      share: 0.5                                     # SCALE_REINVEST_SHARE
+      min_bump_eur: 10                               # SCALE_REINVEST_MIN_BUMP
+      portfolio_max_moves: 6                         # SCALE_PORTFOLIO_MAX_MOVES
+      strategy: "proportional_to_roas"               # informational (current allocator)
+
+    pacing_freeze:                                   # orchestration guard (_pacing_freeze)
+      enabled: true
+      growth_pct_24h_warn: 150                       # mirrors pacing.spend_velocity
+      growth_pct_48h_warn: 250
+
+  minimums:
+    min_impressions: 1000
+    min_clicks: 50
+    min_spend: 50   # EUR
+
+  kill:
+    - {type: "cpa_gte_consecutive_days", cpa_gte: 40, days: 2}             # EUR
+    - {type: "roas_lt_over_days", roas_lt: 1.2, days: 3}
+    - {type: "spend_no_purchase", spend_gte: 150}                          # EUR
+
+  scale_up:
+    cooldown_hours: 24
+    hysteresis:
+      roas_down_band: 1.7
+      cpa_up_band: 33
+    steps:
+      - {type: "cpa_lte_and_roas_gte_over_days", cpa_lte: 27, roas_gte: 2.0, days: 2, budget_increase_pct: [50, 100]}
+      - {type: "cpa_lte_and_roas_gte_over_days", cpa_lte: 22, roas_gte: 3.0, days: 2, budget_increase_pct: [100, 200]}
+
+  duplicate_on_fire:
+    max_duplicates_per_24h: 3
+    rules:
+      - {type: "purchases_in_day", purchases_gte: 5, cpa_lte: 27, duplicates: 2, budget_each: 150}  # EUR
+
+pacing:
+  spend_velocity:
+    growth_pct_24h_warn: 150
+    growth_pct_48h_warn: 250
+    freeze_scaling_if_exceeds: true
+  daily_stage_caps:   # EUR
+    testing: 100
+    validation: 400
+    scaling: 2500
+
+safety_nets:
+  cut_budget_if_cpa_worse:
+    - {type: "cpa_over_days", cpa_gt: 33, days: 2, cut_pct: 50}            # EUR
+  stop_if_two_failed_scales:
+    - {type: "consecutive_scale_failures", count: 2}
+  account:
+    pause_scaling_if_account_cpa_high:
+      enabled: true
+      factor_over_breakeven: 1.5
+      days: 2
+    no_purchases_tripwire_hours: 48
+
+queue_policies:
+  keep_active_ads: 4
+  fairness:
+    min_spend_per_ad_before_kill: 20   # EUR
+  launch_defer:
+    defer_after_hour_local: 18         # 18:00 in account_tz (Europe/Amsterdam)
+
+naming:
+  enforce: true
+  patterns:
+    campaign:
+      - "^\[(TEST|VALID|SCALE|SCALE-CBO)\]\s+Brava\s+—\s+(ABO|CBO)\s+—\s+US Men$"
+    adset:
+      - "^\[(TEST|VALID|SCALE)\]\s+.+$"
+    ad:
+      - "^\[(TEST|VALID|SCALE)\]\s+.+$"
+  warn_on_mismatch: true
+  auto_prefix_if_missing: true
+
+creative_compliance:
+  require_fields: ["primary_text", "headline"]
+  forbid_terms: ["cures", "miracle", "guaranteed"]
+  require_utm: false
+
+reporting:
+  reason_detail: "full"
+  digest:
+    enabled: true
+    time_local: "08:30"
+    tz: "Europe/Amsterdam"
+  logs:
+    json_log_enabled: true
+    json_log_path: "data/actions.log.jsonl"
+
+economics:
+  currency: "EUR"            # Account currency
+  use_env_cogs: true
+  use_creative_cogs: false
+  fx:
+    enabled: true            # Enable for USD product price → EUR spend tripwire
+    base_product_currency: "USD"
+    account_currency: "EUR"
+    env_rate_var: "USD_EUR_RATE"   # if unset, default_rate is used
+    default_rate: 0.92
+
+data_quality:
+  missing_actions_alert:
+    enabled: true
+    min_spend_for_alert: 20   # EUR
+  tracking_drop_alert:
+    enabled: true
+    drop_pct_vs_7d_avg: 60
+
+mode:
+  current: "production"
+  staging:
+    disable_writes: true
+    relax_thresholds: true
+  production:
+    disable_writes: false
+    relax_thresholds: false
+
+redistribution:
+  on_pause_winner_reinvest: true
+  strategy: "proportional_to_roas"
+  min_increment_per_winner: 10   # EUR
+
+config_refs:
+  testing:
+    daily_budget_eur: 50
+    daily_budget_usd: 50
+    keep_ads_live: 4
+    max_active_ads: 4
+    minimums:
+      min_impressions: 300
+      min_clicks: 0
+      min_spend_eur: 10
+      min_spend_usd: 10
+    fairness:
+      min_spend_before_kill_eur: 20
+      min_spend_before_kill_usd: 20
+      min_runtime_hours: 12
+    queue_rotation:
+      max_launches_per_day: 8
+
+  validation:
+    adset_budget_eur: 40
+    adset_budget_usd: 40
+    min_days: 2
+    max_days: 3
+    total_spend_cap_eur: 120
+    total_spend_cap_usd: 120
+    minimums:
+      min_impressions: 600
+      min_clicks: 30
+      min_spend_eur: 40
+      min_spend_usd: 40
+
+  scaling:
+    adset_start_budget_eur: 100
+    adset_start_budget_usd: 100
+    cbo_entry_budget_eur: 400
+    cbo_entry_budget_usd: 400
+    cbo_increment_pct: [50, 100]
+    budget:
+      min_eur: 10
+      max_eur: 5000
+      min_usd: 10
+      max_usd: 5000
+      max_step_pct: 100
+      cooldown_hours_after_scale: 24
+    hysteresis:
+      roas_down_band: 1.7
+      cpa_up_band: 33
+    reinvestment:
+      allocate_pct_of_freed: 50
+      min_increment_eur: 10
+      min_increment_usd: 10
+    refresh_winner:
+      after_good_days: 7
+      cpa_max: 22
+      roas_min: 3.0
+
+  guardrails:
+    account_cpa_pause_factor: 1.5
+    account_cpa_window_days: 2
+    no_purchases_tripwire_hours: 48
+    global_daily_cap_eur: 3000
+    global_daily_cap_usd: 3000
+    spend_velocity:
+      warn_24h_growth_x: 1.5
+      warn_48h_growth_x: 2.5
+    scaling_freeze_days_on_worsen: 3
+
+  overrides:
+    emergency_stop:
+      api_error_rate_threshold_pct: 40
+      tracking_flatline_hours: 24
+      api_error_rate_window_minutes: 15
+
+  data_quality:
+    missing_actions_min_spend_eur: 20
+    missing_actions_min_spend_usd: 20
+    tracking_drop_pct_vs_7d_avg: 60
+
+  queue_validation:
+    min_duration_sec: 5
+    max_duration_sec: 120
+
+  cbo:
+    min_adsets: 2
+    max_adsets: 8
+    min_per_adset_eur: 80
+    min_per_adset_usd: 80
+    budget_increment_pct: [50, 100]
+    cooldown_hours: 24
+

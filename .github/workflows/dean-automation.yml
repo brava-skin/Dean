@@ -1,0 +1,103 @@
+name: Dean Automation
+
+on:
+  schedule:
+    # Run every hour at minute 0
+    - cron: '0 * * * *'
+  workflow_dispatch: # Allow manual triggering
+    inputs:
+      stage:
+        description: 'Stage to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+        - all
+        - testing
+        - validation
+        - scaling
+
+jobs:
+  dean-automation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: |
+        cd dean
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run Dean Automation
+      env:
+        # Meta API Credentials
+        FB_APP_ID: ${{ secrets.FB_APP_ID }}
+        FB_APP_SECRET: ${{ secrets.FB_APP_SECRET }}
+        FB_ACCESS_TOKEN: ${{ secrets.FB_ACCESS_TOKEN }}
+        FB_AD_ACCOUNT_ID: ${{ secrets.FB_AD_ACCOUNT_ID }}
+        FB_PIXEL_ID: ${{ secrets.FB_PIXEL_ID }}
+        FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+        
+        # Optional: Instagram
+        IG_ACTOR_ID: ${{ secrets.IG_ACTOR_ID }}
+        
+        # Store Configuration
+        STORE_URL: ${{ secrets.STORE_URL }}
+        
+        # Slack Notifications
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        SLACK_WEBHOOK_URL_ERRORS: ${{ secrets.SLACK_WEBHOOK_URL_ERRORS }}
+        
+        # Optional: Supabase
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        SUPABASE_TABLE: ${{ secrets.SUPABASE_TABLE }}
+        
+        # Optional: Economics
+        BREAKEVEN_CPA: ${{ secrets.BREAKEVEN_CPA }}
+        COGS_PER_PURCHASE: ${{ secrets.COGS_PER_PURCHASE }}
+        USD_EUR_RATE: ${{ secrets.USD_EUR_RATE }}
+        
+        # Timezone
+        TIMEZONE: ${{ secrets.TIMEZONE || 'Europe/Amsterdam' }}
+        
+      run: |
+        cd dean
+        
+        # Run Dean automation based on input
+        if [ "${{ github.event.inputs.stage }}" == "testing" ]; then
+          echo "🔄 Running Testing stage..."
+          python src/main.py --stage testing --profile production
+        elif [ "${{ github.event.inputs.stage }}" == "validation" ]; then
+          echo "🔄 Running Validation stage..."
+          python src/main.py --stage validation --profile production
+        elif [ "${{ github.event.inputs.stage }}" == "scaling" ]; then
+          echo "🔄 Running Scaling stage..."
+          python src/main.py --stage scaling --profile production
+        else
+          echo "🔄 Running All stages..."
+          python src/main.py --profile production
+        fi
+
+    - name: Upload logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: dean-logs-${{ github.run_number }}
+        path: dean/data/
+        retention-days: 7
+
+    - name: Notify on failure
+      if: failure()
+      run: |
+        echo "❌ Dean automation failed"
+        # You can add Slack notification here if needed

@@ -1,0 +1,353 @@
+version: 1.2
+env: prod
+branding_name: "Dean"
+
+audit:
+  last_changed_at: "2025-10-13T00:00:00Z"
+  last_changed_by: "you@company.com"
+  changelog: |
+    - v1.2: Add profiles, richer guardrails, reinvestment policy, data-quality,
+            simulation knobs, naming/compliance, and execution controls.
+    - v1.2-eur: Switch account timezone to Europe/Amsterdam and adopt EUR.
+                Added *_eur keys while keeping *_usd for backward compatibility.
+                Updated templates to use €.
+    - v1.2-ig: Add explicit Instagram placements and optional instagram_actor_id env
+
+# ── Timezones ─────────────────────────────────────────────────────────────────
+account_timezone: "Europe/Amsterdam"
+notifications_timezone: "Europe/Amsterdam"
+dst_note: "Windows are interpreted in account timezone; notifications in EU/AMS."
+
+ids:
+  testing_campaign_id: "120231838265440160"
+  testing_adset_id: "120231838265460160"
+  validation_campaign_id: "120231838417260160"
+  scaling_campaign_id: "120231838441470160"
+
+profiles:
+  production:
+    dry_run: false
+    write_enabled: true
+
+mode:
+  current: "production"
+
+meta_defaults:
+  objective: "SALES"
+  conversion_location: "website"
+  pixel_event: "Purchase"
+  attribution:
+    click_days: 7
+    view_days: 1
+    roas_source: "computed"
+  bid_strategy: "lowest_cost"
+  geo:
+    country: "US"
+  audience:
+    type: "broad"
+    gender: "male"
+    age_min: 18
+    age_max: 54
+    exclude_purchasers_days: 60
+    exclusions:
+      engaged_custom_audience_ids: []
+      purchaser_custom_audience_ids: []
+      lookalike_exclusions: []
+  # Legacy placement knobs kept for backward compat with any code still reading these
+  placements:
+    testing_mode: "advantage_plus"
+    validation_mode: "advantage_plus"
+    scaling_mode: "advantage_plus"
+  creative:
+    dynamic_creative: false
+    cta: "SHOP_NOW"
+    link_url_env: "STORE_URL"
+    instagram_actor_id_env: "IG_ACTOR_ID"   # optional: set env to force IG handle
+    utm:
+      template: "utm_source=meta&utm_medium=paid&utm_campaign={{campaign.name}}&utm_adset={{adset.name}}&utm_content={{ad.name}}"
+      require: false
+  attribution_windows_override: null
+
+# ── Global placements (used if a stage does not override) ─────────────────────
+placements:
+  publisher_platforms: ["facebook", "instagram"]
+  device_platforms: ["mobile", "desktop"]     # or ["mobile"] to force mobile-only
+  facebook_positions: ["feed", "video_feeds", "marketplace"]
+  instagram_positions: ["feed", "story", "reels", "explore"]
+  messenger_positions: []
+  audience_network_positions: []
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+testing:
+  daily_budget_eur: 50
+  daily_budget_usd: 50
+  keep_ads_live: 4
+  max_active_ads: 4
+  optimization_goal: "PURCHASE"
+  attribution: "7d_click_1d_view"
+  bid_strategy: "lowest_cost"
+  dynamic_creative: false
+  pause_dead_hours: false
+  minimums:
+    min_impressions: 300
+    min_clicks: 0
+    min_spend_eur: 10
+    min_spend_usd: 10
+  fairness:
+    min_spend_before_kill_eur: 20
+    min_spend_before_kill_usd: 20
+    min_runtime_hours: 12
+  queue_rotation:
+    enable: true
+    refill_on_kill: true
+    max_launches_per_day: 8
+  naming_prefix: "[TEST]"
+  # Stage-specific placements (optional; if omitted, uses global placements)
+  placements:
+    publisher_platforms: ["facebook", "instagram"]
+    device_platforms: ["mobile", "desktop"]
+    facebook_positions: ["feed", "video_feeds"]
+    instagram_positions: ["feed", "story", "reels"]
+    messenger_positions: []
+    audience_network_positions: []
+
+# ── Validation ────────────────────────────────────────────────────────────────
+validation:
+  adset_budget_eur: 40
+  adset_budget_usd: 40
+  min_days: 2
+  max_days: 3
+  total_spend_cap_eur: 120
+  total_spend_cap_usd: 120
+  optimization_goal: "PURCHASE"
+  attribution: "7d_click_1d_view"
+  bid_strategy: "lowest_cost"
+  dynamic_creative: false
+  minimums:
+    min_impressions: 600
+    min_clicks: 30
+    min_spend_eur: 40
+    min_spend_usd: 40
+  promotion:
+    pause_validation_on_promotion: true
+  naming_prefix: "[VALID]"
+  placements:
+    publisher_platforms: ["facebook", "instagram"]
+    device_platforms: ["mobile", "desktop"]
+    facebook_positions: ["feed", "video_feeds", "marketplace"]
+    instagram_positions: ["feed", "story", "reels", "explore"]
+    messenger_positions: []
+    audience_network_positions: []
+
+# ── Scaling ───────────────────────────────────────────────────────────────────
+scaling:
+  adset_start_budget_eur: 100
+  adset_start_budget_usd: 100
+  allow_cbo: true
+  cbo_entry_budget_eur: 400
+  cbo_entry_budget_usd: 400
+  cbo_increment_pct: [50, 100]
+  optimization_goal: "PURCHASE"
+  attribution: "7d_click_1d_view"
+  bid_strategy: "lowest_cost"
+  dynamic_creative: true
+  budget:
+    min_eur: 10
+    max_eur: 5000
+    min_usd: 10
+    max_usd: 5000
+    max_step_pct: 100
+    cooldown_hours_after_scale: 24
+  hysteresis:
+    roas_down_band: 1.7
+    cpa_up_band: 33
+  reinvestment:
+    enabled: true
+    strategy: "proportional_to_roas"
+    allocate_pct_of_freed: 50
+    min_increment_eur: 10
+    min_increment_usd: 10
+  refresh_winner:
+    enabled: true
+    after_good_days: 7
+    cpa_max: 22
+    roas_min: 3.0
+  naming_prefix: "[SCALE]"
+  placements:
+    publisher_platforms: ["facebook", "instagram"]
+    device_platforms: ["mobile", "desktop"]
+    facebook_positions: ["feed", "video_feeds", "marketplace"]
+    instagram_positions: ["feed", "story", "reels", "explore"]
+    messenger_positions: []
+    audience_network_positions: []
+
+# ── Guardrails ────────────────────────────────────────────────────────────────
+guardrails:
+  account_cpa_pause_factor: 1.5
+  account_cpa_window_days: 2
+  no_purchases_tripwire_hours: 48
+  global_daily_cap_eur: 3000
+  global_daily_cap_usd: 3000
+  spend_velocity:
+    compare_24h_vs_prev_24h: true
+    compare_48h_vs_prev_48h: true
+    warn_24h_growth_x: 1.5
+    warn_48h_growth_x: 2.5
+    freeze_scaling_if_exceeds: true
+  scaling_freeze_days_on_worsen: 3
+  staging_relax_thresholds: true
+
+overrides:
+  manual:
+    freeze_all_scaling: false
+    halt_testing_topups: false
+    read_only_mode: false
+  emergency_stop:
+    enabled: true
+    triggers:
+      - type: "api_error_rate"
+        threshold_pct: 40
+        window_minutes: 15
+      - type: "tracking_flatline"
+        hours: 24
+
+# ── Naming ────────────────────────────────────────────────────────────────────
+naming:
+  enforce: true
+  auto_prefix_if_missing: true
+  patterns:
+    campaign: ["^\\[(TEST|VALID|SCALE|SCALE-CBO)\\]\\s+Brava\\s+—\\s+(ABO|CBO)\\s+—\\s+US Men$"]
+    adset: ["^\\[(TEST|VALID|SCALE)\\]\\s+.+$"]
+    ad: ["^\\[(TEST|VALID|SCALE)\\]\\s+.+$"]
+  warn_on_mismatch: true
+
+# ── Creative compliance ───────────────────────────────────────────────────────
+creative_compliance:
+  require_fields: ["primary_text", "headline"]
+  max_lengths:
+    primary_text: 300
+    headline: 60
+    description: 150
+  forbid_terms: ["cures", "miracle", "guaranteed"]
+  auto_truncate: true
+  require_utm: false
+
+# ── Queue ─────────────────────────────────────────────────────────────────────
+queue:
+  schema:
+    required_columns:
+      - video_id
+    optional_columns:
+      - creative_id
+      - name
+      - avatar
+      - visual_style
+      - script
+      - video_url
+      - thumbnail_url
+      - page_id
+      - utm_params
+      - cogs_override_eur
+      - tags
+  dedupe:
+    by: ["creative_id", "name"]
+  prioritization:
+    strategy: "fifo"
+    tag_weights: {}
+  validation:
+    check_media_exists: true
+    min_duration_sec: 5
+    max_duration_sec: 120
+
+# ── Notifications ─────────────────────────────────────────────────────────────
+notifications:
+  slack:
+    enabled: true
+    channels:
+      default_env: "SLACK_WEBHOOK_URL"
+      errors_env: "SLACK_WEBHOOK_URL_ERRORS"
+    route:
+      info: "default"
+      warn: "default"
+      error: "errors"
+    digest:
+      enabled: true
+      time_local: "08:30"
+      include_tables: true
+      include_stage_summaries: true
+    templates:
+      kill: "🛑 [{stage}] Killed {name} — {reason} (CPA {cpa}, ROAS {roas})"
+      promote: "🚀 [{from}→{to}] {name} — {reason} (start €{budget}/d)"
+      scale: "⬆️ [SCALE] {name} +{pct}% → €{new_budget}"
+      duplicate: "🧬 [SCALE] {name} ×{count} (PAUSED)"
+
+# ── Reporting ────────────────────────────────────────────────────────────────
+reporting:
+  exports:
+    daily_digest_jsonl: "dean/data/digests/digest_{date}.jsonl"
+  fields_in_digest: ["stage", "action", "entities", "ctr", "cpa", "roas", "reason"]
+
+# ── Economics ────────────────────────────────────────────────────────────────
+economics:
+  currency: "EUR"
+  breakeven_cpa_env: "BREAKEVEN_CPA"
+  cogs_env: "COGS_PER_PURCHASE"
+  fx:
+    enabled: false
+
+# ── Data quality ─────────────────────────────────────────────────────────────
+data_quality:
+  missing_actions_alert:
+    enabled: true
+    min_spend_for_alert_eur: 20
+    min_spend_for_alert_usd: 20
+  tracking_drop_alert:
+    enabled: true
+    drop_pct_vs_7d_avg: 60
+
+# ── Execution ────────────────────────────────────────────────────────────────
+execution:
+  dry_run_env: "DRY_RUN"
+  rate_limits:
+    retry_max: 5
+    backoff_base_seconds: 0.6
+    respect_retry_after: true
+  pagination:
+    insights_page_limit: 500
+    max_pages: 50
+  concurrency:
+    writes_max_parallel: 3
+    reads_max_parallel: 5
+
+# ── Simulation ───────────────────────────────────────────────────────────────
+simulate:
+  enabled: false
+  seed: 42
+  date_range:
+    since: null
+    until: null
+  stages: ["testing", "validation", "scaling"]
+  use_recorded_insights_path: "dean/data/snapshots/insights/"
+
+# ── Logging / state ──────────────────────────────────────────────────────────
+logging:
+  to_sqlite: true
+  sqlite_path: "dean/data/state.sqlite"
+  json_log_enabled: true
+  actions_log_path: "dean/data/actions.log.jsonl"
+
+# ── CBO ──────────────────────────────────────────────────────────────────────
+cbo:
+  enabled: true
+  campaign_name: "[SCALE-CBO] Brava — CBO — US Men"
+  min_adsets: 2
+  max_adsets: 8
+  min_per_adset_eur: 80
+  min_per_adset_usd: 80
+  budget_increment_pct: [50, 100]
+  cooldown_hours: 24
+
+# ── Copy bank ────────────────────────────────────────────────────────────────
+copy_bank:
+  path: "data/copy_bank.json"
+  strategy: "round_robin"
