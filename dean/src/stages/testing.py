@@ -854,7 +854,18 @@ def run_testing_tick(
                     raise RuntimeError("Could not fetch creative id to promote.")
 
                 val_ad_name = f"[VALID] {label}"
-                val_ad = meta.create_ad(valid_as["id"], val_ad_name, creative_id=creative_id, status="ACTIVE")
+                # Use promote_ad_with_continuity to maintain the same ad ID across stages
+                if hasattr(meta, "promote_ad_with_continuity"):
+                    val_ad = meta.promote_ad_with_continuity(
+                        original_ad_id=ad_id,
+                        new_adset_id=valid_as["id"],
+                        new_name=val_ad_name,
+                        creative_id=creative_id,
+                        status="ACTIVE",
+                    )
+                else:
+                    # Fallback to regular create_ad if promote_ad_with_continuity is not available
+                    val_ad = meta.create_ad(valid_as["id"], val_ad_name, creative_id=creative_id, status="ACTIVE")
 
                 if pause_after_promotion:
                     try:
@@ -873,6 +884,14 @@ def run_testing_tick(
                 except Exception:
                     pass
 
+                # Include ID continuity information in the promotion log
+                promotion_meta = {
+                    "validation_adset": valid_as, 
+                    "placements": promo_places,
+                    "id_continuity": True,  # Flag indicating this ad maintains the same ID
+                    "original_ad_id": ad_id,
+                    "promoted_ad_id": val_ad.get("id") if val_ad else None,
+                }
                 store.log(
                     entity_type="ad",
                     entity_id=val_ad["id"],
@@ -880,7 +899,7 @@ def run_testing_tick(
                     reason=adv_reason,
                     level="info",
                     stage="VALID",
-                    meta={"validation_adset": valid_as, "placements": promo_places},
+                    meta=promotion_meta,
                 )
 
                 try:
