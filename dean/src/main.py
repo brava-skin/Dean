@@ -373,7 +373,7 @@ def load_queue_supabase(
     except Exception:
         pass
 
-    notify(f"📥 Supabase queue loaded: {len(df)} rows from '{table}'")
+    # Queue loaded silently
     return df
 
 
@@ -576,7 +576,7 @@ def health_check(store: Store, client: MetaClient) -> Dict[str, Any]:
         details.append(f"db:fail:{e}")
     # Slack (best-effort)
     try:
-        notify("🩺 healthcheck")
+        # Silent health check - no notification
         details.append("slack:ok")
     except Exception as e:
         details.append(f"slack:warn:{e}")
@@ -969,55 +969,8 @@ def main() -> None:
         )
     )
 
-    # Smart tick execution with advanced features
-    try:
-        from smart_scheduler import SmartScheduler
-        smart_scheduler = SmartScheduler(settings, rules_cfg, store)
-        
-        # Run smart tick with all advanced features
-        smart_result = smart_scheduler.run_smart_tick(stage_choice)
-        
-        # Log smart tick results
-        if smart_result.get("status") == "completed":
-            notify(f"✅ Smart tick completed successfully (ID: {smart_result.get('tick_id', 'unknown')})")
-            
-            # Show summary results if any
-            summaries = smart_result.get("summaries", {})
-            if summaries:
-                summary_types = list(summaries.keys())
-                notify(f"📊 Summaries executed: {', '.join(summary_types)}")
-        elif smart_result.get("status") == "skipped":
-            notify(f"⏭️ Smart tick skipped: {smart_result.get('reason', 'unknown')}")
-        else:
-            notify(f"❌ Smart tick failed: {smart_result.get('error', 'unknown error')}")
-            
-    except ImportError:
-        # Fallback to basic implementation if smart scheduler not available
-        notify("⚠️ Smart scheduler not available, using basic implementation")
-        
-        # Basic periodic summaries (fallback)
-        current_time = now_local(tz_name)
-        
-        # 3-hour summary (every 3 hours at :00)
-        if current_time.hour % 3 == 0 and current_time.minute < 5:
-            try:
-                from scheduler import BackgroundScheduler
-                temp_scheduler = BackgroundScheduler(settings, rules_cfg, store)
-                temp_scheduler._run_3h_summary()
-            except Exception as e:
-                notify(f"⚠️ 3-hour summary failed: {e}")
-        
-        # Daily summary (at 8 AM)
-        if current_time.hour == 8 and current_time.minute < 5:
-            try:
-                from scheduler import BackgroundScheduler
-                temp_scheduler = BackgroundScheduler(settings, rules_cfg, store)
-                temp_scheduler._run_daily_summary()
-            except Exception as e:
-                notify(f"⚠️ Daily summary failed: {e}")
-    except Exception as e:
-        notify(f"⚠️ Smart tick execution failed: {e}")
-        # Continue with normal execution
+    # Simple execution completed
+    notify(f"✅ Automation completed at {local_now.strftime('%H:%M %Z')}")
     
     # Background mode handling (optional)
     if args.background:

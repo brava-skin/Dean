@@ -321,33 +321,37 @@ def format_run_header(status: str, time_str: str, profile: str, spend: float, pu
     status_emoji = "✅" if status == "OK" else "⚠️"
     cpa_str = "–" if cpa is None else f"{cpa:.2f}"
     be_str = "–" if be is None else f"{be:.2f}"
-    return f"{status_emoji} Run {status}, {time_str}, profile {profile}\nspend {_fmt_currency(spend)}, purch {purch}, CPA {cpa_str}, BE {be_str}"
+    return f"{status_emoji} Run {status}, {time_str}\nSpend {_fmt_currency(spend)}, Purchases {purch}, CPA {cpa_str}, BE {be_str}"
 
 def format_stage_line(stage: str, counts: Dict[str, int]) -> str:
     """Format a single stage summary line."""
     parts = []
     for key, value in counts.items():
         if key == "kills":
-            parts.append(f"kills {value}")
+            parts.append(f"Kills {value}")
         elif key == "promotions":
-            parts.append(f"promos {value}")
+            parts.append(f"Promotions {value}")
         elif key == "launched":
-            parts.append(f"launched {value}")
+            parts.append(f"Launches {value}")
         elif key == "fatigue_flags":
-            parts.append(f"fatigue {value}")
+            parts.append(f"Fatigue {value}")
         elif key == "data_quality_alerts":
-            parts.append(f"tracking {value}")
+            parts.append(f"Tracking {value}")
         elif key == "soft_passes":
-            parts.append(f"soft passes {value}")
+            parts.append(f"Soft passes {value}")
         elif key == "scaled":
-            parts.append(f"up {value}")
+            parts.append(f"Scaled up {value}")
         elif key == "duped":
-            parts.append(f"dupes {value}")
+            parts.append(f"Duplicates {value}")
         elif key == "downscaled":
-            parts.append(f"down {value}")
+            parts.append(f"Scaled down {value}")
         elif key == "refreshed":
-            parts.append(f"refresh {value}")
-    return f"{stage}, {', '.join(parts)}"
+            parts.append(f"Refreshed {value}")
+    
+    if not parts:
+        return f"{stage}: No actions"
+    
+    return f"{stage}: {', '.join(parts)}"
 
 def prettify_ad_name(name: str) -> str:
     """Clean up ad display names for mobile-friendly display."""
@@ -416,7 +420,7 @@ def post_thread_ads_snapshot(thread_ts: str, ad_lines: List[str]) -> None:
     if not ad_lines:
         return
     
-    header = "Ads today"
+    header = "Active Ads"
     full_text = header + "\n" + "\n".join(ad_lines)
     
     msg = SlackMessage(
