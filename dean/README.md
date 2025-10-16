@@ -74,6 +74,15 @@ Creative Queue → Testing → Validation → Scaling
 
 ### Setup
 
+**Quick Setup (macOS):**
+```bash
+git clone <repository-url>
+cd dean
+chmod +x scripts/setup_macos.sh
+./scripts/setup_macos.sh
+```
+
+**Manual Setup:**
 1. **Clone and install dependencies:**
 ```bash
 cd dean

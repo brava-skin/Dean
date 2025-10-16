@@ -2,12 +2,14 @@
 
 This guide will walk you through setting up Dean for automated Facebook/Meta advertising management.
 
+> **macOS Users**: For a streamlined setup experience, see [MACOS_SETUP.md](../MACOS_SETUP.md) which includes an automated setup script and macOS-specific optimizations.
+
 ## Prerequisites
 
 ### System Requirements
 
 - **Python**: 3.9 or higher
-- **Operating System**: Windows, macOS, or Linux
+- **Operating System**: macOS, Linux, or Windows
 - **Memory**: Minimum 4GB RAM (8GB recommended)
 - **Storage**: 1GB free space for logs and data
 
@@ -34,8 +36,6 @@ cd dean
 python -m venv venv
 
 # Activate virtual environment
-# On Windows:
-venv\Scripts\activate
 # On macOS/Linux:
 source venv/bin/activate
 ```
@@ -267,6 +267,7 @@ mkdir -p logs
 
 #### Set Up Logging
 
+**macOS/Linux:**
 ```bash
 # Create log rotation script
 cat > rotate_logs.sh << 'EOF'
@@ -279,8 +280,25 @@ EOF
 chmod +x rotate_logs.sh
 ```
 
+**macOS (using logrotate):**
+```bash
+# Create logrotate configuration
+sudo tee /etc/logrotate.d/dean << 'EOF'
+/path/to/dean/logs/*.log {
+    daily
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    notifempty
+    create 644 $(whoami) $(whoami)
+}
+EOF
+```
+
 #### Schedule Automation
 
+**macOS/Linux (crontab):**
 ```bash
 # Add to crontab for regular execution
 # Run every 2 hours
@@ -288,6 +306,39 @@ chmod +x rotate_logs.sh
 
 # Run daily at 9 AM
 0 9 * * * cd /path/to/dean && python src/main.py --stage testing
+
+# Edit crontab
+crontab -e
+```
+
+**macOS (launchd - recommended):**
+```bash
+# Create a plist file for launchd (more reliable on macOS)
+# Save as ~/Library/LaunchAgents/com.dean.automation.plist
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.dean.automation</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/path/to/dean/src/main.py</string>
+        <string>--profile</string>
+        <string>production</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>7200</integer> <!-- 2 hours in seconds -->
+    <key>StandardOutPath</key>
+    <string>/path/to/dean/logs/automation.log</string>
+    <key>StandardErrorPath</key>
+    <string>/path/to/dean/logs/automation_error.log</string>
+</dict>
+</plist>
+
+# Load the service
+launchctl load ~/Library/LaunchAgents/com.dean.automation.plist
 ```
 
 ## Verification Steps

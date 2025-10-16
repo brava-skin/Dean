@@ -493,9 +493,9 @@ def linter(settings: Dict[str, Any], rules: Dict[str, Any]) -> List[str]:
 @contextmanager
 def file_lock(path: str):
     """
-    Cross-platform(ish) run lock:
-    - POSIX: flock
-    - Windows/others: presence + PID written, best-effort
+    Cross-platform run lock:
+    - POSIX (macOS/Linux): flock
+    - Windows: presence + PID written, best-effort
     """
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     fd = None

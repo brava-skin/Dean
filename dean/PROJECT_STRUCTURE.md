@@ -17,7 +17,8 @@ dean/
 │   ├── INSTALLATION.md       # Installation guide
 │   └── USAGE.md              # Usage guide
 ├── scripts/                  # Utility scripts
-│   └── setup_supabase.py     # Supabase setup helper
+│   ├── setup_supabase.py     # Supabase setup helper
+│   └── setup_macos.sh        # macOS automated setup script
 ├── src/                      # Source code
 │   ├── main.py               # Main entry point
 │   ├── meta_client.py        # Meta API client
@@ -33,6 +34,7 @@ dean/
 ├── requirements.txt          # Python dependencies
 ├── README.md                 # Project overview
 ├── ENVIRONMENT_SETUP.md      # Environment setup guide
+├── MACOS_SETUP.md           # macOS-specific setup guide
 └── PROJECT_STRUCTURE.md      # This file
 ```
 

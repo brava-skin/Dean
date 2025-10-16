@@ -16,7 +16,7 @@ audit:
 # ── Timezones ─────────────────────────────────────────────────────────────────
 account_timezone: "Europe/Amsterdam"
 notifications_timezone: "Europe/Amsterdam"
-dst_note: "Windows are interpreted in account timezone; notifications in EU/AMS."
+dst_note: "Time windows are interpreted in account timezone; notifications in EU/AMS."
 
 ids:
   testing_campaign_id: "120231838265440160"
