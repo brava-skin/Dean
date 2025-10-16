@@ -316,42 +316,63 @@ def build_basic_blocks(title: str, lines: List[str], severity: str = "info", foo
 
 # ---------- New messaging helpers ----------
 
-def format_run_header(status: str, time_str: str, profile: str, spend: float, purch: int, cpa: Optional[float], be: Optional[float]) -> str:
-    """Format the main run header line."""
+def format_run_header(status: str, time_str: str, profile: str, spend: float, purch: int, cpa: Optional[float], be: Optional[float], impressions: int = 0, clicks: int = 0, ctr: Optional[float] = None, cpc: Optional[float] = None, atc: int = 0, ic: int = 0) -> str:
+    """Format the main run header line with comprehensive metrics."""
     status_emoji = "✅" if status == "OK" else "⚠️"
     cpa_str = "–" if cpa is None else f"{cpa:.2f}"
     be_str = "–" if be is None else f"{be:.2f}"
-    return f"{status_emoji} Run {status}, {time_str}\nSpend {_fmt_currency(spend)}, Purchases {purch}, CPA {cpa_str}, BE {be_str}"
+    ctr_str = "–" if ctr is None else f"{ctr:.2f}%"
+    cpc_str = "–" if cpc is None else f"{cpc:.2f}"
+    
+    # Main metrics line
+    main_line = f"{status_emoji} Run {status}, {time_str}\nSpend {_fmt_currency(spend)}, Purchases {purch}, CPA {cpa_str}, BE {be_str}"
+    
+    # Performance metrics line
+    perf_line = f"Impressions {impressions:,}, Clicks {clicks:,}, CTR {ctr_str}, CPC {cpc_str}"
+    
+    # Conversion metrics line (only if > 0)
+    conv_parts = []
+    if atc > 0:
+        conv_parts.append(f"ATC {atc}")
+    if ic > 0:
+        conv_parts.append(f"IC {ic}")
+    
+    if conv_parts:
+        conv_line = f"Conversions: {', '.join(conv_parts)}"
+        return f"{main_line}\n{perf_line}\n{conv_line}"
+    else:
+        return f"{main_line}\n{perf_line}"
 
 def format_stage_line(stage: str, counts: Dict[str, int]) -> str:
-    """Format a single stage summary line."""
-    parts = []
+    """Format a single stage summary line - only show non-zero actions."""
+    actions = []
     for key, value in counts.items():
-        if key == "kills":
-            parts.append(f"Kills {value}")
-        elif key == "promotions":
-            parts.append(f"Promotions {value}")
-        elif key == "launched":
-            parts.append(f"Launches {value}")
-        elif key == "fatigue_flags":
-            parts.append(f"Fatigue {value}")
-        elif key == "data_quality_alerts":
-            parts.append(f"Tracking {value}")
-        elif key == "soft_passes":
-            parts.append(f"Soft passes {value}")
-        elif key == "scaled":
-            parts.append(f"Scaled up {value}")
-        elif key == "duped":
-            parts.append(f"Duplicates {value}")
-        elif key == "downscaled":
-            parts.append(f"Scaled down {value}")
-        elif key == "refreshed":
-            parts.append(f"Refreshed {value}")
+        if value > 0:  # Only show actions that happened
+            if key == "kills":
+                actions.append(f"Killed {value}")
+            elif key == "promotions":
+                actions.append(f"Promoted {value}")
+            elif key == "launched":
+                actions.append(f"Launched {value}")
+            elif key == "fatigue_flags":
+                actions.append(f"Fatigue {value}")
+            elif key == "data_quality_alerts":
+                actions.append(f"Tracking issues {value}")
+            elif key == "soft_passes":
+                actions.append(f"Soft passed {value}")
+            elif key == "scaled":
+                actions.append(f"Scaled up {value}")
+            elif key == "duped":
+                actions.append(f"Duplicated {value}")
+            elif key == "downscaled":
+                actions.append(f"Scaled down {value}")
+            elif key == "refreshed":
+                actions.append(f"Refreshed {value}")
     
-    if not parts:
-        return f"{stage}: No actions"
+    if not actions:
+        return f"{stage}: ✓"
     
-    return f"{stage}: {', '.join(parts)}"
+    return f"{stage}: {', '.join(actions)}"
 
 def prettify_ad_name(name: str) -> str:
     """Clean up ad display names for mobile-friendly display."""
@@ -389,10 +410,16 @@ def post_run_header_and_get_thread_ts(
     purch: int, 
     cpa: Optional[float], 
     be: Optional[float],
-    stage_summaries: List[Dict[str, Any]]
+    stage_summaries: List[Dict[str, Any]],
+    impressions: int = 0,
+    clicks: int = 0,
+    ctr: Optional[float] = None,
+    cpc: Optional[float] = None,
+    atc: int = 0,
+    ic: int = 0
 ) -> Optional[str]:
     """Post the main run header and return thread timestamp for replies."""
-    header_text = format_run_header(status, time_str, profile, spend, purch, cpa, be)
+    header_text = format_run_header(status, time_str, profile, spend, purch, cpa, be, impressions, clicks, ctr, cpc, atc, ic)
     
     # Add stage summaries
     stage_lines = []
@@ -415,13 +442,20 @@ def post_run_header_and_get_thread_ts(
     client().notify(msg)
     return "mock_thread_ts"  # This would be the actual thread timestamp
 
-def post_thread_ads_snapshot(thread_ts: str, ad_lines: List[str]) -> None:
-    """Post ad snapshot as a thread reply."""
-    if not ad_lines:
+def post_thread_ads_snapshot(thread_ts: str, ad_lines: List[str], alerts: List[str] = None) -> None:
+    """Post ad snapshot as a thread reply with optional alerts."""
+    if not ad_lines and not alerts:
         return
     
-    header = "Active Ads"
-    full_text = header + "\n" + "\n".join(ad_lines)
+    sections = []
+    
+    if ad_lines:
+        sections.append("Active Ads\n" + "\n".join(ad_lines))
+    
+    if alerts:
+        sections.append("🚨 Alerts\n" + "\n".join(alerts))
+    
+    full_text = "\n\n".join(sections)
     
     msg = SlackMessage(
         text=full_text,
@@ -1044,24 +1078,18 @@ def build_ads_snapshot(rows_today: List[Dict[str, Any]], rows_lifetime: List[Dic
             if action.get("action_type") == "purchase":
                 purch_today += int(action.get("value", 0))
         
-        # Format the line
+        # Format the line - simplified
         clean_name = _prettify_ad_name(ad_name)
-        life_str = _fmt_eur(spend_life) if spend_life is not None else "–"
-        ad_lines.append(f"• {clean_name}, spend {_fmt_eur(spend_today)} today, life {life_str}, purch {purch_today}")
+        ad_lines.append(f"• {clean_name}: {_fmt_eur(spend_today)} today, {purch_today} purch")
     
-    # Sort by spend_today desc, then spend_life desc
+    # Sort by spend_today desc
     def sort_key(item):
-        parts = item.split(", spend ")
-        if len(parts) < 2:
-            return (0, 0)
         try:
-            today_part = parts[1].split(" today")[0]
-            today_val = float(today_part.replace("€", "").replace(",", ""))
-            life_part = parts[1].split("life ")[1].split(",")[0] if "life " in parts[1] else "–"
-            life_val = float(life_part.replace("€", "").replace(",", "")) if life_part != "–" else 0
-            return (-today_val, -life_val)
+            spend_part = item.split(": €")[1].split(" today")[0] if ": €" in item else "0"
+            spend_val = float(spend_part.replace(",", ""))
+            return -spend_val
         except Exception:
-            return (0, 0)
+            return 0
     
     ad_lines.sort(key=sort_key)
     

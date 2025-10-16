@@ -592,30 +592,63 @@ def health_check(store: Store, client: MetaClient) -> Dict[str, Any]:
 
 def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        rows = meta.get_ad_insights(level="ad", fields=["spend", "actions"], paginate=True)
+        # Get comprehensive metrics
+        rows = meta.get_ad_insights(
+            level="ad", 
+            fields=["spend", "actions", "impressions", "clicks", "ctr", "cpc", "cpp"], 
+            paginate=True
+        )
+        
         spend = sum(float(r.get("spend") or 0) for r in rows)
+        impressions = sum(int(r.get("impressions") or 0) for r in rows)
+        clicks = sum(int(r.get("clicks") or 0) for r in rows)
         purch = 0.0
+        atc = 0.0  # Add to cart
+        ic = 0.0   # Initiate checkout
+        
         for r in rows:
             for a in (r.get("actions") or []):
-                if a.get("action_type") == "purchase":
-                    try:
-                        purch += float(a.get("value") or 0)
-                    except Exception:
-                        pass
+                action_type = a.get("action_type")
+                try:
+                    value = float(a.get("value") or 0)
+                    if action_type == "purchase":
+                        purch += value
+                    elif action_type == "add_to_cart":
+                        atc += value
+                    elif action_type == "initiate_checkout":
+                        ic += value
+                except Exception:
+                    pass
+        
+        # Calculate metrics
         cpa = (spend / purch) if purch > 0 else float("inf")
+        ctr = (clicks / impressions * 100) if impressions > 0 else 0
+        cpc = (spend / clicks) if clicks > 0 else 0
+        
         be = float(
             os.getenv("BREAKEVEN_CPA")
             or (settings.get("economics", {}) or {}).get("breakeven_cpa")
             or 34
         )
+        
         return {
             "spend": round(spend, 2),
             "purchases": int(purch),
             "cpa": None if cpa == float("inf") else round(cpa, 2),
             "breakeven": be,
+            "impressions": impressions,
+            "clicks": clicks,
+            "ctr": round(ctr, 2),
+            "cpc": round(cpc, 2),
+            "atc": int(atc),
+            "ic": int(ic),
         }
     except Exception:
-        return {"spend": None, "purchases": None, "cpa": None, "breakeven": None}
+        return {
+            "spend": None, "purchases": None, "cpa": None, "breakeven": None,
+            "impressions": None, "clicks": None, "ctr": None, "cpc": None,
+            "atc": None, "ic": None
+        }
 
 
 # ------------------------------- Summaries ----------------------------------
@@ -766,7 +799,13 @@ def main() -> None:
         'spend': acct.get('spend', 0.0),
         'purchases': acct.get('purchases', 0),
         'cpa': acct.get('cpa'),
-        'breakeven': acct.get('breakeven')
+        'breakeven': acct.get('breakeven'),
+        'impressions': acct.get('impressions', 0),
+        'clicks': acct.get('clicks', 0),
+        'ctr': acct.get('ctr'),
+        'cpc': acct.get('cpc'),
+        'atc': acct.get('atc', 0),
+        'ic': acct.get('ic', 0),
     }
 
     # Idempotency (tick-level) and process lock (multi-runner safety)
@@ -903,7 +942,13 @@ def main() -> None:
             purch=account_info['purchases'],
             cpa=account_info['cpa'],
             be=account_info['breakeven'],
-            stage_summaries=stage_summaries
+            stage_summaries=stage_summaries,
+            impressions=account_info['impressions'],
+            clicks=account_info['clicks'],
+            ctr=account_info['ctr'],
+            cpc=account_info['cpc'],
+            atc=account_info['atc'],
+            ic=account_info['ic']
         )
         
         # Collect ad insights and post as thread reply
