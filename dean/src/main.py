@@ -592,10 +592,23 @@ def health_check(store: Store, client: MetaClient) -> Dict[str, Any]:
 
 def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        # Get comprehensive metrics
+        # Get today-only comprehensive metrics
+        from datetime import datetime
+        import zoneinfo
+        
+        # Use account timezone for today's data
+        tz_name = settings.get("account_timezone", "Europe/Amsterdam")
+        local_tz = zoneinfo.ZoneInfo(tz_name)
+        now = datetime.now(local_tz)
+        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        
         rows = meta.get_ad_insights(
             level="ad", 
             fields=["spend", "actions", "impressions", "clicks", "ctr", "cpc", "cpp"], 
+            time_range={
+                "since": midnight.strftime("%Y-%m-%d"),
+                "until": now.strftime("%Y-%m-%d")
+            },
             paginate=True
         )
         
@@ -1014,8 +1027,7 @@ def main() -> None:
         )
     )
 
-    # Simple execution completed
-    notify(f"✅ Automation completed at {local_now.strftime('%H:%M %Z')}")
+    # Execution completed (no need for redundant notification)
     
     # Background mode handling (optional)
     if args.background:
