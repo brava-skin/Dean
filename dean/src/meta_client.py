@@ -1042,5 +1042,110 @@ class MetaClient:
             ok, issues = False, issues + [f"preflight error: {e}"]
         return {"ok": ok, "issues": issues}
 
+    def check_account_health(self) -> Dict[str, Any]:
+        """
+        Comprehensive ad account health check including payment status, billing issues, and account restrictions.
+        Returns detailed health information for monitoring and alerting.
+        """
+        if self.dry_run or not USE_SDK:
+            return {"ok": True, "dry_run": True, "health_details": {}}
+        
+        health_details = {}
+        critical_issues = []
+        warnings = []
+        
+        try:
+            # Get comprehensive account information
+            def _get_account_info():
+                return AdAccount(self.ad_account_id_act).api_get(fields=[
+                    "account_id", "currency", "timezone_name", "account_status", 
+                    "amount_spent", "balance", "spend_cap", "funding_source",
+                    "business_name", "business_country_code", "business_zip"
+                ])
+            
+            account_info = self._retry("account_health", _get_account_info)
+            health_details["account_info"] = account_info
+            
+            # Check account status
+            account_status = str(account_info.get("account_status", ""))
+            if account_status not in ("1", "2"):  # 1=Active, 2=Active (Limited)
+                critical_issues.append(f"Account status is {account_status} (not active)")
+                health_details["account_status"] = "inactive"
+            else:
+                health_details["account_status"] = "active"
+            
+            # Check for payment/billing issues
+            funding_source = account_info.get("funding_source")
+            if funding_source:
+                health_details["funding_source"] = funding_source
+                # Check if funding source indicates payment issues
+                if isinstance(funding_source, dict):
+                    source_type = funding_source.get("type", "").lower()
+                    if "credit_card" in source_type or "payment_method" in source_type:
+                        # Check if there are any payment method issues
+                        if funding_source.get("status", "").lower() in ["failed", "declined", "expired"]:
+                            critical_issues.append(f"Payment method issue: {funding_source.get('status')}")
+                            health_details["payment_status"] = "failed"
+                        else:
+                            health_details["payment_status"] = "ok"
+            
+            # Check account balance and spending limits
+            balance = account_info.get("balance")
+            spend_cap = account_info.get("spend_cap")
+            amount_spent = account_info.get("amount_spent")
+            
+            if balance is not None:
+                health_details["balance"] = float(balance) / 100.0  # Convert from cents
+                if float(balance) <= 0:
+                    warnings.append("Account balance is zero or negative")
+            
+            if spend_cap is not None:
+                health_details["spend_cap"] = float(spend_cap) / 100.0
+                if amount_spent is not None:
+                    spent_amount = float(amount_spent) / 100.0
+                    health_details["amount_spent"] = spent_amount
+                    if spend_cap > 0 and spent_amount >= spend_cap * 0.9:  # 90% of spend cap
+                        warnings.append(f"Account has spent {spent_amount:.2f} of {health_details['spend_cap']:.2f} spend cap")
+            
+            # Check for business verification issues
+            business_name = account_info.get("business_name")
+            business_country = account_info.get("business_country_code")
+            business_zip = account_info.get("business_zip")
+            
+            if not business_name:
+                warnings.append("Business name not set - may affect ad delivery")
+            if not business_country:
+                warnings.append("Business country not set - may affect ad delivery")
+            if not business_zip:
+                warnings.append("Business ZIP not set - may affect ad delivery")
+            
+            health_details["business_verification"] = {
+                "name": bool(business_name),
+                "country": bool(business_country),
+                "zip": bool(business_zip)
+            }
+            
+        except Exception as e:
+            critical_issues.append(f"Account health check failed: {str(e)}")
+            health_details["error"] = str(e)
+        
+        # Determine overall health status
+        if critical_issues:
+            health_details["overall_status"] = "critical"
+        elif warnings:
+            health_details["overall_status"] = "warning"
+        else:
+            health_details["overall_status"] = "healthy"
+        
+        health_details["critical_issues"] = critical_issues
+        health_details["warnings"] = warnings
+        
+        return {
+            "ok": len(critical_issues) == 0,
+            "health_details": health_details,
+            "critical_issues": critical_issues,
+            "warnings": warnings
+        }
+
 
 __all__ = ["AccountAuth", "ClientConfig", "MetaClient"]

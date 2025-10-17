@@ -286,6 +286,20 @@ data_quality:
     enabled: true
     drop_pct_vs_7d_avg: 60
 
+# ── Ad Account Health Monitoring ──────────────────────────────────────────────
+account_health:
+  enabled: true
+  check_interval_hours: 1  # How often to check account health
+  alerts:
+    payment_issues: true
+    low_balance: true
+    spend_cap_warnings: true
+    business_verification: true
+  thresholds:
+    balance_warning_eur: 10.0    # Alert when balance below this amount
+    spend_cap_warning_pct: 80   # Alert when spent this % of spend cap
+    balance_critical_eur: 0.0   # Critical alert when balance at or below this
+
 mode:
   current: "production"
   staging:

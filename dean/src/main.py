@@ -590,6 +590,85 @@ def health_check(store: Store, client: MetaClient) -> Dict[str, Any]:
     return {"ok": ok, "details": details}
 
 
+def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Comprehensive ad account health check with alerting for critical issues.
+    Uses configuration settings to determine alert thresholds and types.
+    """
+    # Check if account health monitoring is enabled
+    account_health_config = settings.get("account_health", {})
+    if not account_health_config.get("enabled", True):
+        return {"ok": True, "disabled": True}
+    
+    try:
+        health_result = client.check_account_health()
+        
+        if not health_result["ok"]:
+            # Critical issues detected
+            critical_issues = health_result.get("critical_issues", [])
+            account_id = client.ad_account_id_act
+            
+            # Send critical alerts
+            from slack import alert_ad_account_health_critical, alert_payment_issue, alert_account_balance_low
+            
+            alert_ad_account_health_critical(account_id, critical_issues)
+            
+            # Check for specific payment issues
+            health_details = health_result.get("health_details", {})
+            if health_details.get("payment_status") == "failed":
+                payment_details = health_details.get("funding_source", {})
+                alert_payment_issue(account_id, "Payment Failed", str(payment_details))
+            
+            # Check for low balance using configured thresholds
+            balance = health_details.get("balance")
+            if balance is not None:
+                currency = settings.get("economics", {}).get("currency", "EUR")
+                critical_threshold = account_health_config.get("thresholds", {}).get("balance_critical_eur", 0.0)
+                if balance <= critical_threshold:
+                    alert_account_balance_low(account_id, balance, currency)
+            
+            return {"ok": False, "critical_issues": critical_issues, "health_details": health_details}
+        
+        else:
+            # Check for warnings using configured thresholds
+            warnings = health_result.get("warnings", [])
+            health_details = health_result.get("health_details", {})
+            account_id = client.ad_account_id_act
+            currency = settings.get("economics", {}).get("currency", "EUR")
+            
+            # Check spend cap warnings
+            spent = health_details.get("amount_spent")
+            cap = health_details.get("spend_cap")
+            if spent is not None and cap is not None and cap > 0:
+                percentage = (spent / cap) * 100
+                warning_threshold = account_health_config.get("thresholds", {}).get("spend_cap_warning_pct", 80)
+                if percentage >= warning_threshold:
+                    from slack import alert_spend_cap_approaching
+                    alert_spend_cap_approaching(account_id, spent, cap, currency)
+            
+            # Check balance warnings
+            balance = health_details.get("balance")
+            if balance is not None:
+                warning_threshold = account_health_config.get("thresholds", {}).get("balance_warning_eur", 10.0)
+                if balance <= warning_threshold:
+                    from slack import alert_account_balance_low
+                    alert_account_balance_low(account_id, balance, currency)
+            
+            # Send general warnings if any
+            if warnings:
+                from slack import alert_ad_account_health_warning
+                alert_ad_account_health_warning(account_id, warnings)
+            
+            return {"ok": True, "warnings": warnings, "health_details": health_details}
+    
+    except Exception as e:
+        # If health check fails, it's a critical issue
+        account_id = getattr(client, 'ad_account_id_act', 'unknown')
+        from slack import alert_ad_account_health_critical
+        alert_ad_account_health_critical(account_id, [f"Health check failed: {str(e)}"])
+        return {"ok": False, "error": str(e)}
+
+
 def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[str, Any]:
     try:
         # Get today-only comprehensive metrics
@@ -796,6 +875,14 @@ def main() -> None:
         notify("🛑 Preflight failed: " + " ".join(hc["details"]))
         if not (profile == "staging" or effective_dry):
             sys.exit(1)
+    
+    # Ad account health check with alerting
+    account_health = check_ad_account_health(client, settings)
+    if not account_health["ok"]:
+        notify("🚨 Ad account health issues detected - check alerts for details")
+        # Don't exit on account health issues, but log them
+        if account_health.get("critical_issues"):
+            notify(f"Critical issues: {', '.join(account_health['critical_issues'])}")
 
     # Queue: Prefer Supabase if configured; else fallback to file path.
     if os.getenv("SUPABASE_URL") and (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")):

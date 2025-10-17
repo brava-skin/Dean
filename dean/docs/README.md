@@ -380,6 +380,19 @@ Built-in health checks monitor:
 - Slack notification delivery
 - Account performance metrics
 - Data quality and tracking issues
+- **Ad Account Health**: Payment status, balance, spend caps, and account restrictions
+
+### Ad Account Health Monitoring
+
+The system now includes comprehensive ad account health monitoring to prevent account suspensions and payment issues:
+
+- **Payment Monitoring**: Detects payment failures, expired cards, and declined transactions
+- **Balance Alerts**: Warns when account balance is low or negative
+- **Spend Cap Warnings**: Alerts when approaching daily/monthly spending limits
+- **Account Status**: Monitors account restrictions and suspensions
+- **Business Verification**: Ensures business information is complete
+
+For detailed information, see [Account Health Monitoring Documentation](ACCOUNT_HEALTH_MONITORING.md).
 
 ## 🚨 Troubleshooting
 

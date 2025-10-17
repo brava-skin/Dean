@@ -1146,6 +1146,77 @@ def alert_system_health(issue: str) -> None:
     )
     client().notify(msg)
 
+def alert_ad_account_health_critical(account_id: str, issues: List[str]) -> None:
+    """
+    Alert for critical ad account health issues that could disable the account.
+    """
+    issues_text = "\n".join([f"• {issue}" for issue in issues])
+    text = f"🚨 CRITICAL: Ad Account Health Issues Detected\nAccount: {account_id}\n\nIssues:\n{issues_text}\n\n⚠️ Your ad account may be disabled or restricted. Check immediately!"
+    
+    msg = SlackMessage(
+        text=text,
+        severity="error",
+        topic="alerts",
+    )
+    client().notify(msg)
+
+def alert_ad_account_health_warning(account_id: str, warnings: List[str]) -> None:
+    """
+    Alert for ad account health warnings that should be monitored.
+    """
+    warnings_text = "\n".join([f"• {warning}" for warning in warnings])
+    text = f"⚠️ Ad Account Health Warning\nAccount: {account_id}\n\nWarnings:\n{warnings_text}\n\nMonitor these issues to prevent account problems."
+    
+    msg = SlackMessage(
+        text=text,
+        severity="warn",
+        topic="alerts",
+    )
+    client().notify(msg)
+
+def alert_payment_issue(account_id: str, payment_status: str, details: str = "") -> None:
+    """
+    Alert for payment method issues that could disable the account.
+    """
+    text = f"💳 Payment Issue Detected\nAccount: {account_id}\nStatus: {payment_status}"
+    if details:
+        text += f"\nDetails: {details}"
+    text += "\n\n⚠️ This could disable your ad account. Check your payment method immediately!"
+    
+    msg = SlackMessage(
+        text=text,
+        severity="error",
+        topic="alerts",
+    )
+    client().notify(msg)
+
+def alert_account_balance_low(account_id: str, balance: float, currency: str = "EUR") -> None:
+    """
+    Alert when account balance is low or negative.
+    """
+    text = f"💰 Low Account Balance\nAccount: {account_id}\nBalance: {balance:.2f} {currency}\n\n⚠️ Add funds to prevent account suspension."
+    
+    msg = SlackMessage(
+        text=text,
+        severity="warn",
+        topic="alerts",
+    )
+    client().notify(msg)
+
+def alert_spend_cap_approaching(account_id: str, spent: float, cap: float, currency: str = "EUR") -> None:
+    """
+    Alert when approaching spend cap limit.
+    """
+    percentage = (spent / cap) * 100 if cap > 0 else 0
+    text = f"📊 Spend Cap Warning\nAccount: {account_id}\nSpent: {spent:.2f} {currency} ({percentage:.1f}% of cap)\nCap: {cap:.2f} {currency}\n\n⚠️ Approaching spend limit. Consider increasing cap or monitoring spend."
+    
+    msg = SlackMessage(
+        text=text,
+        severity="warn",
+        topic="alerts",
+    )
+    client().notify(msg)
+
 def alert_budget_alert(entity_name: str, current_budget: float, target_budget: float) -> None:
     """
     Alert for significant budget changes.
