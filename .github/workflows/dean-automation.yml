@@ -1,31 +1,10 @@
-name: Dean Automation (Smart Scheduler)
+name: Dean Automation
 
 on:
   schedule:
-    # Run every hour at minute 0 with American timezone optimization
-    # Peak hour avoidance: 9-11 AM and 2-4 PM EST
-    # Sleep hour optimization: 2-6 AM EST
+    # Run every hour
     - cron: '0 * * * *'
   workflow_dispatch: # Allow manual triggering
-    inputs:
-      mode:
-        description: 'Run mode'
-        required: false
-        default: 'single'
-        type: choice
-        options:
-        - single
-        - background
-      stage:
-        description: 'Stage to run (single mode only)'
-        required: false
-        default: 'all'
-        type: choice
-        options:
-        - all
-        - testing
-        - validation
-        - scaling
 
 jobs:
   dean-automation:
@@ -63,12 +42,8 @@ jobs:
         # Store Configuration
         STORE_URL: ${{ secrets.STORE_URL }}
         
-        # Slack Notifications (all messages go to one channel by default)
+        # Slack Notifications
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        # Optional: Route different message types to different channels
-        # SLACK_WEBHOOK_ALERTS: ${{ secrets.SLACK_WEBHOOK_ALERTS }}
-        # SLACK_WEBHOOK_DIGEST: ${{ secrets.SLACK_WEBHOOK_DIGEST }}
-        # SLACK_WEBHOOK_SCALE: ${{ secrets.SLACK_WEBHOOK_SCALE }}
         
         # Optional: Supabase
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -80,41 +55,10 @@ jobs:
         COGS_PER_PURCHASE: ${{ secrets.COGS_PER_PURCHASE }}
         USD_EUR_RATE: ${{ secrets.USD_EUR_RATE }}
         
-        # Timezone
-        TIMEZONE: ${{ secrets.TIMEZONE || 'Europe/Amsterdam' }}
-        
       run: |
         cd dean
-        
-        # Check if running in background mode
-        if [ "${{ github.event.inputs.mode }}" == "background" ]; then
-          echo "🤖 Starting background monitoring mode..."
-          echo "⚠️ Note: Background mode is designed for long-running processes"
-          echo "⚠️ GitHub Actions has a 6-hour limit, so this will run for up to 6 hours"
-          echo "🔄 For continuous monitoring, consider using a VPS or cloud service"
-          python start_background.py
-        else
-          # Smart tick execution with American timezone optimization
-          echo "🇺🇸 Smart tick with American timezone optimization..."
-          echo "🕐 Peak hour avoidance: 9-11 AM and 2-4 PM EST"
-          echo "😴 Sleep hour optimization: 2-6 AM EST"
-          echo "🧠 Advanced features: duplicate prevention, smart retries, health monitoring"
-          
-          # Single run mode (existing behavior)
-          if [ "${{ github.event.inputs.stage }}" == "testing" ]; then
-            echo "🔄 Running Testing stage..."
-            python src/main.py --stage testing --profile production
-          elif [ "${{ github.event.inputs.stage }}" == "validation" ]; then
-            echo "🔄 Running Validation stage..."
-            python src/main.py --stage validation --profile production
-          elif [ "${{ github.event.inputs.stage }}" == "scaling" ]; then
-            echo "🔄 Running Scaling stage..."
-            python src/main.py --stage scaling --profile production
-          else
-            echo "🔄 Running All stages with smart scheduler..."
-            python src/main.py --profile production
-          fi
-        fi
+        echo "🔄 Running Dean automation..."
+        python src/main.py --profile production
 
     - name: Upload logs
       if: always()
@@ -123,27 +67,3 @@ jobs:
         name: dean-logs-${{ github.run_number }}
         path: dean/data/
         retention-days: 7
-
-    - name: Notify on failure
-      if: failure()
-      run: |
-        echo "❌ Dean automation failed"
-        # You can add Slack notification here if needed
-
-    - name: Background Mode Warning
-      if: github.event.inputs.mode == 'background'
-      run: |
-        echo "⚠️ IMPORTANT: GitHub Actions is not ideal for background monitoring"
-        echo "📋 Limitations:"
-        echo "  • 6-hour maximum runtime"
-        echo "  • No persistent storage between runs"
-        echo "  • Limited to scheduled triggers"
-        echo ""
-        echo "🚀 Recommended alternatives for production:"
-        echo "  • VPS with systemd service"
-        echo "  • AWS EC2 with auto-scaling"
-        echo "  • Google Cloud Run (serverless)"
-        echo "  • DigitalOcean Droplet"
-        echo "  • Railway/Render deployment"
-        echo ""
-        echo "📖 See BACKGROUND_MONITORING.md for deployment guides"
