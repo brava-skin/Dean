@@ -107,7 +107,7 @@ validation:
     min_spend: 30   # EUR - Lowered from 40
   kill:
     - {type: "spend_no_purchase", spend_gte: 60}                          # EUR - Balanced: reasonable spend threshold
-    - {type: "cpa_gte", cpa_gte: 45}                                      # EUR - Balanced: reasonable CPA threshold
+    - {type: "cpa_gte", cpa_gte: 55}                                      # EUR - Balanced: reasonable CPA threshold (more lenient than testing)
     - {type: "ctr_below", ctr_lt: 0.005, spend_gte: 50}                   # EUR - Balanced: reasonable CTR threshold
     - {type: "spend_multi_atc_no_purchase", spend_gte: 90, atc_gte: 2}    # EUR - Balanced: reasonable multi-ATC threshold
     - {type: "roas_below_after_days", roas_lt: 1.1, window: "day_3"}      # Balanced: reasonable ROAS threshold
@@ -116,7 +116,7 @@ validation:
     operator: "all"
     rules:
       - {type: "purchase_gte", purchases_gte: 2}
-      - {type: "cpa_lte", cpa_lte: 45}                                     # EUR - Balanced: reasonable CPA threshold
+      - {type: "cpa_lte", cpa_lte: 60}                                     # EUR - Balanced: reasonable CPA threshold (more lenient than testing)
       - {type: "roas_gte", roas_gte: 1.2}                                 # Balanced: reasonable ROAS threshold
       - {type: "ctr_gte", ctr_gte: 0.005}                                 # Balanced: reasonable CTR threshold
   strictness:
@@ -135,7 +135,7 @@ validation:
       allow_create_on_promo_check: false          # VALID_ALLOW_CREATE_ON_PROMO_CHECK
     soft_pass:
       max_budget_eur: 50                          # VALID_SOFT_PASS_MAX_BUDGET - Balanced: reasonable budget
-      max_cpa_eur: 45                             # VALID_SOFT_PASS_MAX_CPA - Balanced: reasonable CPA
+      max_cpa_eur: 60                             # VALID_SOFT_PASS_MAX_CPA - Balanced: reasonable CPA (more lenient than testing)
       min_roas: 1.2                               # VALID_SOFT_PASS_MIN_ROAS - Balanced: reasonable ROAS
       min_ctr: 0.005                              # VALID_SOFT_PASS_MIN_CTR - Balanced: reasonable CTR
 
