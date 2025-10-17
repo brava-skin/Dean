@@ -707,6 +707,10 @@ def main() -> None:
 
     # Load config and rules
     settings, rules_cfg = load_cfg(args.settings, args.rules)
+    
+    # Merge rules configuration into settings so stages can access it
+    if rules_cfg:
+        settings.update(rules_cfg)
 
     # Resolve profile/dry-run/shadow
     profile = (
