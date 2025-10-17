@@ -45,7 +45,7 @@ thresholds:
     validation_floor: 0.008  # Lowered from 0.010
   cpa:              # EUR
     testing_max: 45  # Increased from 36 to allow higher CPA during learning
-    validation_max: 35  # Increased from 28
+    validation_max: 55  # Increased from 35 to be more lenient than testing
     scaling_kill_max: 50  # Increased from 40
   roas:
     testing_min: 1.2  # Lowered from 1.5 to be more lenient
