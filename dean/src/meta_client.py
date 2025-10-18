@@ -44,6 +44,9 @@ BUDGET_MAX_STEP_PCT = float(os.getenv("BUDGET_MAX_STEP_PCT", "200") or 200.0)
 CB_FAILS     = int(os.getenv("META_CB_FAILS", "5") or 5)
 CB_RESET_SEC = int(os.getenv("META_CB_RESET_SEC", "120") or 120)
 
+# Rate limiting
+META_REQUEST_DELAY = float(os.getenv("META_REQUEST_DELAY", "0.5") or 0.5)  # Delay between requests
+
 # Naming & compliance
 CAMPAIGN_NAME_RE = re.compile(r"^\[(TEST|VALID|SCALE|SCALE-CBO)\]\s+Brava\s+-\s+(ABO|CBO)\s+-\s+US Men$")
 ADSET_NAME_RE    = re.compile(r"^\[(TEST|VALID|SCALE)\]\s+.+$")
@@ -348,7 +351,7 @@ class MetaClient:
         
         # Handle rate limit errors (code 4, subcode 1504022)
         if code == 4 and subcode == 1504022:
-            # Rate limit hit - wait longer before retry
+            # Rate limit hit - wait longer before retry with exponential backoff
             wait_time = min(60.0, META_BACKOFF_BASE * 8)  # Wait up to 60 seconds
             notify(f"⏳ Facebook API rate limit hit. Waiting {wait_time:.1f}s before retry...")
             time.sleep(wait_time)
@@ -361,7 +364,13 @@ class MetaClient:
             time.sleep(wait_time)
             return
 
+    def _request_delay(self) -> None:
+        """Add delay between API requests to prevent rate limiting."""
+        if META_REQUEST_DELAY > 0:
+            time.sleep(META_REQUEST_DELAY)
+
     def _graph_post(self, endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        self._request_delay()  # Add delay to prevent rate limiting
         url = self._graph_url(endpoint)
         data = _sanitize(payload)
         data["access_token"] = self.account.access_token
@@ -408,6 +417,7 @@ class MetaClient:
 
     def _graph_get_object(self, object_path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """GET for absolute objects like '/{id}' or '/{id}/thumbnails' (not under ad account path)."""
+        self._request_delay()  # Add delay to prevent rate limiting
         ver = self.account.api_version or "v23.0"
         url = f"https://graph.facebook.com/{ver}/{object_path.lstrip('/')}"
         qp = dict(params or {})
@@ -1100,12 +1110,13 @@ class MetaClient:
                     warnings.append("Account balance is zero or negative")
             
             if spend_cap is not None:
-                health_details["spend_cap"] = float(spend_cap) / 100.0
+                spend_cap_float = float(spend_cap) / 100.0
+                health_details["spend_cap"] = spend_cap_float
                 if amount_spent is not None:
                     spent_amount = float(amount_spent) / 100.0
                     health_details["amount_spent"] = spent_amount
-                    if spend_cap > 0 and spent_amount >= spend_cap * 0.9:  # 90% of spend cap
-                        warnings.append(f"Account has spent {spent_amount:.2f} of {health_details['spend_cap']:.2f} spend cap")
+                    if spend_cap_float > 0 and spent_amount >= spend_cap_float * 0.9:  # 90% of spend cap
+                        warnings.append(f"Account has spent {spent_amount:.2f} of {spend_cap_float:.2f} spend cap")
             
             # Check for business verification issues
             business_name = account_info.get("business_name")

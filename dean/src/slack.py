@@ -1080,7 +1080,8 @@ def build_ads_snapshot(rows_today: List[Dict[str, Any]], rows_lifetime: List[Dic
         
         # Format the line - simplified
         clean_name = _prettify_ad_name(ad_name)
-        ad_lines.append(f"• {clean_name}: {_fmt_eur(spend_today)} today, {purch_today} purch")
+        spend_life_display = _fmt_eur(spend_life) if spend_life is not None else "–"
+        ad_lines.append(f"• {clean_name}: {_fmt_eur(spend_today)} today, {spend_life_display} all-time")
     
     # Sort by spend_today desc
     def sort_key(item):
