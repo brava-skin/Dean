@@ -58,14 +58,47 @@ thresholds:
     validation_min: null
 
 testing:
+  # ADVANCED LEARNING ACCELERATION RULES - Meta Learning Phase Optimization
+  # 7-tier system that prioritizes high-performing ads with massive learning budgets
+  # Multi-ATC ads get up to €400, high-CTR ads get up to €250, zero-CTR ads killed at €30
+  # Budget reallocation system moves money from poor to high performers automatically
   minimums:
     min_impressions: 200  # Lowered from 300 to allow earlier evaluation
     min_spend: 8   # EUR - Lowered from 10
   kill:
-    - {type: "spend_no_purchase", spend_gte: 50}                          # EUR - Balanced: give room but not too much
+    # ADVANCED LEARNING ACCELERATION RULES (Meta Learning Phase Optimization)
+    
+    # ZERO PERFORMANCE QUICK KILL (Save budget for good performers) - CHECK FIRST
+    - {type: "zero_performance_quick_kill", spend_gte: 30, ctr_lt: 0.001}  # Kill zero-CTR ads at €30
+    
+    # LEARNING ACCELERATION TIERS (Prioritize high-performing ads)
+    
+    # Tier 1: MASSIVE learning budget for multi-ATC ads (historically drive purchases)
+    - {type: "learning_acceleration_multi_atc", spend_gte: 400, atc_gte: 3}  # €400 for 3+ ATCs
+    - {type: "learning_acceleration_multi_atc", spend_gte: 300, atc_gte: 2}  # €300 for 2+ ATCs
+    
+    # Tier 2: EXCELLENT performance (CTR > 2%, ATC > 0) - Give them €250 to learn
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 250, ctr_gte: 0.02, atc_gte: 1}
+    
+    # Tier 3: HIGH CTR learning acceleration (CTR > 2% even without ATC)
+    - {type: "learning_acceleration_high_ctr", spend_gte: 200, ctr_gte: 0.02}  # €200 for high CTR alone
+    
+    # Tier 4: GOOD performance (CTR > 1%, ATC > 0) - Give them €150 to learn  
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 150, ctr_gte: 0.01, atc_gte: 1}
+    
+    # Tier 5: DECENT CTR learning (CTR > 1.5% without ATC)
+    - {type: "learning_acceleration_high_ctr", spend_gte: 120, ctr_gte: 0.015}  # €120 for decent CTR
+    
+    # Tier 6: AVERAGE performance (CTR > 0.5%) - Standard €100 threshold
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 100, ctr_gte: 0.005}
+    
+    # Tier 7: POOR performance (CTR < 0.5%, no ATC) - Kill sooner at €60
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 60, ctr_lt: 0.005, atc_lt: 1}
+    
+    # Standard engagement rules (unchanged)
     - {type: "ctr_below", ctr_lt: 0.005, spend_gte: 40}                   # EUR - Keep CTR reasonable but not too strict
-    - {type: "spend_no_atc", spend_gte: 60}                               # EUR - Reasonable ATC threshold
-    - {type: "spend_multi_atc_no_purchase", spend_gte: 80, atc_gte: 2}    # EUR - Balanced multi-ATC threshold
+    - {type: "spend_no_atc", spend_gte: 80}                              # EUR - Reasonable ATC threshold
+    - {type: "spend_multi_atc_no_purchase", spend_gte: 120, atc_gte: 2}    # EUR - Multi-ATC threshold
     - {type: "roas_below_after_days", roas_lt: 1.1, window: "day_3"}      # Slightly relaxed but not too loose
     - {type: "cpa_gte_over_days", cpa_gte: 50, days: 3}                   # EUR - Reasonable CPA threshold
     - {type: "spend_over_2x_price_no_purchase"}                           # uses economics.fx for USD→EUR
@@ -77,7 +110,7 @@ testing:
       - {type: "ctr_gte", ctr_gte: 0.005}                                 # Balanced CTR threshold
   engine:
     tripwires:
-      lifetime_spend_no_purchase_eur: 70  # Balanced: give room but not excessive
+      lifetime_spend_no_purchase_eur: 200  # Increased to €200 to support advanced learning acceleration
     bayes:
       prior_a: 1.2  # Balanced: not too aggressive, not too lenient
       prior_b: 250.0  # Balanced: reasonable conservatism
@@ -91,7 +124,15 @@ testing:
       ewma_alpha: 0.25  # Balanced: reasonable sensitivity
       drop_pct: 0.45  # Balanced: reasonable drop requirement
     fairness:
-      min_spend_before_kill_eur: 35  # Balanced: reasonable learning time
+      min_spend_before_kill_eur: 75  # Increased to €75 to give more learning time for ads with good performance
+    
+    # LEARNING PHASE BUDGET REALLOCATION (Accelerate Meta's learning)
+    learning_reallocation:
+      enabled: true
+      poor_performer_threshold: 0.005  # CTR < 0.5%
+      poor_performer_kill_spend: 40    # Kill poor performers at €40
+      high_performer_boost: 1.5        # Give high performers 50% more budget
+      max_learning_budget_eur: 500     # Cap learning budget at €500 per ad
     promotion:
       pause_after_promotion: true
       validation_budget_eur: 40

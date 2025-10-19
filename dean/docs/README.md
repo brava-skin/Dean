@@ -37,9 +37,14 @@ Creative Queue → Testing → Validation → Scaling
 ## 📋 Features
 
 ### Testing Stage
+- **Advanced Learning Acceleration Rules**: 7-tier performance-based system
+  - Multi-ATC ads get €300-400 budget (vs €70 before)
+  - High-CTR ads get €200-250 budget for learning
+  - Zero-CTR ads killed at €30 to save budget
+  - Keith-type ads (high CTR + ATC) get €250 budget
 - Automated creative launch from queue (Supabase or CSV)
 - Budget control with daily limits and fairness rules
-- Performance-based kill rules (CPA, ROAS, CTR thresholds)
+- Smart budget reallocation from poor to high performers
 - Queue rotation and launch deferral
 - Instagram and Facebook placement optimization
 

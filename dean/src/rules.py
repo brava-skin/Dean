@@ -344,6 +344,56 @@ class AdvancedRuleEngine:
             ok = (m.ctr or 0.0) >= rule["ctr_gte"]
             return ok, f"CTR≥{rule['ctr_gte']:.2%}" if ok else ""
 
+        if t == "atc_lt":
+            ok = (m.add_to_cart or 0) < rule["atc_lt"]
+            return ok, f"ATC<{rule['atc_lt']}" if ok else ""
+
+        if t == "spend_no_purchase_with_conditions":
+            # Support for performance-based killing with CTR/ATC conditions
+            spend_ok = (m.spend or 0) >= rule["spend_gte"]
+            purchase_ok = (m.purchases or 0) == 0
+            
+            # Check CTR conditions if specified
+            ctr_ok = True
+            if "ctr_gte" in rule:
+                ctr_ok = ctr_ok and (m.ctr or 0.0) >= rule["ctr_gte"]
+            if "ctr_lt" in rule:
+                ctr_ok = ctr_ok and (m.ctr or 0.0) < rule["ctr_lt"]
+            
+            # Check ATC conditions if specified  
+            atc_ok = True
+            if "atc_gte" in rule:
+                atc_ok = atc_ok and (m.add_to_cart or 0) >= rule["atc_gte"]
+            if "atc_lt" in rule:
+                atc_ok = atc_ok and (m.add_to_cart or 0) < rule["atc_lt"]
+            
+            ok = spend_ok and purchase_ok and ctr_ok and atc_ok
+            return ok, f"Spend≥€{rule['spend_gte']} & 0 purchases & conditions met" if ok else ""
+
+        if t == "learning_acceleration_high_ctr":
+            # Accelerate learning for high-CTR ads even without ATC
+            spend_ok = (m.spend or 0) >= rule["spend_gte"]
+            purchase_ok = (m.purchases or 0) == 0
+            ctr_ok = (m.ctr or 0.0) >= rule["ctr_gte"]
+            ok = spend_ok and purchase_ok and ctr_ok
+            return ok, f"High CTR learning acceleration: Spend≥€{rule['spend_gte']} & CTR≥{rule['ctr_gte']:.1%}" if ok else ""
+
+        if t == "learning_acceleration_multi_atc":
+            # Massive budget for ads with multiple ATCs
+            spend_ok = (m.spend or 0) >= rule["spend_gte"]
+            purchase_ok = (m.purchases or 0) == 0
+            atc_ok = (m.add_to_cart or 0) >= rule["atc_gte"]
+            ok = spend_ok and purchase_ok and atc_ok
+            return ok, f"Multi-ATC learning: Spend≥€{rule['spend_gte']} & ATC≥{rule['atc_gte']}" if ok else ""
+
+        if t == "zero_performance_quick_kill":
+            # Kill zero-CTR ads immediately to save budget
+            spend_ok = (m.spend or 0) >= rule["spend_gte"]
+            purchase_ok = (m.purchases or 0) == 0
+            ctr_ok = (m.ctr or 0.0) < rule["ctr_lt"]
+            ok = spend_ok and purchase_ok and ctr_ok
+            return ok, f"Zero performance kill: Spend≥€{rule['spend_gte']} & CTR<{rule['ctr_lt']:.1%}" if ok else ""
+
         if t == "cpa_gte":
             ok = (m.cpa is not None) and (m.cpa >= rule["cpa_gte"])
             return ok, f"CPA≥€{rule['cpa_gte']}" if ok else ""
