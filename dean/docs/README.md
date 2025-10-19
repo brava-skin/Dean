@@ -399,6 +399,18 @@ The system now includes comprehensive ad account health monitoring to prevent ac
 
 For detailed information, see [Account Health Monitoring Documentation](ACCOUNT_HEALTH_MONITORING.md).
 
+### Advanced Rate Limiting
+- **Comprehensive API Rate Limiting**: Implements all Meta Marketing API rate limiting types
+- **API-Level Scoring**: Reads=1pt, Writes=3pts with tier-based limits (60pts dev/9000pts standard)
+- **Business Use Case (BUC) Limits**: Endpoint-specific rate limiting with automatic headers
+- **Ads Insights Platform Limits**: App-level rate limiting for insights queries
+- **Budget Change Limits**: Ad account spend limits (10/day) and ad set budget limits (4/hour)
+- **Intelligent Error Handling**: Handles all rate limit error codes with appropriate retry logic
+- **Real-time Monitoring**: Track rate limit usage and status with detailed metrics
+- **Automatic Retry Logic**: Exponential backoff with tier-specific wait times
+
+For comprehensive rate limiting management, see [Rate Limiting Guide](RATE_LIMITING.md).
+
 ## 🚨 Troubleshooting
 
 ### Common Issues
@@ -406,7 +418,7 @@ For detailed information, see [Account Health Monitoring Documentation](ACCOUNT_
 **1. API Rate Limits**
 ```
 Error: Rate limit exceeded
-Solution: Increase META_WRITE_COOLDOWN_SEC or reduce concurrency
+Solution: See comprehensive [Rate Limiting Guide](RATE_LIMITING.md) for advanced rate limiting management
 ```
 
 **2. Missing Environment Variables**

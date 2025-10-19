@@ -8,6 +8,9 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
+from collections import defaultdict, deque
+from threading import Lock
+import json
 
 import requests
 
@@ -46,6 +49,24 @@ CB_RESET_SEC = int(os.getenv("META_CB_RESET_SEC", "120") or 120)
 
 # Rate limiting
 META_REQUEST_DELAY = float(os.getenv("META_REQUEST_DELAY", "0.5") or 0.5)  # Delay between requests
+
+# Enhanced rate limiting configuration
+META_API_TIER = os.getenv("META_API_TIER", "development")  # "development" or "standard"
+META_MAX_SCORE_DEV = 60  # Development tier max score
+META_MAX_SCORE_STANDARD = 9000  # Standard tier max score
+META_SCORE_DECAY_SEC = 300  # Score decay rate in seconds
+META_BLOCK_DURATION_DEV = 300  # Block duration for dev tier
+META_BLOCK_DURATION_STANDARD = 60  # Block duration for standard tier
+
+# Business Use Case (BUC) rate limits
+META_BUC_ENABLED = os.getenv("META_BUC_ENABLED", "true").lower() == "true"
+META_BUC_HEADERS = {
+    "ads_management": "X-Business-Use-Case: ads_management",
+    "custom_audience": "X-Business-Use-Case: custom_audience", 
+    "ads_insights": "X-Business-Use-Case: ads_insights",
+    "catalog_management": "X-Business-Use-Case: catalog_management",
+    "catalog_batch": "X-Business-Use-Case: catalog_batch"
+}
 
 # Naming & compliance
 CAMPAIGN_NAME_RE = re.compile(r"^\[(TEST|VALID|SCALE|SCALE-CBO)\]\s+Brava\s+-\s+(ABO|CBO)\s+-\s+US Men$")
@@ -181,6 +202,280 @@ def _maybe_call(v: Any) -> Any:
 
 
 # -------------------------
+# Rate Limiting Manager
+# -------------------------
+class RateLimitManager:
+    """
+    Comprehensive rate limiting manager for Meta Marketing API.
+    Handles all rate limiting types: API-level, Business Use Case, Insights Platform, etc.
+    """
+    
+    def __init__(self, api_tier: str = "development", store: Optional[Any] = None):
+        self.api_tier = api_tier.lower()
+        self.store = store
+        self.lock = Lock()
+        
+        # API-level scoring (reads=1pt, writes=3pts)
+        self.current_score = 0
+        self.max_score = META_MAX_SCORE_DEV if self.api_tier == "development" else META_MAX_SCORE_STANDARD
+        self.block_duration = META_BLOCK_DURATION_DEV if self.api_tier == "development" else META_BLOCK_DURATION_STANDARD
+        self.blocked_until = 0
+        
+        # Score tracking with decay
+        self.score_history = deque(maxlen=1000)  # Keep last 1000 requests
+        
+        # Business Use Case tracking
+        self.buc_usage = defaultdict(int)  # BUC -> usage count
+        self.buc_reset_times = defaultdict(float)  # BUC -> next reset time
+        
+        # Ad account level limits
+        self.adset_budget_changes = defaultdict(list)  # adset_id -> list of change timestamps
+        self.account_spend_changes = []  # List of spend change timestamps
+        
+        # App-level limits (for Insights Platform)
+        self.app_level_blocked_until = 0
+        
+        # Error tracking
+        self.error_counts = defaultdict(int)
+        self.last_error_reset = time.time()
+        
+    def _cleanup_old_scores(self):
+        """Remove scores older than decay period."""
+        cutoff = time.time() - META_SCORE_DECAY_SEC
+        while self.score_history and self.score_history[0][0] < cutoff:
+            old_score = self.score_history.popleft()[1]
+            self.current_score = max(0, self.current_score - old_score)
+    
+    def _cleanup_buc_usage(self):
+        """Reset BUC usage counters when reset time is reached."""
+        current_time = time.time()
+        for buc, reset_time in list(self.buc_reset_times.items()):
+            if current_time >= reset_time:
+                self.buc_usage[buc] = 0
+                self.buc_reset_times[buc] = current_time + 3600  # Reset every hour
+    
+    def can_make_request(self, request_type: str = "read", buc_type: Optional[str] = None) -> Tuple[bool, str]:
+        """
+        Check if a request can be made based on all rate limiting rules.
+        Returns (can_make, reason_if_blocked)
+        """
+        with self.lock:
+            current_time = time.time()
+            
+            # Clean up old data
+            self._cleanup_old_scores()
+            self._cleanup_buc_usage()
+            
+            # Check if currently blocked
+            if current_time < self.blocked_until:
+                return False, f"API-level blocked until {self.blocked_until - current_time:.1f}s"
+            
+            if current_time < self.app_level_blocked_until:
+                return False, f"App-level blocked until {self.app_level_blocked_until - current_time:.1f}s"
+            
+            # Check API-level scoring
+            request_score = 3 if request_type == "write" else 1
+            if self.current_score + request_score > self.max_score:
+                return False, f"API score limit exceeded ({self.current_score}/{self.max_score})"
+            
+            # Check BUC limits if applicable
+            if buc_type and META_BUC_ENABLED:
+                buc_limit = self._get_buc_limit(buc_type)
+                if self.buc_usage[buc_type] >= buc_limit:
+                    reset_in = self.buc_reset_times[buc_type] - current_time
+                    return False, f"BUC {buc_type} limit exceeded ({self.buc_usage[buc_type]}/{buc_limit}), resets in {reset_in:.1f}s"
+            
+            return True, ""
+    
+    def record_request(self, request_type: str = "read", buc_type: Optional[str] = None, endpoint: str = ""):
+        """Record a request and update all relevant counters."""
+        with self.lock:
+            current_time = time.time()
+            
+            # Update API-level scoring
+            request_score = 3 if request_type == "write" else 1
+            self.score_history.append((current_time, request_score))
+            self.current_score += request_score
+            
+            # Update BUC usage
+            if buc_type and META_BUC_ENABLED:
+                self.buc_usage[buc_type] += 1
+                if buc_type not in self.buc_reset_times:
+                    self.buc_reset_times[buc_type] = current_time + 3600  # Reset every hour
+            
+            # Log to store if available
+            if self.store:
+                try:
+                    self.store.log("rate_limit", "request_recorded", {
+                        "type": request_type,
+                        "buc_type": buc_type,
+                        "endpoint": endpoint,
+                        "score": request_score,
+                        "current_score": self.current_score,
+                        "max_score": self.max_score
+                    }, level="debug", stage="RATE_LIMIT")
+                except Exception:
+                    pass
+    
+    def handle_rate_limit_error(self, error_data: Dict[str, Any], endpoint: str) -> float:
+        """
+        Handle rate limit errors and return wait time.
+        Returns the number of seconds to wait before retry.
+        """
+        with self.lock:
+            code = error_data.get("error", {}).get("code")
+            subcode = error_data.get("error", {}).get("error_subcode")
+            message = error_data.get("error", {}).get("message", "")
+            current_time = time.time()
+            
+            # Reset error counts every hour
+            if current_time - self.last_error_reset > 3600:
+                self.error_counts.clear()
+                self.last_error_reset = current_time
+            
+            self.error_counts[f"{code}_{subcode}"] += 1
+            
+            # Handle different rate limit error types
+            if code == 4:  # Application request limit reached
+                if subcode == 1504022:  # Ads Insights Platform rate limit
+                    wait_time = 60.0
+                    self.app_level_blocked_until = current_time + wait_time
+                    notify(f"⏳ Ads Insights Platform rate limit hit. Blocked for {wait_time:.1f}s")
+                    return wait_time
+                elif subcode == 1504039:  # General app-level rate limit
+                    wait_time = 30.0
+                    self.app_level_blocked_until = current_time + wait_time
+                    notify(f"⏳ App-level rate limit hit. Blocked for {wait_time:.1f}s")
+                    return wait_time
+                else:  # General application rate limit
+                    wait_time = min(60.0, META_BACKOFF_BASE * 8)
+                    self.blocked_until = current_time + wait_time
+                    notify(f"⏳ Application rate limit hit. Blocked for {wait_time:.1f}s")
+                    return wait_time
+            
+            elif code == 17:  # User request limit reached
+                if subcode == 2446079:  # Ad account level API limit
+                    wait_time = self.block_duration
+                    self.blocked_until = current_time + wait_time
+                    notify(f"⏳ Ad account API limit reached. Blocked for {wait_time:.1f}s")
+                    return wait_time
+                elif subcode == 1885172:  # Spend limit changes (10/day)
+                    wait_time = 3600.0  # Wait 1 hour
+                    notify(f"⏳ Spend limit change limit reached (10/day). Wait 1 hour.")
+                    return wait_time
+            
+            elif code == 613:  # Ad account level limits
+                if subcode == 1487742:  # Too many calls from ad account
+                    wait_time = 60.0
+                    self.blocked_until = current_time + wait_time
+                    notify(f"⏳ Too many calls from ad account. Blocked for {wait_time:.1f}s")
+                    return wait_time
+                elif subcode == 1487632:  # Ad set budget change limit (4/hour)
+                    wait_time = 3600.0  # Wait 1 hour
+                    notify(f"⏳ Ad set budget change limit reached (4/hour). Wait 1 hour.")
+                    return wait_time
+                elif subcode == 1487225:  # Ad creation limit
+                    wait_time = 60.0
+                    notify(f"⏳ Ad creation limit reached. Wait {wait_time:.1f}s")
+                    return wait_time
+                else:  # General ad account limit
+                    wait_time = 60.0
+                    self.blocked_until = current_time + wait_time
+                    notify(f"⏳ Ad account limit reached. Blocked for {wait_time:.1f}s")
+                    return wait_time
+            
+            elif code in (80000, 80003, 80004, 80014):  # Business Use Case rate limits
+                wait_time = 60.0
+                notify(f"⏳ Business Use Case rate limit hit. Wait {wait_time:.1f}s")
+                return wait_time
+            
+            # Default handling for rate limit related errors
+            if "rate" in message.lower() or "limit" in message.lower():
+                wait_time = min(30.0, META_BACKOFF_BASE * 4)
+                notify(f"⏳ Rate limit error detected. Wait {wait_time:.1f}s")
+                return wait_time
+            
+            # No specific rate limit detected
+            return 0.0
+    
+    def _get_buc_limit(self, buc_type: str) -> int:
+        """Get the rate limit for a specific Business Use Case."""
+        if self.api_tier == "development":
+            limits = {
+                "ads_management": 300,
+                "custom_audience": 5000,
+                "ads_insights": 600,
+                "catalog_management": 20000,
+                "catalog_batch": 200
+            }
+        else:  # standard tier
+            limits = {
+                "ads_management": 100000,
+                "custom_audience": 190000,
+                "ads_insights": 190000,
+                "catalog_management": 20000,
+                "catalog_batch": 200
+            }
+        
+        return limits.get(buc_type, 1000)  # Default limit
+    
+    def can_change_budget(self, adset_id: str) -> bool:
+        """Check if ad set budget can be changed (4 times per hour limit)."""
+        with self.lock:
+            current_time = time.time()
+            cutoff = current_time - 3600  # 1 hour ago
+            
+            # Clean old changes
+            self.adset_budget_changes[adset_id] = [
+                ts for ts in self.adset_budget_changes[adset_id] if ts > cutoff
+            ]
+            
+            return len(self.adset_budget_changes[adset_id]) < 4
+    
+    def record_budget_change(self, adset_id: str):
+        """Record an ad set budget change."""
+        with self.lock:
+            self.adset_budget_changes[adset_id].append(time.time())
+    
+    def can_change_spend_limit(self) -> bool:
+        """Check if account spend limit can be changed (10 times per day limit)."""
+        with self.lock:
+            current_time = time.time()
+            cutoff = current_time - 86400  # 24 hours ago
+            
+            # Clean old changes
+            self.account_spend_changes = [
+                ts for ts in self.account_spend_changes if ts > cutoff
+            ]
+            
+            return len(self.account_spend_changes) < 10
+    
+    def record_spend_limit_change(self):
+        """Record an account spend limit change."""
+        with self.lock:
+            self.account_spend_changes.append(time.time())
+    
+    def get_status(self) -> Dict[str, Any]:
+        """Get current rate limiting status."""
+        with self.lock:
+            current_time = time.time()
+            self._cleanup_old_scores()
+            self._cleanup_buc_usage()
+            
+            return {
+                "api_tier": self.api_tier,
+                "current_score": self.current_score,
+                "max_score": self.max_score,
+                "score_usage_pct": (self.current_score / self.max_score) * 100,
+                "blocked_until": self.blocked_until,
+                "app_blocked_until": self.app_level_blocked_until,
+                "buc_usage": dict(self.buc_usage),
+                "error_counts": dict(self.error_counts),
+                "recent_requests": len(self.score_history)
+            }
+
+
+# -------------------------
 # MetaClient
 # -------------------------
 class MetaClient:
@@ -227,6 +522,12 @@ class MetaClient:
         self._fail_count: Dict[str, int] = {}
         self._cb_open_until: Dict[str, float] = {}
         self._last_write_ts = 0.0
+
+        # Initialize rate limiting manager
+        self.rate_limit_manager = RateLimitManager(
+            api_tier=META_API_TIER,
+            store=self.store
+        )
 
         self._init_sdk_if_needed()
 
@@ -304,11 +605,12 @@ class MetaClient:
                     except Exception:
                         retry_after = None
                     
-                    # Handle rate limit errors specifically
-                    if code == 4 and subcode == 1504022:
-                        wait_time = min(60.0, META_BACKOFF_BASE * 8)
-                        notify(f"⏳ Facebook API rate limit hit (SDK). Waiting {wait_time:.1f}s before retry...")
-                        time.sleep(wait_time)
+                    # Handle rate limit errors specifically using the rate limit manager
+                    if code in (4, 17, 613) or (code >= 80000 and code <= 80014):
+                        error_data = {"error": {"code": code, "error_subcode": subcode, "message": str(e)}}
+                        wait_time = self.rate_limit_manager.handle_rate_limit_error(error_data, key)
+                        if wait_time > 0:
+                            time.sleep(wait_time)
                         retriable = True
                     else:
                         retriable = (code in (4, 17, 613)) or (isinstance(status, int) and 500 <= status < 600)
@@ -345,39 +647,41 @@ class MetaClient:
 
     def _handle_rate_limit_error(self, error_data: Dict[str, Any], endpoint: str) -> None:
         """Handle Facebook API rate limit errors with appropriate retry logic."""
-        code = error_data.get("error", {}).get("code")
-        subcode = error_data.get("error", {}).get("error_subcode")
-        message = error_data.get("error", {}).get("message", "")
-        
-        # Handle rate limit errors (code 4, subcode 1504022)
-        if code == 4 and subcode == 1504022:
-            # Rate limit hit - wait longer before retry with exponential backoff
-            wait_time = min(60.0, META_BACKOFF_BASE * 8)  # Wait up to 60 seconds
-            notify(f"⏳ Facebook API rate limit hit. Waiting {wait_time:.1f}s before retry...")
+        wait_time = self.rate_limit_manager.handle_rate_limit_error(error_data, endpoint)
+        if wait_time > 0:
             time.sleep(wait_time)
-            return
-        
-        # Handle other rate limit related errors
-        if code == 4 or "rate" in message.lower() or "limit" in message.lower():
-            wait_time = min(30.0, META_BACKOFF_BASE * 4)
-            notify(f"⏳ Facebook API limit reached. Waiting {wait_time:.1f}s before retry...")
-            time.sleep(wait_time)
-            return
 
     def _request_delay(self) -> None:
         """Add delay between API requests to prevent rate limiting."""
         if META_REQUEST_DELAY > 0:
             time.sleep(META_REQUEST_DELAY)
 
-    def _graph_post(self, endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _graph_post(self, endpoint: str, payload: Dict[str, Any], buc_type: str = "ads_management") -> Dict[str, Any]:
+        # Check rate limits before making request
+        can_make, reason = self.rate_limit_manager.can_make_request("write", buc_type)
+        if not can_make:
+            raise RuntimeError(f"Rate limit prevented request: {reason}")
+        
         self._request_delay()  # Add delay to prevent rate limiting
         url = self._graph_url(endpoint)
         data = _sanitize(payload)
         data["access_token"] = self.account.access_token
         
+        # Add BUC header if enabled
+        headers = {}
+        if META_BUC_ENABLED and buc_type in META_BUC_HEADERS:
+            header_line = META_BUC_HEADERS[buc_type]
+            if ":" in header_line:
+                key, value = header_line.split(":", 1)
+                headers[key.strip()] = value.strip()
+        
         for attempt in range(META_RETRY_MAX + 1):
             try:
-                r = requests.post(url, json=data, timeout=META_TIMEOUT)
+                r = requests.post(url, json=data, headers=headers, timeout=META_TIMEOUT)
+                
+                # Record the request
+                self.rate_limit_manager.record_request("write", buc_type, endpoint)
+                
                 if r.status_code >= 400:
                     try:
                         err = r.json()
@@ -388,12 +692,11 @@ class MetaClient:
                     code = err.get("error", {}).get("code")
                     subcode = err.get("error", {}).get("error_subcode")
                     
-                    if code == 4 and subcode == 1504022 and attempt < META_RETRY_MAX:
-                        self._handle_rate_limit_error(err, endpoint)
-                        continue
-                    elif code == 4 and attempt < META_RETRY_MAX:
-                        self._handle_rate_limit_error(err, endpoint)
-                        continue
+                    # Handle rate limit errors
+                    if code in (4, 17, 613) or (code >= 80000 and code <= 80014):
+                        if attempt < META_RETRY_MAX:
+                            self._handle_rate_limit_error(err, endpoint)
+                            continue
                     
                     msg = f"Graph POST {endpoint} {r.status_code}: {err}"
                     try:
@@ -415,17 +718,34 @@ class MetaClient:
                     continue
                 raise e
 
-    def _graph_get_object(self, object_path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _graph_get_object(self, object_path: str, params: Optional[Dict[str, Any]] = None, buc_type: str = "ads_management") -> Dict[str, Any]:
         """GET for absolute objects like '/{id}' or '/{id}/thumbnails' (not under ad account path)."""
+        # Check rate limits before making request
+        can_make, reason = self.rate_limit_manager.can_make_request("read", buc_type)
+        if not can_make:
+            raise RuntimeError(f"Rate limit prevented request: {reason}")
+        
         self._request_delay()  # Add delay to prevent rate limiting
         ver = self.account.api_version or "v23.0"
         url = f"https://graph.facebook.com/{ver}/{object_path.lstrip('/')}"
         qp = dict(params or {})
         qp["access_token"] = self.account.access_token
         
+        # Add BUC header if enabled
+        headers = {}
+        if META_BUC_ENABLED and buc_type in META_BUC_HEADERS:
+            header_line = META_BUC_HEADERS[buc_type]
+            if ":" in header_line:
+                key, value = header_line.split(":", 1)
+                headers[key.strip()] = value.strip()
+        
         for attempt in range(META_RETRY_MAX + 1):
             try:
-                r = requests.get(url, params=qp, timeout=META_TIMEOUT)
+                r = requests.get(url, params=qp, headers=headers, timeout=META_TIMEOUT)
+                
+                # Record the request
+                self.rate_limit_manager.record_request("read", buc_type, object_path)
+                
                 if r.status_code >= 400:
                     try:
                         err = r.json()
@@ -436,12 +756,11 @@ class MetaClient:
                     code = err.get("error", {}).get("code")
                     subcode = err.get("error", {}).get("error_subcode")
                     
-                    if code == 4 and subcode == 1504022 and attempt < META_RETRY_MAX:
-                        self._handle_rate_limit_error(err, object_path)
-                        continue
-                    elif code == 4 and attempt < META_RETRY_MAX:
-                        self._handle_rate_limit_error(err, object_path)
-                        continue
+                    # Handle rate limit errors
+                    if code in (4, 17, 613) or (code >= 80000 and code <= 80014):
+                        if attempt < META_RETRY_MAX:
+                            self._handle_rate_limit_error(err, object_path)
+                            continue
                     
                     raise RuntimeError(f"Graph GET {object_path} {r.status_code}: {err}")
                 
@@ -635,6 +954,10 @@ class MetaClient:
         """
         Update daily budget in account currency (EUR). Automatically caps step size.
         """
+        # Check rate limits for budget changes
+        if not self.rate_limit_manager.can_change_budget(adset_id):
+            raise RuntimeError(f"Ad set budget change limit reached (4/hour) for adset {adset_id}")
+        
         b = max(self.cfg.budget_min, min(self.cfg.budget_max, float(daily_budget)))
         if current_budget is not None:
             cap = current_budget * (1.0 + self.cfg.budget_step_cap_pct / 100.0)
@@ -649,6 +972,10 @@ class MetaClient:
             return {"result": "ok", "mock": True, "action": "update_adset_budget", "adset_id": adset_id, "budget": round(b, 2)}
         self._init_sdk_if_needed()
         self._cooldown()
+        
+        # Record the budget change attempt
+        self.rate_limit_manager.record_budget_change(adset_id)
+        
         def _update():
             return AdSet(adset_id).api_update(params={"daily_budget": int(b * 100)})
         return self._retry("update_budget", _update)
@@ -1157,6 +1484,12 @@ class MetaClient:
             "critical_issues": critical_issues,
             "warnings": warnings
         }
+    
+    def get_rate_limit_status(self) -> Dict[str, Any]:
+        """
+        Get comprehensive rate limiting status information.
+        """
+        return self.rate_limit_manager.get_status()
 
 
 __all__ = ["AccountAuth", "ClientConfig", "MetaClient"]
