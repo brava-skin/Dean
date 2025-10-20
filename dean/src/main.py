@@ -646,7 +646,7 @@ def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dic
                     from slack import alert_spend_cap_approaching
                     alert_spend_cap_approaching(account_id, spent, cap, currency)
             
-            # Check balance warnings - alert when close to auto-charge threshold
+            # Check balance warnings - alert when approaching auto-charge threshold
             balance = health_details.get("balance")
             if balance is not None:
                 # Try to get auto-charge threshold from Meta's billing API first
@@ -659,7 +659,8 @@ def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dic
                 warning_buffer = account_health_config.get("thresholds", {}).get("balance_warning_buffer_eur", 10.0)
                 warning_threshold = auto_charge_threshold - warning_buffer
                 
-                if balance <= warning_threshold:
+                # Alert when balance is HIGH (approaching auto-charge threshold)
+                if balance >= warning_threshold:
                     from slack import alert_account_balance_low
                     alert_account_balance_low(account_id, balance, currency, auto_charge_threshold)
             

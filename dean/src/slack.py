@@ -1197,14 +1197,14 @@ def alert_payment_issue(account_id: str, payment_status: str, details: str = "")
 
 def alert_account_balance_low(account_id: str, balance: float, currency: str = "EUR", auto_charge_threshold: float = None) -> None:
     """
-    Alert when account balance is low or close to auto-charge threshold.
+    Alert when account balance is approaching auto-charge threshold.
     """
     if auto_charge_threshold is not None:
         # Check if this is a dynamic threshold from Meta's API or a configured fallback
         threshold_source = "Meta API" if auto_charge_threshold != 75.0 else "configured fallback"
-        text = f"💰 Account Balance Warning\nAccount: {account_id}\nBalance: {balance:.2f} {currency}\nAuto-charge threshold: {auto_charge_threshold:.2f} {currency} (from {threshold_source})\n\n⚠️ Check your prepaid card balance to ensure sufficient funds for auto-charge."
+        text = f"💰 Account Balance Approaching Auto-Charge Threshold\nAccount: {account_id}\nCurrent Balance: {balance:.2f} {currency}\nAuto-charge threshold: {auto_charge_threshold:.2f} {currency} (from {threshold_source})\n\n⚠️ Your prepaid card will be charged when balance reaches the threshold. Check your card has sufficient funds!"
     else:
-        text = f"💰 Low Account Balance\nAccount: {account_id}\nBalance: {balance:.2f} {currency}\n\n⚠️ Add funds to prevent account suspension."
+        text = f"💰 Account Balance Approaching Threshold\nAccount: {account_id}\nCurrent Balance: {balance:.2f} {currency}\n\n⚠️ Check your prepaid card balance to ensure sufficient funds for auto-charge."
     
     msg = SlackMessage(
         text=text,
