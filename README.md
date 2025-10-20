@@ -38,10 +38,18 @@ Creative Queue → Testing → Validation → Scaling
 
 ### Testing Stage
 - **Advanced Learning Acceleration Rules**: 7-tier performance-based system
-  - Multi-ATC ads get €300-400 budget (vs €70 before)
-  - High-CTR ads get €200-250 budget for learning
-  - Zero-CTR ads killed at €30 to save budget
-  - Keith-type ads (high CTR + ATC) get €250 budget
+  - **Tier 1**: Multi-ATC ads (3+ ATCs) get €500 budget for extended learning
+  - **Tier 2**: High-ATC ads (2+ ATCs) get €400 budget with fast-track to validation
+  - **Tier 3**: Single ATC ads get €300 budget with learning acceleration
+  - **Tier 4**: High-CTR ads (CTR > 2%) get €250 budget for learning
+  - **Tier 5**: Good CTR ads (CTR > 1.5%) get €200 budget
+  - **Tier 6**: Decent CTR ads (CTR > 1%) get €160 budget
+  - **Tier 7**: Poor performance ads killed at €90 (low CTR, no ATC)
+- **ATC Optimization Rules**: Prioritizes Add-to-Cart generation
+  - Reward ANY ATC with €50 budget boost
+  - Fast-track 2+ ATC ads to validation stage
+  - ATC learning acceleration with extended budgets
+- **Zero-Performance Quick Kill**: Ads with CTR < 0.1% killed at €30 to save budget
 - Automated creative launch from queue (Supabase or CSV)
 - Budget control with daily limits and fairness rules
 - Smart budget reallocation from poor to high performers
@@ -49,12 +57,25 @@ Creative Queue → Testing → Validation → Scaling
 - Instagram and Facebook placement optimization
 
 ### Validation Stage  
+- **Tiered Validation Rules**: 7-tier system mirroring testing tiers
+  - **Tier 1**: Strong ATC signals (3+ ATCs) get €500 budget with extended learning
+  - **Tier 2**: High ATC performance (2+ ATCs) get €400 budget
+  - **Tier 3**: Excellent performance (high CTR + ATC) get €300 budget
+  - **Tier 4**: High CTR learning (no ATC yet) get €240 budget
+  - **Tier 5**: Good performance (CTR > 1% + ATC) get €200 budget
+  - **Tier 6**: Decent CTR (no ATC) get €160 budget
+  - **Tier 7**: Poor performance killed at €90 (low CTR, no ATC)
 - Extended testing with higher budget allocation
 - Stricter performance requirements for promotion
 - Multi-day stability requirements
 - Soft pass options for borderline performers
 
 ### Scaling Stage
+- **Tiered Scaling Rules**: Aligned with testing tiers, stricter at scale
+  - **Zero-performance safeguard**: Runaway spend protection at €80 (CTR < 0.1%)
+  - **Poor engagement at scale**: Low CTR + no ATC killed at €200
+  - **Core scaling rules**: CPA > €40 for 2+ days, ROAS < 1.2 for 3+ days
+  - **Spend protection**: No purchase after €150 spend
 - Intelligent budget scaling with hysteresis protection
 - Portfolio management and reinvestment strategies
 - Creative duplication for high performers
@@ -67,6 +88,38 @@ Creative Queue → Testing → Validation → Scaling
 - Emergency stop mechanisms
 - Comprehensive health checks
 - Data quality monitoring and alerts
+
+## 🆕 Recent Updates
+
+### 🎯 7-Tier Performance System
+- **Testing Stage**: 7-tier system with ATC prioritization
+  - Multi-ATC ads (3+ ATCs) get €500 budget for extended learning
+  - High-ATC ads (2+ ATCs) get €400 budget with fast-track to validation
+  - Single ATC ads get €300 budget with learning acceleration
+  - High-CTR ads (CTR > 2%) get €250 budget for learning
+  - Good CTR ads (CTR > 1.5%) get €200 budget
+  - Decent CTR ads (CTR > 1%) get €160 budget
+  - Poor performance ads killed at €90 (low CTR, no ATC)
+- **Validation Stage**: Mirroring tiered rules with stage-appropriate budgets
+- **Scaling Stage**: Aligned tiers with stricter scaling thresholds
+
+### 🛒 ATC Optimization Rules
+- **ATC Reward System**: Reward ANY ATC with €50 budget boost
+- **Fast-track Validation**: 2+ ATC ads promoted to validation stage
+- **ATC Learning Acceleration**: Extended budgets for ATC-generating ads
+- **Zero-Performance Quick Kill**: CTR < 0.1% killed at €30 to save budget
+
+### 🔄 Dynamic Billing Threshold Detection
+- Automatically detects Meta's current auto-charge threshold
+- Falls back to configured threshold (75 EUR) if API doesn't provide it
+- Smart balance alerts with European formatting
+- Shows threshold source (Meta API vs configured fallback)
+
+### 🛡️ Enhanced Safety Features
+- Active ads filtering (only shows ACTIVE status)
+- Comprehensive account health monitoring
+- Payment failure detection and alerts
+- European number formatting in all reports
 
 ## 🛠️ Installation
 
