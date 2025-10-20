@@ -74,8 +74,9 @@ testing:
     # LEARNING ACCELERATION TIERS (Prioritize high-performing ads)
     
     # Tier 1: MASSIVE learning budget for multi-ATC ads (historically drive purchases)
-    - {type: "learning_acceleration_multi_atc", spend_gte: 400, atc_gte: 3}  # €400 for 3+ ATCs
-    - {type: "learning_acceleration_multi_atc", spend_gte: 300, atc_gte: 2}  # €300 for 2+ ATCs
+    - {type: "learning_acceleration_multi_atc", spend_gte: 500, atc_gte: 3}  # €500 for 3+ ATCs (increased from €400)
+    - {type: "learning_acceleration_multi_atc", spend_gte: 400, atc_gte: 2}  # €400 for 2+ ATCs (increased from €300)
+    - {type: "learning_acceleration_multi_atc", spend_gte: 300, atc_gte: 1}  # €300 for 1+ ATCs (new tier)
     
     # Tier 2: EXCELLENT performance (CTR > 2%, ATC > 0) - Give them €250 to learn
     - {type: "spend_no_purchase_with_conditions", spend_gte: 250, ctr_gte: 0.02, atc_gte: 1}
@@ -95,8 +96,13 @@ testing:
     # Tier 7: POOR performance (CTR < 0.5%, no ATC) - Kill sooner at €60
     - {type: "spend_no_purchase_with_conditions", spend_gte: 60, ctr_lt: 0.005, atc_lt: 1}
     
+    # ATC REWARD RULES (New - prioritize ATC generation)
+    - {type: "atc_gte", atc_gte: 1, spend_gte: 40, budget_boost: 50}      # Reward ANY ATC with €50 more budget
+    - {type: "atc_gte", atc_gte: 2, spend_gte: 60, promote: true}         # Fast-track 2+ ATC ads to validation
+    - {type: "atc_learning_acceleration", atc_gte: 1, spend_gte: 80, budget_boost: 100}  # Give ATC ads more learning time
+    
     # Standard engagement rules (unchanged)
-    - {type: "ctr_below", ctr_lt: 0.005, spend_gte: 40}                   # EUR - Keep CTR reasonable but not too strict
+    - {type: "ctr_below", ctr_lt: 0.003, spend_gte: 40}                   # EUR - Lowered from 0.005 to 0.003 for more learning time
     - {type: "spend_no_atc", spend_gte: 80}                              # EUR - Reasonable ATC threshold
     - {type: "spend_multi_atc_no_purchase", spend_gte: 120, atc_gte: 2}    # EUR - Multi-ATC threshold
     - {type: "roas_below_after_days", roas_lt: 1.1, window: "day_3"}      # Slightly relaxed but not too loose
@@ -147,6 +153,33 @@ validation:
     min_clicks: 20  # Lowered from 30
     min_spend: 30   # EUR - Lowered from 40
   kill:
+    # ── TIERED VALIDATION RULES (mirroring testing tiers with stage-appropriate spends) ──
+    # Zero-performance quick kill to save budget sooner in VALID
+    - {type: "zero_performance_quick_kill", spend_gte: 50, ctr_lt: 0.001}
+
+    # Tier 1: Prioritize strong ATC signals (give more room before kill)
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 500, atc_gte: 3}
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 400, atc_gte: 2}
+
+    # Tier 2: Excellent performance (high CTR with some ATC)
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 300, ctr_gte: 0.02, atc_gte: 1}
+
+    # Tier 3: High CTR learning (no ATC yet)
+    - {type: "learning_acceleration_high_ctr", spend_gte: 240, ctr_gte: 0.02}
+
+    # Tier 4: Good performance (CTR > 1%)
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 200, ctr_gte: 0.01, atc_gte: 1}
+
+    # Tier 5: Decent CTR (no ATC)
+    - {type: "learning_acceleration_high_ctr", spend_gte: 160, ctr_gte: 0.015}
+
+    # Tier 6: Average performance baseline
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 120, ctr_gte: 0.005}
+
+    # Tier 7: Poor performance (low CTR and no ATC)
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 90, ctr_lt: 0.005, atc_lt: 1}
+
+    # ── Existing balanced rules (kept) ──
     - {type: "spend_no_purchase", spend_gte: 60}                          # EUR - Balanced: reasonable spend threshold
     - {type: "cpa_gte", cpa_gte: 55}                                      # EUR - Balanced: reasonable CPA threshold (more lenient than testing)
     - {type: "ctr_below", ctr_lt: 0.005, spend_gte: 50}                   # EUR - Balanced: reasonable CTR threshold
@@ -234,6 +267,14 @@ scaling:
     min_spend: 50   # EUR
 
   kill:
+    # ── TIERED SCALING RULES (aligned with testing tiers; stricter at scale) ──
+    # Zero-performance quick kill safeguard (rare in scale, but protects runaway spend)
+    - {type: "zero_performance_quick_kill", spend_gte: 80, ctr_lt: 0.001}
+
+    # Poor engagement at scale (low CTR and no ATC) → early stop
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 200, ctr_lt: 0.005, atc_lt: 1}
+
+    # Keep existing core scaling kill rules
     - {type: "cpa_gte_consecutive_days", cpa_gte: 40, days: 2}             # EUR
     - {type: "roas_lt_over_days", roas_lt: 1.2, days: 3}
     - {type: "spend_no_purchase", spend_gte: 150}                          # EUR
@@ -340,6 +381,8 @@ account_health:
     balance_warning_eur: 10.0    # Alert when balance below this amount
     spend_cap_warning_pct: 80   # Alert when spent this % of spend cap
     balance_critical_eur: 0.0   # Critical alert when balance at or below this
+    auto_charge_threshold_eur: 75.0  # Auto-charge threshold for prepaid cards
+    balance_warning_buffer_eur: 10.0  # Alert when balance drops below (threshold - buffer)
 
 mode:
   current: "production"

@@ -317,31 +317,35 @@ def build_basic_blocks(title: str, lines: List[str], severity: str = "info", foo
 # ---------- New messaging helpers ----------
 
 def format_run_header(status: str, time_str: str, profile: str, spend: float, purch: int, cpa: Optional[float], be: Optional[float], impressions: int = 0, clicks: int = 0, ctr: Optional[float] = None, cpc: Optional[float] = None, atc: int = 0, ic: int = 0) -> str:
-    """Format the main run header line with comprehensive metrics."""
+    """Format the main run header line with comprehensive metrics in European format."""
     status_emoji = "✅" if status == "OK" else "⚠️"
-    cpa_str = "–" if cpa is None else f"{cpa:.2f}"
-    be_str = "–" if be is None else f"{be:.2f}"
-    ctr_str = "–" if ctr is None else f"{ctr:.2f}%"
-    cpc_str = "–" if cpc is None else f"{cpc:.2f}"
     
-    # Main metrics line
-    main_line = f"{status_emoji} Run {status}, {time_str}\nSpend {_fmt_currency(spend)}, Purchases {purch}, CPA {cpa_str}, BE {be_str}"
+    # Format currency with European comma separator
+    def _fmt_eur_european(amount: float) -> str:
+        return f"€{amount:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     
-    # Performance metrics line
-    perf_line = f"Impressions {impressions:,}, Clicks {clicks:,}, CTR {ctr_str}, CPC {cpc_str}"
+    # Format numbers with European comma separator
+    def _fmt_int_european(value: int) -> str:
+        return f"{value:,}".replace(",", ".")
     
-    # Conversion metrics line (only if > 0)
-    conv_parts = []
-    if atc > 0:
-        conv_parts.append(f"ATC {atc}")
-    if ic > 0:
-        conv_parts.append(f"IC {ic}")
+    # Format percentage with European comma separator
+    def _fmt_pct_european(value: float) -> str:
+        return f"{value:.1f}%".replace(".", ",")
     
-    if conv_parts:
-        conv_line = f"Conversions: {', '.join(conv_parts)}"
-        return f"{main_line}\n{perf_line}\n{conv_line}"
-    else:
-        return f"{main_line}\n{perf_line}"
+    # Format currency for CPC
+    def _fmt_cpc_european(value: float) -> str:
+        return f"€{value:.2f}".replace(".", ",")
+    
+    spend_str = _fmt_eur_european(spend)
+    cpa_str = "–" if cpa is None else _fmt_eur_european(cpa)
+    be_str = "–" if be is None else _fmt_eur_european(be)
+    ctr_str = "–" if ctr is None else _fmt_pct_european(ctr)
+    cpc_str = "–" if cpc is None else _fmt_cpc_european(cpc)
+    
+    # Main metrics line in requested format
+    main_line = f"{status_emoji} Run {status}, {time_str}\nSpend {spend_str}. ATC: {atc}, IC: {ic}, PUR: {purch}. CPA: {cpa_str}, IMP: {_fmt_int_european(impressions)}, Clicks: {_fmt_int_european(clicks)}, CTR: {ctr_str}, CPC: {cpc_str}."
+    
+    return main_line
 
 def format_stage_line(stage: str, counts: Dict[str, int]) -> str:
     """Format a single stage summary line - only show non-zero actions."""
@@ -1191,11 +1195,16 @@ def alert_payment_issue(account_id: str, payment_status: str, details: str = "")
     )
     client().notify(msg)
 
-def alert_account_balance_low(account_id: str, balance: float, currency: str = "EUR") -> None:
+def alert_account_balance_low(account_id: str, balance: float, currency: str = "EUR", auto_charge_threshold: float = None) -> None:
     """
-    Alert when account balance is low or negative.
+    Alert when account balance is low or close to auto-charge threshold.
     """
-    text = f"💰 Low Account Balance\nAccount: {account_id}\nBalance: {balance:.2f} {currency}\n\n⚠️ Add funds to prevent account suspension."
+    if auto_charge_threshold is not None:
+        # Check if this is a dynamic threshold from Meta's API or a configured fallback
+        threshold_source = "Meta API" if auto_charge_threshold != 75.0 else "configured fallback"
+        text = f"💰 Account Balance Warning\nAccount: {account_id}\nBalance: {balance:.2f} {currency}\nAuto-charge threshold: {auto_charge_threshold:.2f} {currency} (from {threshold_source})\n\n⚠️ Check your prepaid card balance to ensure sufficient funds for auto-charge."
+    else:
+        text = f"💰 Low Account Balance\nAccount: {account_id}\nBalance: {balance:.2f} {currency}\n\n⚠️ Add funds to prevent account suspension."
     
     msg = SlackMessage(
         text=text,

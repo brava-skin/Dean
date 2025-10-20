@@ -646,13 +646,22 @@ def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dic
                     from slack import alert_spend_cap_approaching
                     alert_spend_cap_approaching(account_id, spent, cap, currency)
             
-            # Check balance warnings
+            # Check balance warnings - alert when close to auto-charge threshold
             balance = health_details.get("balance")
             if balance is not None:
-                warning_threshold = account_health_config.get("thresholds", {}).get("balance_warning_eur", 10.0)
+                # Try to get auto-charge threshold from Meta's billing API first
+                auto_charge_threshold = health_details.get("auto_charge_threshold")
+                
+                if auto_charge_threshold is None:
+                    # Fallback to configured threshold if API doesn't provide it
+                    auto_charge_threshold = account_health_config.get("thresholds", {}).get("auto_charge_threshold_eur", 75.0)
+                
+                warning_buffer = account_health_config.get("thresholds", {}).get("balance_warning_buffer_eur", 10.0)
+                warning_threshold = auto_charge_threshold - warning_buffer
+                
                 if balance <= warning_threshold:
                     from slack import alert_account_balance_low
-                    alert_account_balance_low(account_id, balance, currency)
+                    alert_account_balance_low(account_id, balance, currency, auto_charge_threshold)
             
             # Send general warnings if any
             if warnings:
@@ -1069,10 +1078,13 @@ def main() -> None:
                 now = datetime.now(local_tz)
                 midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
                 
-                # Get today's data
+                # Get today's data for ACTIVE ads only
                 rows_today = client.get_ad_insights(
                     level="ad",
-                    filtering=[{"field": "adset.id", "operator": "IN", "value": [settings.get("ids", {}).get("testing_adset_id")]}],
+                    filtering=[
+                        {"field": "adset.id", "operator": "IN", "value": [settings.get("ids", {}).get("testing_adset_id")]},
+                        {"field": "ad.status", "operator": "IN", "value": ["ACTIVE"]}
+                    ],
                     fields=["ad_id", "ad_name", "spend", "actions"],
                     time_range={
                         "since": midnight.strftime("%Y-%m-%d"),
