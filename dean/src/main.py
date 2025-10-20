@@ -753,7 +753,7 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
         be = float(
             os.getenv("BREAKEVEN_CPA")
             or (settings.get("economics", {}) or {}).get("breakeven_cpa")
-            or 34
+            or 27.51
         )
         
         return {

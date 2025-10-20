@@ -21,7 +21,7 @@ UTC = timezone.utc
 
 # ---- Environment / defaults (EUR account; product price in USD) ----
 PRODUCT_PRICE = float(os.getenv("PRODUCT_PRICE", "50") or 50)   # USD price of the product (used for tripwire)
-BREAKEVEN_CPA = float(os.getenv("BREAKEVEN_CPA", "34") or 34)   # EUR (account currency)
+BREAKEVEN_CPA = float(os.getenv("BREAKEVEN_CPA", "27.51") or 27.51)   # EUR (account currency)
 COGS_ENV = os.getenv("COGS_PER_PURCHASE")
 COGS_PER_PURCHASE = float(COGS_ENV) if COGS_ENV not in (None, "") else None
 
