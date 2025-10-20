@@ -653,8 +653,29 @@ def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dic
                 auto_charge_threshold = health_details.get("auto_charge_threshold")
                 
                 if auto_charge_threshold is None:
-                    # Fallback to configured threshold if API doesn't provide it
-                    auto_charge_threshold = account_health_config.get("thresholds", {}).get("auto_charge_threshold_eur", 75.0)
+                    # Use dynamic threshold tracking system
+                    from storage import Store
+                    store = Store()
+                    
+                    # Get current tracked threshold from storage
+                    current_threshold = store.get_state("auto_charge_threshold_eur")
+                    if current_threshold is None:
+                        # Initialize with configured threshold
+                        current_threshold = account_health_config.get("thresholds", {}).get("auto_charge_threshold_eur", 75.0)
+                        store.set_state("auto_charge_threshold_eur", current_threshold)
+                    
+                    auto_charge_threshold = current_threshold
+                    
+                    # Check if balance has hit the current threshold (indicating a charge occurred)
+                    if balance >= auto_charge_threshold:
+                        # Increase threshold by €5 for next charge
+                        new_threshold = auto_charge_threshold + 5.0
+                        store.set_state("auto_charge_threshold_eur", new_threshold)
+                        auto_charge_threshold = new_threshold
+                        
+                        # Send notification about threshold update
+                        from slack import alert_threshold_updated
+                        alert_threshold_updated(account_id, new_threshold, currency)
                 
                 warning_buffer = account_health_config.get("thresholds", {}).get("balance_warning_buffer_eur", 10.0)
                 warning_threshold = auto_charge_threshold - warning_buffer

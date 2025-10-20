@@ -1213,6 +1213,20 @@ def alert_account_balance_low(account_id: str, balance: float, currency: str = "
     )
     client().notify(msg)
 
+
+def alert_threshold_updated(account_id: str, new_threshold: float, currency: str = "EUR") -> None:
+    """
+    Alert when auto-charge threshold has been updated.
+    """
+    text = f"🔄 Auto-Charge Threshold Updated\nAccount: {account_id}\nNew threshold: {new_threshold:.2f} {currency}\n\n✅ Threshold automatically increased by €5. Next charge will occur at {new_threshold:.2f} {currency}."
+    
+    msg = SlackMessage(
+        text=text,
+        severity="info",
+        topic="alerts",
+    )
+    client().notify(msg)
+
 def alert_spend_cap_approaching(account_id: str, spent: float, cap: float, currency: str = "EUR") -> None:
     """
     Alert when approaching spend cap limit.
