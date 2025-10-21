@@ -1216,7 +1216,7 @@ def run_testing_tick(
                     ic += int(value)
             
             # Calculate derived metrics
-            cpa = spend / purchases if purchases > 0 else None
+            cpa = spend / purchases if purchases > 0 else 0
             roas = (purchases * 50) / spend if spend > 0 else 0  # Assuming €50 AOV
             
             # Store in results
