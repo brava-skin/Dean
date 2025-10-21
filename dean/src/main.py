@@ -307,9 +307,9 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             # We don't need to insert them explicitly
         }
         
-        # Insert performance data
+        # Insert performance data (use upsert to handle duplicates)
         notify(f"🔍 Inserting performance data: {performance_data}")
-        result = supabase_client.table('performance_metrics').insert(performance_data).execute()
+        result = supabase_client.table('performance_metrics').upsert(performance_data).execute()
         notify(f"✅ Performance data inserted: {result}")
         
         # Store in ad_lifecycle table

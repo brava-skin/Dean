@@ -286,12 +286,13 @@ class FeatureEngineer:
                             lambda x: x.rolling(window=window, min_periods=1).std()
                         )
                         
-                        # Rolling trend (slope)
-                        df[f'{value_col}_rolling_trend_{window}d'] = df.groupby(group_col)[value_col].transform(
-                            lambda x: x.rolling(window=window, min_periods=2).apply(
-                                lambda y: np.polyfit(range(len(y)), y, 1)[0] if len(y) >= 2 else 0
+                        # Rolling trend (slope) - only for windows >= 2
+                        if window >= 2:
+                            df[f'{value_col}_rolling_trend_{window}d'] = df.groupby(group_col)[value_col].transform(
+                                lambda x: x.rolling(window=window, min_periods=2).apply(
+                                    lambda y: np.polyfit(range(len(y)), y, 1)[0] if len(y) >= 2 else 0
+                                )
                             )
-                        )
             
             return df
             
@@ -566,10 +567,10 @@ class XGBoostPredictor:
                 'stage': stage
             }
             
-            # Performance metrics (simplified)
+            # Performance metrics (simplified) - ensure JSON serializable
             performance_metrics = {
-                'feature_count': len(feature_cols),
-                'model_size_bytes': len(model_data)
+                'feature_count': int(len(feature_cols)),
+                'model_size_bytes': int(len(model_data))
             }
             
             data = {
