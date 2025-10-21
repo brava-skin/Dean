@@ -274,14 +274,14 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         return
     
     try:
-        print(f"🔍 Storing data for stage {stage}: {ad_data.get('ad_id', 'unknown')}")
+        notify(f"🔍 Storing data for stage {stage}: {ad_data.get('ad_id', 'unknown')}")
         
         # Test Supabase connection first
         try:
             test_result = supabase_client.table('performance_metrics').select('*').limit(1).execute()
-            print(f"🔍 Supabase connection test: {len(test_result.data)} rows found")
+            notify(f"🔍 Supabase connection test: {len(test_result.data)} rows found")
         except Exception as e:
-            print(f"❌ Supabase connection failed: {e}")
+            notify(f"❌ Supabase connection failed: {e}")
             return
         
         # Store in performance_metrics table
@@ -308,9 +308,9 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         }
         
         # Insert performance data
-        print(f"🔍 Inserting performance data: {performance_data}")
+        notify(f"🔍 Inserting performance data: {performance_data}")
         result = supabase_client.table('performance_metrics').insert(performance_data).execute()
-        print(f"✅ Performance data inserted: {result}")
+        notify(f"✅ Performance data inserted: {result}")
         
         # Store in ad_lifecycle table
         lifecycle_data = {
@@ -325,12 +325,12 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         }
         
         # Insert lifecycle data (upsert to avoid duplicates)
-        print(f"🔍 Inserting lifecycle data: {lifecycle_data}")
+        notify(f"🔍 Inserting lifecycle data: {lifecycle_data}")
         result = supabase_client.table('ad_lifecycle').upsert(lifecycle_data).execute()
-        print(f"✅ Lifecycle data inserted: {result}")
+        notify(f"✅ Lifecycle data inserted: {result}")
         
     except Exception as e:
-        print(f"❌ Failed to store performance data in Supabase: {e}")
+        notify(f"❌ Failed to store performance data in Supabase: {e}")
         import traceback
         traceback.print_exc()
 
