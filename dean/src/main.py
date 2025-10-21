@@ -303,8 +303,8 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             'initiate_checkout': int(ad_data.get('ic', 0)),
             'roas': float(ad_data.get('roas', 0)),
             'cpa': float(ad_data.get('cpa', 0)) if ad_data.get('cpa') is not None else 0,
-            'created_at': ad_data.get('created_at', ''),
-            'updated_at': ad_data.get('updated_at', '')
+            # Note: created_at and updated_at are handled by database defaults
+            # We don't need to insert them explicitly
         }
         
         # Insert performance data
@@ -322,6 +322,7 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             'status': ad_data.get('status', 'active'),
             'lifecycle_id': ad_data.get('lifecycle_id', ''),
             'metadata': ad_data.get('metadata', {})
+            # Note: created_at and updated_at are handled by database defaults
         }
         
         # Insert lifecycle data (upsert to avoid duplicates)
@@ -342,12 +343,14 @@ def store_ml_insights_in_supabase(supabase_client, ad_id: str, insights: Dict[st
     try:
         # Store creative intelligence data
         creative_data = {
+            'creative_id': insights.get('creative_id', f'creative_{ad_id}'),
             'ad_id': ad_id,
             'creative_type': insights.get('creative_type', 'unknown'),
             'performance_score': float(insights.get('performance_score', 0)),
             'fatigue_index': float(insights.get('fatigue_index', 0)),
             'similarity_vector': insights.get('similarity_vector', []),
             'metadata': insights.get('metadata', {})
+            # Note: created_at and updated_at are handled by database defaults
         }
         
         supabase_client.table('creative_intelligence').upsert(creative_data).execute()
