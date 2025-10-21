@@ -302,7 +302,7 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             'atc': int(ad_data.get('atc', 0)),
             'ic': int(ad_data.get('ic', 0)),
             'roas': float(ad_data.get('roas', 0)),
-            'cpa': float(ad_data.get('cpa', 0)),
+            'cpa': float(ad_data.get('cpa', 0)) if ad_data.get('cpa') is not None else 0,
             'created_at': ad_data.get('created_at', ''),
             'updated_at': ad_data.get('updated_at', '')
         }
