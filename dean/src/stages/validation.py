@@ -711,6 +711,9 @@ def run_validation_tick(
             results[ad_id] = {
                 "ad_id": ad_id,
                 "ad_name": row.get("ad_name", ""),
+                "lifecycle_id": f"lifecycle_{ad_id}",  # Generate lifecycle ID
+                "date_start": midnight.strftime("%Y-%m-%d"),
+                "date_end": now.strftime("%Y-%m-%d"),
                 "spend": spend,
                 "impressions": impressions,
                 "clicks": clicks,

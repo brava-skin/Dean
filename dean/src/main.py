@@ -270,9 +270,11 @@ def _get_supabase():
 def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any], stage: str) -> None:
     """Store performance data in Supabase for ML system."""
     if not supabase_client:
+        print("⚠️ No Supabase client available")
         return
     
     try:
+        print(f"🔍 Storing data for stage {stage}: {ad_data.get('ad_id', 'unknown')}")
         # Store in performance_metrics table
         performance_data = {
             'ad_id': ad_data.get('ad_id', ''),
@@ -1181,8 +1183,10 @@ def main() -> None:
                     # Store performance data in Supabase first
                     supabase_client = _get_supabase()
                     if supabase_client:
+                        print(f"🔍 Testing data collected: {len(overall['testing'])} items")
                         for ad_id, ad_data in overall["testing"].items():
                             if isinstance(ad_data, dict) and 'spend' in ad_data:
+                                print(f"🔍 Storing testing data for {ad_id}: {ad_data}")
                                 store_performance_data_in_supabase(supabase_client, ad_data, "testing")
                         notify("📊 Performance data stored in Supabase for ML system")
                     
