@@ -266,6 +266,22 @@ CREATE TABLE temporal_analysis (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Fatigue analysis and decay tracking
+CREATE TABLE fatigue_analysis (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    ad_id TEXT NOT NULL,
+    lifecycle_id TEXT,
+    fatigue_score DECIMAL(5,4) NOT NULL CHECK (fatigue_score >= 0 AND fatigue_score <= 1),
+    decay_rate DECIMAL(10,6),
+    half_life_days DECIMAL(8,2),
+    performance_trend TEXT CHECK (performance_trend IN ('improving', 'stable', 'declining', 'volatile')),
+    fatigue_factors JSONB,
+    recommended_actions JSONB,
+    analysis_date TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- =====================================================
 -- CREATIVE INTELLIGENCE
 -- =====================================================
@@ -562,6 +578,7 @@ ALTER TABLE account_health ENABLE ROW LEVEL SECURITY;
 ALTER TABLE daily_summaries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE feature_engineering ENABLE ROW LEVEL SECURITY;
 ALTER TABLE temporal_analysis ENABLE ROW LEVEL SECURITY;
+ALTER TABLE fatigue_analysis ENABLE ROW LEVEL SECURITY;
 ALTER TABLE creative_similarity ENABLE ROW LEVEL SECURITY;
 
 -- =====================================================
@@ -584,6 +601,7 @@ CREATE POLICY "Service role full access" ON account_health FOR ALL TO service_ro
 CREATE POLICY "Service role full access" ON daily_summaries FOR ALL TO service_role USING (true);
 CREATE POLICY "Service role full access" ON feature_engineering FOR ALL TO service_role USING (true);
 CREATE POLICY "Service role full access" ON temporal_analysis FOR ALL TO service_role USING (true);
+CREATE POLICY "Service role full access" ON fatigue_analysis FOR ALL TO service_role USING (true);
 CREATE POLICY "Service role full access" ON creative_similarity FOR ALL TO service_role USING (true);
 
 -- Authenticated users can read their own data
@@ -602,6 +620,7 @@ CREATE POLICY "Authenticated users can read" ON account_health FOR SELECT TO aut
 CREATE POLICY "Authenticated users can read" ON daily_summaries FOR SELECT TO authenticated USING (true);
 CREATE POLICY "Authenticated users can read" ON feature_engineering FOR SELECT TO authenticated USING (true);
 CREATE POLICY "Authenticated users can read" ON temporal_analysis FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Authenticated users can read" ON fatigue_analysis FOR SELECT TO authenticated USING (true);
 CREATE POLICY "Authenticated users can read" ON creative_similarity FOR SELECT TO authenticated USING (true);
 
 -- =====================================================
