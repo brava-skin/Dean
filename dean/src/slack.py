@@ -347,31 +347,45 @@ def format_run_header(status: str, time_str: str, profile: str, spend: float, pu
     
     return main_line
 
-def format_stage_line(stage: str, counts: Dict[str, int]) -> str:
+def format_stage_line(stage: str, counts: Dict[str, any]) -> str:
     """Format a single stage summary line - only show non-zero actions."""
     actions = []
     for key, value in counts.items():
-        if value > 0:  # Only show actions that happened
+        # Handle both simple integers and complex data structures
+        if isinstance(value, dict):
+            # If it's a dictionary, try to extract a count or use the first value
+            if 'count' in value:
+                count_value = value['count']
+            elif 'total' in value:
+                count_value = value['total']
+            elif len(value) > 0:
+                count_value = list(value.values())[0]
+            else:
+                count_value = 0
+        else:
+            count_value = value
+            
+        if count_value > 0:  # Only show actions that happened
             if key == "kills":
-                actions.append(f"Killed {value}")
+                actions.append(f"Killed {count_value}")
             elif key == "promotions":
-                actions.append(f"Promoted {value}")
+                actions.append(f"Promoted {count_value}")
             elif key == "launched":
-                actions.append(f"Launched {value}")
+                actions.append(f"Launched {count_value}")
             elif key == "fatigue_flags":
-                actions.append(f"Fatigue {value}")
+                actions.append(f"Fatigue {count_value}")
             elif key == "data_quality_alerts":
-                actions.append(f"Tracking issues {value}")
+                actions.append(f"Tracking issues {count_value}")
             elif key == "soft_passes":
-                actions.append(f"Soft passed {value}")
+                actions.append(f"Soft passed {count_value}")
             elif key == "scaled":
-                actions.append(f"Scaled up {value}")
+                actions.append(f"Scaled up {count_value}")
             elif key == "duped":
-                actions.append(f"Duplicated {value}")
+                actions.append(f"Duplicated {count_value}")
             elif key == "downscaled":
-                actions.append(f"Scaled down {value}")
+                actions.append(f"Scaled down {count_value}")
             elif key == "refreshed":
-                actions.append(f"Refreshed {value}")
+                actions.append(f"Refreshed {count_value}")
     
     if not actions:
         return f"{stage}: ✓"

@@ -251,6 +251,14 @@ class Store:
               );
             """)
             c.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_flags_ttl ON flags(ttl_epoch);")
+            
+            c.exec_driver_sql("""
+              CREATE TABLE IF NOT EXISTS state(
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+              );
+            """)
 
     def _migrate(self, conn, current: int, target: int) -> None:
         for v in range(current + 1, target + 1):
@@ -694,6 +702,38 @@ class Store:
             entity_type="ad", entity_id=entity_id, action="SCALE_UP",
             level="info", stage="SCALE", reason=reason, meta=m, actor=actor, dedup_key=dedup_key
         )
+
+    def get_state(self, key: str) -> Optional[Any]:
+        """Get a state value by key."""
+        try:
+            with self._begin() as conn:
+                result = conn.execute(
+                    text("SELECT value FROM state WHERE key = :key"),
+                    {"key": key}
+                ).fetchone()
+                if result:
+                    return _from_json(result[0])
+                return None
+        except Exception:
+            return None
+
+    def set_state(self, key: str, value: Any) -> None:
+        """Set a state value by key."""
+        try:
+            with self._begin() as conn:
+                conn.execute(
+                    text("""
+                        INSERT OR REPLACE INTO state (key, value, updated_at)
+                        VALUES (:key, :value, :updated_at)
+                    """),
+                    {
+                        "key": key,
+                        "value": _to_json(value),
+                        "updated_at": _epoch_now()
+                    }
+                )
+        except Exception:
+            pass
 
 
 __all__ = [
