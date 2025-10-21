@@ -2,8 +2,8 @@ name: Dean ML-Enhanced Automation
 
 on:
   schedule:
-    # Run every 6 hours for ML learning
-    - cron: '0 */6 * * *'
+    # Run every hour for optimal Meta Ads monitoring
+    - cron: '0 * * * *'
   workflow_dispatch: # Allow manual triggering
 
 jobs:
@@ -88,7 +88,7 @@ jobs:
         echo "🚀 Running Dean ML-Enhanced automation..."
         echo "   Mode: ML-Enhanced (default)"
         echo "   Fallback: Legacy system if ML unavailable"
-        echo "   Schedule: Every 6 hours for optimal learning"
+        echo "   Schedule: Every hour for optimal Meta Ads monitoring"
         echo ""
         
         # Run with ML mode (default) - will fallback to legacy if needed
