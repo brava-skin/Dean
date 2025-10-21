@@ -267,6 +267,77 @@ def _get_supabase():
     except Exception:
         return None
 
+def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any], stage: str) -> None:
+    """Store performance data in Supabase for ML system."""
+    if not supabase_client:
+        return
+    
+    try:
+        # Store in performance_metrics table
+        performance_data = {
+            'ad_id': ad_data.get('ad_id', ''),
+            'lifecycle_id': ad_data.get('lifecycle_id', ''),
+            'stage': stage,
+            'window_type': '1d',
+            'date_start': ad_data.get('date_start', ''),
+            'date_end': ad_data.get('date_end', ''),
+            'spend': float(ad_data.get('spend', 0)),
+            'impressions': int(ad_data.get('impressions', 0)),
+            'clicks': int(ad_data.get('clicks', 0)),
+            'ctr': float(ad_data.get('ctr', 0)),
+            'cpc': float(ad_data.get('cpc', 0)),
+            'cpp': float(ad_data.get('cpp', 0)),
+            'purchases': int(ad_data.get('purchases', 0)),
+            'atc': int(ad_data.get('atc', 0)),
+            'ic': int(ad_data.get('ic', 0)),
+            'roas': float(ad_data.get('roas', 0)),
+            'cpa': float(ad_data.get('cpa', 0)),
+            'created_at': ad_data.get('created_at', ''),
+            'updated_at': ad_data.get('updated_at', '')
+        }
+        
+        # Insert performance data
+        supabase_client.table('performance_metrics').insert(performance_data).execute()
+        
+        # Store in ad_lifecycle table
+        lifecycle_data = {
+            'ad_id': ad_data.get('ad_id', ''),
+            'creative_id': ad_data.get('creative_id', ''),
+            'campaign_id': ad_data.get('campaign_id', ''),
+            'adset_id': ad_data.get('adset_id', ''),
+            'stage': stage,
+            'status': ad_data.get('status', 'active'),
+            'lifecycle_id': ad_data.get('lifecycle_id', ''),
+            'metadata': ad_data.get('metadata', {})
+        }
+        
+        # Insert lifecycle data (upsert to avoid duplicates)
+        supabase_client.table('ad_lifecycle').upsert(lifecycle_data).execute()
+        
+    except Exception as e:
+        print(f"⚠️ Failed to store performance data in Supabase: {e}")
+
+def store_ml_insights_in_supabase(supabase_client, ad_id: str, insights: Dict[str, Any]) -> None:
+    """Store ML insights in Supabase."""
+    if not supabase_client:
+        return
+    
+    try:
+        # Store creative intelligence data
+        creative_data = {
+            'ad_id': ad_id,
+            'creative_type': insights.get('creative_type', 'unknown'),
+            'performance_score': float(insights.get('performance_score', 0)),
+            'fatigue_index': float(insights.get('fatigue_index', 0)),
+            'similarity_vector': insights.get('similarity_vector', []),
+            'metadata': insights.get('metadata', {})
+        }
+        
+        supabase_client.table('creative_intelligence').upsert(creative_data).execute()
+        
+    except Exception as e:
+        print(f"⚠️ Failed to store ML insights in Supabase: {e}")
+
 
 def setup_supabase_table():
     """
@@ -1090,59 +1161,61 @@ def main() -> None:
         stage_summaries = []
         
         if stage_choice in ("all", "testing"):
-            if ml_mode_enabled and ml_system:
-                # ML-enhanced testing
+            # Run standard testing first to collect data
+            overall["testing"] = run_stage(
+                run_testing_tick,
+                "TESTING",
+                client,
+                settings,
+                engine,
+                store,
+                queue_df,
+                set_supabase_status,
+                placements=["facebook", "instagram"],
+                instagram_actor_id=os.getenv("IG_ACTOR_ID"),
+            )
+            
+            # After data collection, run ML analysis if enabled
+            if ml_mode_enabled and ml_system and overall["testing"]:
                 try:
-                    # Get ML analysis for testing stage
+                    # Store performance data in Supabase first
+                    supabase_client = _get_supabase()
+                    if supabase_client:
+                        for ad_id, ad_data in overall["testing"].items():
+                            if isinstance(ad_data, dict) and 'spend' in ad_data:
+                                store_performance_data_in_supabase(supabase_client, ad_data, "testing")
+                        notify("📊 Performance data stored in Supabase for ML system")
+                    
+                    # Now run ML analysis on the stored data
                     testing_analysis = ml_system.analyze_ad_intelligence("testing_stage", "testing")
                     
-                    # Run ML-enhanced testing
-                    overall["testing"] = run_stage(
-                        run_testing_tick,
-                        "TESTING (ML-Enhanced)",
-                        client,
-                        settings,
-                        engine,
-                        store,
-                        queue_df,
-                        set_supabase_status,
-                        placements=["facebook", "instagram"],
-                        instagram_actor_id=os.getenv("IG_ACTOR_ID"),
-                    )
-                    
                     # Add ML insights to results
-                    if overall["testing"]:
-                        overall["testing"]["ml_insights"] = testing_analysis
-                        overall["testing"]["intelligence_score"] = testing_analysis.get("intelligence_score", 0)
-                        
+                    overall["testing"]["ml_insights"] = testing_analysis
+                    overall["testing"]["intelligence_score"] = testing_analysis.get("intelligence_score", 0)
+                    
+                    # Store ML insights
+                    if supabase_client and testing_analysis:
+                        for ad_id in overall["testing"].keys():
+                            if isinstance(ad_id, str):
+                                store_ml_insights_in_supabase(supabase_client, ad_id, testing_analysis)
+                                
+                    notify("🧠 ML analysis completed for testing stage")
+                    
                 except Exception as e:
-                    notify(f"⚠️ ML testing failed, falling back to standard: {e}")
-                    overall["testing"] = run_stage(
-                        run_testing_tick,
-                        "TESTING",
-                        client,
-                        settings,
-                        engine,
-                        store,
-                        queue_df,
-                        set_supabase_status,
-                        placements=["facebook", "instagram"],
-                        instagram_actor_id=os.getenv("IG_ACTOR_ID"),
-                    )
-            else:
-                # Standard testing
-                overall["testing"] = run_stage(
-                    run_testing_tick,
-                    "TESTING",
-                    client,
-                    settings,
-                    engine,
-                    store,
-                    queue_df,
-                    set_supabase_status,
-                    placements=["facebook", "instagram"],
-                    instagram_actor_id=os.getenv("IG_ACTOR_ID"),
-                )
+                    notify(f"⚠️ ML analysis failed: {e}")
+            # Store performance data in Supabase for ML system (standard path)
+            if overall["testing"] and not (ml_mode_enabled and ml_system):
+                supabase_client = _get_supabase()
+                if supabase_client:
+                    try:
+                        # Store testing stage performance data
+                        for ad_id, ad_data in overall["testing"].items():
+                            if isinstance(ad_data, dict) and 'spend' in ad_data:
+                                store_performance_data_in_supabase(supabase_client, ad_data, "testing")
+                                
+                        notify("📊 Performance data stored in Supabase for ML system")
+                    except Exception as e:
+                        notify(f"⚠️ Failed to store data in Supabase: {e}")
             
             if overall["testing"]:
                 stage_summaries.append({
@@ -1155,6 +1228,17 @@ def main() -> None:
                 run_validation_tick, "VALIDATION", client, settings, engine, store
             )
             if overall["validation"]:
+                # Store validation stage performance data in Supabase
+                supabase_client = _get_supabase()
+                if supabase_client:
+                    try:
+                        for ad_id, ad_data in overall["validation"].items():
+                            if isinstance(ad_data, dict) and 'spend' in ad_data:
+                                store_performance_data_in_supabase(supabase_client, ad_data, "validation")
+                        notify("📊 Validation data stored in Supabase for ML system")
+                    except Exception as e:
+                        notify(f"⚠️ Failed to store validation data in Supabase: {e}")
+                        
                 stage_summaries.append({
                     "stage": "VALID", 
                     "counts": overall["validation"]
@@ -1163,6 +1247,17 @@ def main() -> None:
         if stage_choice in ("all", "scaling"):
             overall["scaling"] = run_stage(run_scaling_tick, "SCALING", client, settings, store)
             if overall["scaling"]:
+                # Store scaling stage performance data in Supabase
+                supabase_client = _get_supabase()
+                if supabase_client:
+                    try:
+                        for ad_id, ad_data in overall["scaling"].items():
+                            if isinstance(ad_data, dict) and 'spend' in ad_data:
+                                store_performance_data_in_supabase(supabase_client, ad_data, "scaling")
+                        notify("📊 Scaling data stored in Supabase for ML system")
+                    except Exception as e:
+                        notify(f"⚠️ Failed to store scaling data in Supabase: {e}")
+                        
                 stage_summaries.append({
                     "stage": "SCALE",
                     "counts": overall["scaling"]
