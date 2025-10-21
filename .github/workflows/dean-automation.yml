@@ -92,7 +92,7 @@ jobs:
         echo ""
         
         # Run with ML mode (default) - will fallback to legacy if needed
-        python src/main.py --profile production --background
+        python src/main.py --profile production
 
     - name: Upload logs and ML data
       if: always()
