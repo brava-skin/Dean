@@ -275,6 +275,15 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
     
     try:
         print(f"🔍 Storing data for stage {stage}: {ad_data.get('ad_id', 'unknown')}")
+        
+        # Test Supabase connection first
+        try:
+            test_result = supabase_client.table('performance_metrics').select('*').limit(1).execute()
+            print(f"🔍 Supabase connection test: {len(test_result.data)} rows found")
+        except Exception as e:
+            print(f"❌ Supabase connection failed: {e}")
+            return
+        
         # Store in performance_metrics table
         performance_data = {
             'ad_id': ad_data.get('ad_id', ''),
@@ -299,7 +308,9 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         }
         
         # Insert performance data
-        supabase_client.table('performance_metrics').insert(performance_data).execute()
+        print(f"🔍 Inserting performance data: {performance_data}")
+        result = supabase_client.table('performance_metrics').insert(performance_data).execute()
+        print(f"✅ Performance data inserted: {result}")
         
         # Store in ad_lifecycle table
         lifecycle_data = {
@@ -314,10 +325,14 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         }
         
         # Insert lifecycle data (upsert to avoid duplicates)
-        supabase_client.table('ad_lifecycle').upsert(lifecycle_data).execute()
+        print(f"🔍 Inserting lifecycle data: {lifecycle_data}")
+        result = supabase_client.table('ad_lifecycle').upsert(lifecycle_data).execute()
+        print(f"✅ Lifecycle data inserted: {result}")
         
     except Exception as e:
-        print(f"⚠️ Failed to store performance data in Supabase: {e}")
+        print(f"❌ Failed to store performance data in Supabase: {e}")
+        import traceback
+        traceback.print_exc()
 
 def store_ml_insights_in_supabase(supabase_client, ad_id: str, insights: Dict[str, Any]) -> None:
     """Store ML insights in Supabase."""
