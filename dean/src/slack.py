@@ -364,6 +364,12 @@ def format_stage_line(stage: str, counts: Dict[str, any]) -> str:
                 count_value = 0
         else:
             count_value = value
+        
+        # Ensure count_value is a number for comparison
+        try:
+            count_value = float(count_value) if count_value is not None else 0
+        except (ValueError, TypeError):
+            count_value = 0
             
         if count_value > 0:  # Only show actions that happened
             if key == "kills":
