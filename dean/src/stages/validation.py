@@ -658,8 +658,7 @@ def run_validation_tick(
             rows = client.get_ad_insights(
                 level="ad",
                 filtering=[
-                    {"field": "adset.id", "operator": "IN", "value": [validation_adset_id]},
-                    {"field": "ad.status", "operator": "IN", "value": ["ACTIVE"]}
+                    {"field": "adset.id", "operator": "IN", "value": [validation_adset_id]}
                 ],
                 fields=["ad_id", "ad_name", "spend", "actions", "impressions", "clicks", "ctr", "cpc", "cpp"],
                 time_range={
