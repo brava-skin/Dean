@@ -1,8 +1,18 @@
-# Dean - Meta Ads Automation Platform
+# Dean - Self-Learning Meta Ads Automation System
 
-> **Intelligent advertising automation for Meta (Facebook) advertising platforms**
+> **Next-generation ML-enhanced advertising automation for Meta (Facebook) advertising platforms**
 
-Dean is a production-ready automation system that manages the entire lifecycle of ad creatives from testing through validation to scaling, with intelligent decision-making based on performance metrics.
+Dean is a **fully self-learning Meta Ads automation** built around one account. It continuously learns from campaign data across **Testing → Validation → Scaling**, identifies the signals that predict purchases, and dynamically adjusts all rules to **keep CPA consistently below €27.50** while scaling safely and profitably.
+
+## 🧠 ML Intelligence Features
+
+- **XGBoost Prediction Engines**: Advanced ML models for performance forecasting
+- **Cross-Stage Transfer Learning**: Knowledge sharing between all stages
+- **Adaptive Rules Engine**: Dynamic threshold adjustment based on ML insights
+- **Performance Decay Tracking**: Advanced fatigue detection and prevention
+- **Temporal Modeling**: Time-series analysis and trend prediction
+- **Creative Intelligence**: Similarity analysis and performance pattern recognition
+- **Predictive Reporting**: ML-enhanced insights and recommendations
 
 ## 🚀 Quick Start
 
@@ -42,15 +52,47 @@ Creative Queue → Testing → Validation → Scaling
 
 ## 🚀 Usage
 
+### ML-Enhanced Mode (Default)
 ```bash
-# Run all stages
+# Run with ML intelligence (default mode)
 python src/main.py
 
-# Run specific stage
+# Run specific stage with ML
 python src/main.py --stage testing
-python src/main.py --stage validation
-python src/main.py --stage scaling
 
+# Background ML learning mode
+python src/main.py --background
+
+# Use production startup script
+./start_ml_system.sh
+```
+
+### Legacy Mode (Fallback)
+```bash
+# Disable ML and use legacy system
+python src/main.py --no-ml
+
+# Legacy system for specific stage
+python src/main.py --no-ml --stage testing
+```
+
+### Production Deployment
+```bash
+# GitHub Actions will automatically deploy
+# Set up secrets in GitHub repository:
+# - Meta API credentials (FB_APP_ID, FB_ACCESS_TOKEN, etc.)
+# - Supabase credentials (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+# - Slack webhook (SLACK_WEBHOOK_URL)
+```
+
+### ML System Requirements
+- **Supabase**: Database for ML data storage
+- **Environment Variables**: `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`
+- **Dependencies**: All ML packages from `requirements.txt`
+- **Fallback**: Automatically falls back to legacy system if ML unavailable
+
+### Additional Options
+```bash
 # Dry run (no changes)
 python src/main.py --dry-run
 

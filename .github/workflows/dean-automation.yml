@@ -1,15 +1,15 @@
-name: Dean Automation
+name: Dean ML-Enhanced Automation
 
 on:
   schedule:
-    # Run every hour
-    - cron: '0 * * * *'
+    # Run every 6 hours for ML learning
+    - cron: '0 */6 * * *'
   workflow_dispatch: # Allow manual triggering
 
 jobs:
-  dean-automation:
+  dean-ml-automation:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60  # Increased for ML processing
     
     steps:
     - name: Checkout repository
@@ -26,7 +26,30 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Run Dean Automation
+    - name: Test ML system
+      run: |
+        cd dean
+        python -c "
+        import xgboost as xgb
+        import sklearn
+        import pandas as pd
+        import numpy as np
+        print('✅ ML packages ready')
+        "
+
+    - name: Setup ML system
+      run: |
+        cd dean
+        echo "🧠 ML system initialization..."
+        python -c "
+        try:
+            from src.ml_intelligence import create_ml_system
+            print('✅ ML Intelligence ready')
+        except Exception as e:
+            print(f'⚠️ ML Intelligence: {e}')
+        "
+
+    - name: Run Dean ML-Enhanced Automation
       env:
         # Meta API Credentials
         FB_APP_ID: ${{ secrets.FB_APP_ID }}
@@ -45,7 +68,7 @@ jobs:
         # Slack Notifications
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         
-        # Optional: Supabase
+        # Supabase (Required for ML mode)
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         SUPABASE_TABLE: ${{ secrets.SUPABASE_TABLE }}
@@ -55,15 +78,54 @@ jobs:
         COGS_PER_PURCHASE: ${{ secrets.COGS_PER_PURCHASE }}
         USD_EUR_RATE: ${{ secrets.USD_EUR_RATE }}
         
+        # ML System Configuration
+        ML_MODE: "true"
+        ML_LEARNING_RATE: "0.1"
+        ML_CONFIDENCE_THRESHOLD: "0.7"
+        
       run: |
         cd dean
-        echo "🔄 Running Dean automation..."
-        python src/main.py --profile production
+        echo "🚀 Running Dean ML-Enhanced automation..."
+        echo "   Mode: ML-Enhanced (default)"
+        echo "   Fallback: Legacy system if ML unavailable"
+        echo "   Schedule: Every 6 hours for optimal learning"
+        echo ""
+        
+        # Run with ML mode (default) - will fallback to legacy if needed
+        python src/main.py --profile production --background
 
-    - name: Upload logs
+    - name: Upload logs and ML data
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: dean-logs-${{ github.run_number }}
-        path: dean/data/
-        retention-days: 7
+        name: dean-ml-logs-${{ github.run_number }}
+        path: |
+          dean/data/
+          dean/logs/
+        retention-days: 14
+
+    - name: ML System Health Check
+      if: always()
+      run: |
+        cd dean
+        echo "🏥 ML System Health Check:"
+        echo "   - Checking ML system status..."
+        python -c "
+        try:
+            import xgboost as xgb
+            print('   ✅ XGBoost: Ready')
+        except:
+            print('   ⚠️ XGBoost: Not available')
+        
+        try:
+            import sklearn
+            print('   ✅ Scikit-learn: Ready')
+        except:
+            print('   ⚠️ Scikit-learn: Not available')
+        
+        try:
+            import pandas as pd
+            print('   ✅ Pandas: Ready')
+        except:
+            print('   ⚠️ Pandas: Not available')
+        "
