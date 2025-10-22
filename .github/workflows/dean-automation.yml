@@ -2,9 +2,9 @@ name: Dean ML-Enhanced Automation
 
 on:
   schedule:
-    # Run every 3 hours to stay within GitHub Actions private repo limits (500 min/month)
-    # Alternative: Make repo public for unlimited free minutes
-    - cron: '0 */3 * * *'
+    # Run every 15 minutes for optimal Meta Ads monitoring
+    # Public repo = unlimited free GitHub Actions minutes
+    - cron: '0,15,30,45 * * * *'
   workflow_dispatch: # Allow manual triggering
 
 jobs:
@@ -89,8 +89,8 @@ jobs:
         echo "🚀 Running Dean ML-Enhanced automation..."
         echo "   Mode: ML-Enhanced (default)"
         echo "   Fallback: Legacy system if ML unavailable"
-        echo "   Schedule: Every 3 hours (private repo limits)"
-        echo "   Note: Make repo public for more frequent runs"
+        echo "   Schedule: Every 15 minutes (96 checks/day)"
+        echo "   Cost: FREE (public repo = unlimited minutes)"
         echo ""
         
         # Run with ML mode (default) - will fallback to legacy if needed
