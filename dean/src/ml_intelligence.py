@@ -1021,6 +1021,7 @@ class MLIntelligenceSystem:
         """Initialize all ML models with intelligent caching."""
         try:
             self.logger.info("Initializing ML models...")
+            self.logger.info(f"🔧 [ML DEBUG] initialize_models called with force_retrain: {force_retrain}")
             
             # Train core prediction models
             models_to_train = [
@@ -1034,6 +1035,9 @@ class MLIntelligenceSystem:
                 ('purchase_probability', 'validation', 'purchases'),
                 ('purchase_probability', 'scaling', 'purchases')
             ]
+            
+            self.logger.info(f"🔧 [ML DEBUG] Models to train: {len(models_to_train)}")
+            self.logger.info(f"🔧 [ML DEBUG] Model list: {models_to_train}")
             
             success_count = 0
             cached_count = 0
