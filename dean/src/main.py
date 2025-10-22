@@ -1613,22 +1613,38 @@ def main() -> None:
             training_success = perf_success or roas_success or purchase_success
             
             if training_success:
-                notify("🧠 ML models trained successfully")
+                # Get learning summary
+                try:
+                    from ml_status import get_ml_learning_summary
+                    summary = get_ml_learning_summary(supabase_client)
+                    if summary["recent_training"]:
+                        training_info = ", ".join([f"{t['type']}({t['stage']})" for t in summary["recent_training"]])
+                        notify(f"🧠 ML Learning: Trained {training_info} | Models: {summary['active_models']} | Data: {summary['data_points_24h']}")
+                    else:
+                        notify("🧠 ML models trained successfully")
+                except:
+                    notify("🧠 ML models trained successfully")
             else:
                 notify("⚠️ ML model training failed")
         except Exception as e:
             notify(f"❌ ML training error: {e}")
 
-    # ML Status Report (simplified)
+    # ML Learning Report (enhanced diagnostics)
     if ml_mode_enabled and supabase_client:
         try:
-            from ml_status import send_ml_status_report
-            send_ml_status_report(supabase_client, notify)
+            from ml_status import send_ml_learning_report
+            send_ml_learning_report(supabase_client, notify)
         except Exception as e:
             notify(f"❌ ML status error: {e}")
 
     # Console summary (logs only, not Slack)
+    from datetime import datetime
+    import pytz
+    amsterdam_tz = pytz.timezone('Europe/Amsterdam')
+    amsterdam_time = datetime.now(amsterdam_tz).strftime('%Y-%m-%d %H:%M:%S %Z')
+    
     print("---- RUN SUMMARY ----")
+    print(f"Time: {amsterdam_time}")
     print(
         json.dumps(
             {
