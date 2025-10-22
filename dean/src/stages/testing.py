@@ -473,6 +473,7 @@ def run_testing_tick(
     *,
     placements: Optional[List[str]] = None,           # respected if provided
     instagram_actor_id: Optional[str] = None,         # legacy support; we now prefer instagram_user_id
+    ml_pipeline: Optional[Any] = None,                # NEW: ML pipeline for intelligent decisions
 ) -> Dict[str, Any]:
     summary = {"kills": 0, "promotions": 0, "launched": 0, "fatigue_flags": 0, "data_quality_alerts": 0}
     try:
@@ -644,10 +645,30 @@ def run_testing_tick(
             sample_count=sample_count,
         )
         bayes_kill = bayes_p >= kill_prob
-        try:
-            kill, reason_engine = engine.should_kill_testing(r)
-        except Exception:
-            kill, reason_engine = False, ""
+        
+        # Use ML pipeline if available (NEW)
+        if ml_pipeline:
+            try:
+                ml_result = ml_pipeline.process_ad_decision(
+                    ad_id=ad_id,
+                    stage='testing',
+                    performance_data=r,
+                    decision_type='kill'
+                )
+                kill = (ml_result.decision == 'kill')
+                reason_engine = ml_result.reasoning
+                # Log ML influence
+                if ml_result.ml_influence > 0.7:
+                    notify(f"🤖 ML decision for {ad_id}: {ml_result.decision} (confidence: {ml_result.confidence:.1%})")
+            except Exception as e:
+                notify(f"⚠️ ML pipeline error for {ad_id}, falling back to rules: {e}")
+                kill, reason_engine = engine.should_kill_testing(r)
+        else:
+            # Fallback to traditional rules
+            try:
+                kill, reason_engine = engine.should_kill_testing(r)
+            except Exception:
+                kill, reason_engine = False, ""
 
         # tripwire kill
         if spend_life >= lifetime_spend_no_purchase_eur and purch_life == 0:
@@ -741,10 +762,29 @@ def run_testing_tick(
             _stable_pass(store, ad_id, "kill_test", False, consec_required)
 
         # ---------------- Promotion with actual launch into VALID ----------------
-        try:
-            adv, adv_reason = engine.should_advance_from_testing(r)
-        except Exception:
-            adv, adv_reason = False, ""
+        # Use ML pipeline for promotion decisions (NEW)
+        if ml_pipeline:
+            try:
+                ml_result = ml_pipeline.process_ad_decision(
+                    ad_id=ad_id,
+                    stage='testing',
+                    performance_data=r,
+                    decision_type='promote'
+                )
+                adv = (ml_result.decision == 'promote')
+                adv_reason = ml_result.reasoning
+                # Log ML influence
+                if ml_result.ml_influence > 0.7 and adv:
+                    notify(f"🚀 ML recommends promotion for {ad_id}: {adv_reason} (confidence: {ml_result.confidence:.1%})")
+            except Exception as e:
+                notify(f"⚠️ ML pipeline error for {ad_id}, falling back to rules: {e}")
+                adv, adv_reason = engine.should_advance_from_testing(r)
+        else:
+            # Fallback to traditional rules
+            try:
+                adv, adv_reason = engine.should_advance_from_testing(r)
+            except Exception:
+                adv, adv_reason = False, ""
 
         if adv and _stable_pass(store, ad_id, "adv_test", True, consec_required):
             label = name.replace("[TEST]", "").strip() or f"Ad_{ad_id}"

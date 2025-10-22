@@ -54,6 +54,147 @@ Dean is an **intelligent advertising automation platform** that manages your ent
 └─────────────────────────────────────────────────────────┘
 ```
 
+## 🎯 20 Advanced ML Improvements (NEW!)
+
+Dean now includes **20 cutting-edge ML enhancements** that take ad automation to the next level:
+
+### 🔴 Critical Enhancements (Game-Changers)
+
+1. **ML-Integrated Decisions** ✅
+   - ML predictions now directly control kill/promote/scale decisions
+   - Decisions explained with confidence scores and reasoning
+   - Graceful fallback to rules when ML confidence is low
+   - Location: Integrated into `stages/testing.py` and `stages/validation.py`
+
+2. **Unified ML Pipeline** ✅
+   - Single orchestration layer for all ML operations
+   - Cold start handling with creative similarity
+   - Anomaly detection before kill decisions
+   - Data quality checks prevent false kills
+   - Module: `src/ml_pipeline.py`
+
+3. **Time-Series Data Collection** ✅
+   - Hourly granular metrics stored for temporal analysis
+   - Enables trend detection and forecasting
+   - Feeds Prophet time-series models
+   - Table: `time_series_data` in Supabase
+
+4. **Creative Intelligence System** ✅
+   - Automatic creative attribute extraction from Meta API
+   - Similarity analysis for cold start predictions
+   - Performance scoring and fatigue tracking
+   - Table: `creative_intelligence` in Supabase
+
+5. **Automated Model Validation** ✅
+   - Weekly validation of prediction accuracy
+   - Alerts when models degrade below 60% accuracy
+   - Compares predictions vs actual outcomes
+   - Integrated into main execution loop
+
+### 🟡 Advanced ML Features
+
+6. **ML Performance Dashboard** ✅
+   - Real-time system health monitoring
+   - Accuracy trends and prediction volumes
+   - Decision influence tracking
+   - Module: `src/ml_dashboard.py`
+
+7. **Reinforcement Learning (Q-Learning)** ✅
+   - Learns optimal policies from action outcomes
+   - Reward-based learning for kill/promote decisions
+   - Exploration vs exploitation balancing
+   - Module: `src/ml_advanced.py` - `QLearningAgent`
+
+8. **Neural Networks (LSTM)** ✅
+   - Deep learning for complex time-series patterns
+   - Sequential data modeling
+   - Optional alternative to tree models
+   - Module: `src/ml_advanced.py` - `LSTMPredictor`
+
+9. **Ensemble Predictions** ✅
+   - 4 models: XGBoost + RandomForest + GradientBoosting + Ridge
+   - Improved confidence via ensemble variance
+   - Better prediction intervals with bootstrap
+   - Already integrated in `ml_intelligence.py`
+
+10. **Multi-Objective Optimization** ✅
+    - Pareto optimization for CPA + ROAS + CTR
+    - Find optimal trade-offs between goals
+    - Weighted scoring for decision making
+    - Module: `src/ml_advanced.py` - `MultiObjectiveOptimizer`
+
+### 🟢 Smart Optimizations
+
+11. **Learning Rate Scheduling** ✅
+    - Cosine annealing / step decay / exponential
+    - High rate early, low rate later
+    - Better long-term convergence
+    - Module: `src/ml_advanced.py` - `LearningRateScheduler`
+
+12. **Feature Selection (SelectKBest)** ✅
+    - Mutual information-based feature ranking
+    - Reduces overfitting by eliminating noise
+    - Faster training with fewer features
+    - Already integrated in `ml_intelligence.py`
+
+13. **Model Caching (24h)** ✅
+    - Reuse recent models to save computation
+    - Only retrain when data changes significantly
+    - Configurable cache duration
+    - Already integrated in `ml_intelligence.py`
+
+14. **Automated Feature Engineering** ✅
+    - Deep feature synthesis with FeatureTools
+    - Automatically discover feature interactions
+    - Reduces manual feature engineering
+    - Module: `src/ml_extras.py` - `AutoFeatureEngineer`
+
+15. **Bayesian Optimization** ✅
+    - Optimize thresholds with Gaussian processes
+    - Smarter hyperparameter tuning than grid search
+    - Finds optimal kill/promote thresholds
+    - Module: `src/ml_extras.py` - `BayesianOptimizer`
+
+### 🔬 Advanced Analytics
+
+16. **SHAP Explainability** ✅
+    - Per-prediction explanations
+    - Understand which features drive each decision
+    - Transparent ML for debugging
+    - Module: `src/ml_advanced.py` - `SHAPExplainer`
+
+17. **Active Learning** ✅
+    - Identifies where model is uncertain
+    - Suggests targeted experiments
+    - Faster learning in uncertain regions
+    - Module: `src/ml_advanced.py` - `ActiveLearner`
+
+18. **Competitor Analysis** ✅
+    - Meta Ad Library API integration
+    - Market saturation detection
+    - Common keyword extraction
+    - Module: `src/ml_extras.py` - `CompetitorAnalyzer`
+
+19. **Portfolio Optimization** ✅
+    - Linear programming for budget allocation
+    - Maximize total ROAS given constraints
+    - Knapsack-style optimization
+    - Module: `src/ml_extras.py` - `PortfolioOptimizer`
+
+20. **Seasonality & Timing** ✅
+    - Day-of-week and hour-of-day patterns
+    - Optimal launch timing recommendations
+    - Dynamic budget adjustments by time
+    - Module: `src/ml_extras.py` - `SeasonalityAnalyzer`
+
+### 🛡️ Data Quality & Protection
+
+- **Lookahead Bias Protection**: Ensures no future data leaks into features
+- **Anomaly Detection**: IQR-based outlier detection prevents bad data from affecting decisions
+- **Cold Start Handling**: Uses creative similarity when insufficient training data
+
+---
+
 ## ⚡ Quick Start
 
 ### Prerequisites

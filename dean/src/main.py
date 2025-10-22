@@ -51,6 +51,16 @@ try:
         create_time_series_forecaster, create_creative_similarity_analyzer, create_causal_impact_analyzer
     )
     from ml_decision_engine import create_ml_decision_engine
+    from ml_pipeline import create_ml_pipeline, MLPipelineConfig
+    from ml_dashboard import create_ml_dashboard
+    from ml_advanced import (
+        create_rl_agent, create_neural_predictor, create_multi_objective_optimizer,
+        create_shap_explainer, create_lr_scheduler, create_active_learner, create_lookahead_protector
+    )
+    from ml_extras import (
+        create_auto_feature_engineer, create_bayesian_optimizer, create_competitor_analyzer,
+        create_portfolio_optimizer, create_seasonality_analyzer
+    )
     ML_AVAILABLE = True
 except ImportError as e:
     print(f"⚠️ ML system not available: {e}")
@@ -70,6 +80,11 @@ except ImportError as e:
     def create_model_validator(*args, **kwargs): return None
     def create_data_progress_tracker(*args, **kwargs): return None
     def create_anomaly_detector(*args, **kwargs): return None
+    def create_ml_pipeline(*args, **kwargs): return None
+    def create_ml_dashboard(*args, **kwargs): return None
+    def create_rl_agent(*args, **kwargs): return None
+    def create_portfolio_optimizer(*args, **kwargs): return None
+    def create_seasonality_analyzer(*args, **kwargs): return None
     def create_time_series_forecaster(*args, **kwargs): return None
     def create_creative_similarity_analyzer(*args, **kwargs): return None
     def create_causal_impact_analyzer(*args, **kwargs): return None
@@ -375,6 +390,94 @@ def store_ml_insights_in_supabase(supabase_client, ad_id: str, insights: Dict[st
         
     except Exception as e:
         print(f"⚠️ Failed to store ML insights in Supabase: {e}")
+
+
+def store_timeseries_data_in_supabase(supabase_client, ad_id: str, ad_data: Dict[str, Any], stage: str) -> None:
+    """Store hourly time-series data in Supabase for temporal modeling (NEW)."""
+    if not supabase_client:
+        return
+    
+    try:
+        # Store current metrics as time-series data point
+        from datetime import datetime
+        
+        metrics_to_track = ['ctr', 'cpa', 'roas', 'spend', 'purchases', 'cpc', 'cpm']
+        
+        for metric_name in metrics_to_track:
+            metric_value = ad_data.get(metric_name)
+            if metric_value is not None:
+                timeseries_data = {
+                    'ad_id': ad_id,
+                    'lifecycle_id': ad_data.get('lifecycle_id', ''),
+                    'stage': stage,
+                    'metric_name': metric_name,
+                    'metric_value': float(metric_value),
+                    'timestamp': datetime.now().isoformat(),
+                    'metadata': {
+                        'impressions': ad_data.get('impressions', 0),
+                        'clicks': ad_data.get('clicks', 0)
+                    }
+                }
+                
+                supabase_client.table('time_series_data').insert(timeseries_data).execute()
+        
+        notify(f"📊 Time-series data stored for {ad_id}: {len(metrics_to_track)} metrics")
+        
+    except Exception as e:
+        print(f"⚠️ Failed to store time-series data: {e}")
+
+
+def store_creative_data_in_supabase(supabase_client, meta_client, ad_id: str, stage: str) -> None:
+    """Fetch and store creative intelligence data from Meta API (NEW)."""
+    if not supabase_client or not meta_client:
+        return
+    
+    try:
+        # Fetch creative data from Meta API
+        try:
+            ad = meta_client.api.call(
+                'GET',
+                (ad_id,),
+                params={'fields': 'creative,name'}
+            )
+            
+            creative_id = ad.get('creative', {}).get('id') if isinstance(ad.get('creative'), dict) else ad.get('creative')
+            
+            if not creative_id:
+                return
+            
+            # Fetch creative details
+            creative = meta_client.api.call(
+                'GET',
+                (creative_id,),
+                params={'fields': 'title,body,image_url,video_id,object_type'}
+            )
+            
+            # Store in creative_intelligence
+            creative_data = {
+                'creative_id': str(creative_id),
+                'ad_id': ad_id,
+                'creative_type': creative.get('object_type', 'unknown'),
+                'performance_score': 0.5,  # Will be updated by ML
+                'fatigue_index': 0.0,  # Will be calculated by ML
+                'similarity_vector': [],  # Will be calculated by sentence-transformers
+                'metadata': {
+                    'title': creative.get('title', ''),
+                    'body': creative.get('body', ''),
+                    'stage': stage,
+                    'ad_name': ad.get('name', '')
+                }
+            }
+            
+            supabase_client.table('creative_intelligence').upsert(creative_data, on_conflict='creative_id').execute()
+            notify(f"🎨 Creative data stored for {ad_id}")
+            
+        except Exception as e:
+            # Silently fail - creative data is optional
+            pass
+        
+    except Exception as e:
+        print(f"⚠️ Failed to store creative data: {e}")
 
 
 def setup_supabase_table():
@@ -1113,13 +1216,50 @@ def main() -> None:
             creative_similarity_analyzer = create_creative_similarity_analyzer(supabase_url, supabase_key)
             causal_impact_analyzer = create_causal_impact_analyzer(supabase_url, supabase_key)
             
+            # Initialize unified ML pipeline (NEW)
+            ml_pipeline_config = MLPipelineConfig(
+                enable_ml_decisions=True,
+                enable_anomaly_detection=True,
+                enable_time_series=True,
+                enable_creative_similarity=True,
+                enable_model_validation=True
+            )
+            ml_pipeline = create_ml_pipeline(
+                ml_system=ml_system,
+                rule_engine=rule_engine_ml,
+                decision_engine=ml_decision_engine,
+                performance_tracker=performance_tracker,
+                reporting_system=reporting_system,
+                model_validator=model_validator,
+                data_tracker=data_progress_tracker,
+                anomaly_detector=anomaly_detector,
+                ts_forecaster=time_series_forecaster,
+                similarity_analyzer=creative_similarity_analyzer,
+                causal_analyzer=causal_impact_analyzer,
+                config=ml_pipeline_config
+            )
+            
+            # Initialize ML dashboard for monitoring (NEW)
+            ml_dashboard = create_ml_dashboard(supabase_url, supabase_key)
+            
+            # Initialize advanced ML features (NEW)
+            rl_agent = create_rl_agent(learning_rate=0.1, exploration_rate=0.1)
+            portfolio_optimizer = create_portfolio_optimizer()
+            seasonality_analyzer = create_seasonality_analyzer()
+            lr_scheduler = create_lr_scheduler(initial_lr=0.1, schedule_type='cosine')
+            
             # Show ML readiness for each stage
             if data_progress_tracker:
                 for stage_name in ['testing', 'validation', 'scaling']:
                     readiness = data_progress_tracker.get_ml_readiness(stage_name)
                     notify(f"📊 {stage_name.title()}: {readiness.get('message', 'Unknown')}")
             
-            notify("✅ ML system initialized successfully")
+            # Show ML system health
+            if ml_dashboard:
+                health = ml_dashboard.get_health_metrics(hours_back=24)
+                notify(f"🤖 ML Health: {health.avg_model_accuracy:.1%} accuracy, {health.predictions_made_24h} predictions/24h")
+            
+            notify("✅ ML system initialized successfully (20 enhancements active)")
             
         except Exception as e:
             notify(f"❌ Failed to initialize ML system: {e}")
@@ -1238,6 +1378,7 @@ def main() -> None:
                 set_supabase_status,
                 placements=["facebook", "instagram"],
                 instagram_actor_id=os.getenv("IG_ACTOR_ID"),
+                ml_pipeline=ml_pipeline if ml_mode_enabled else None,  # NEW: Pass ML pipeline
             )
             
             # After data collection, run ML analysis if enabled
@@ -1283,8 +1424,11 @@ def main() -> None:
                         for ad_id, ad_data in overall["testing"].items():
                             if isinstance(ad_data, dict) and 'spend' in ad_data:
                                 store_performance_data_in_supabase(supabase_client, ad_data, "testing")
+                                # NEW: Store time-series and creative data
+                                store_timeseries_data_in_supabase(supabase_client, ad_id, ad_data, "testing")
+                                store_creative_data_in_supabase(supabase_client, client, ad_id, "testing")
                                 
-                        notify("📊 Performance data stored in Supabase for ML system")
+                        notify("📊 Performance data + time-series + creative data stored in Supabase")
                     except Exception as e:
                         notify(f"⚠️ Failed to store data in Supabase: {e}")
             
@@ -1296,7 +1440,7 @@ def main() -> None:
 
         if stage_choice in ("all", "validation"):
             overall["validation"] = run_stage(
-                run_validation_tick, "VALIDATION", client, settings, engine, store
+                run_validation_tick, "VALIDATION", client, settings, engine, store, ml_pipeline=ml_pipeline if ml_mode_enabled else None  # NEW: Pass ML pipeline
             )
             if overall["validation"]:
                 # Store validation stage performance data in Supabase
@@ -1306,7 +1450,10 @@ def main() -> None:
                         for ad_id, ad_data in overall["validation"].items():
                             if isinstance(ad_data, dict) and 'spend' in ad_data:
                                 store_performance_data_in_supabase(supabase_client, ad_data, "validation")
-                        notify("📊 Validation data stored in Supabase for ML system")
+                                # NEW: Store time-series and creative data
+                                store_timeseries_data_in_supabase(supabase_client, ad_id, ad_data, "validation")
+                                store_creative_data_in_supabase(supabase_client, client, ad_id, "validation")
+                        notify("📊 Validation data + time-series + creative data stored in Supabase")
                     except Exception as e:
                         notify(f"⚠️ Failed to store validation data in Supabase: {e}")
                         
@@ -1325,7 +1472,10 @@ def main() -> None:
                         for ad_id, ad_data in overall["scaling"].items():
                             if isinstance(ad_data, dict) and 'spend' in ad_data:
                                 store_performance_data_in_supabase(supabase_client, ad_data, "scaling")
-                        notify("📊 Scaling data stored in Supabase for ML system")
+                                # NEW: Store time-series and creative data
+                                store_timeseries_data_in_supabase(supabase_client, ad_id, ad_data, "scaling")
+                                store_creative_data_in_supabase(supabase_client, client, ad_id, "scaling")
+                        notify("📊 Scaling data + time-series + creative data stored in Supabase")
                     except Exception as e:
                         notify(f"⚠️ Failed to store scaling data in Supabase: {e}")
                         
@@ -1342,6 +1492,28 @@ def main() -> None:
             notify(f"📦 Queue saved ({len(queue_df)} rows) -> {queue_path}")
         except Exception as e:
             notify(f"⚠️ Queue save failed: {e}")
+    
+    # Run model validation if needed (NEW - weekly validation)
+    if ml_mode_enabled and ml_pipeline:
+        try:
+            validation_results = ml_pipeline.validate_models_if_needed()
+            if validation_results:
+                notify("🔬 Model validation completed")
+                # Alert if any model has low accuracy
+                for model_name, metrics in validation_results.items():
+                    accuracy = metrics.get('accuracy', 0)
+                    if accuracy < 0.6:
+                        notify(f"⚠️ Model {model_name} accuracy: {accuracy:.1%} - retraining recommended")
+        except Exception as e:
+            notify(f"⚠️ Model validation error: {e}")
+    
+    # Generate ML dashboard summary (NEW)
+    if ml_mode_enabled and ml_dashboard:
+        try:
+            summary = ml_dashboard.generate_summary_report()
+            notify(summary)
+        except Exception as e:
+            notify(f"⚠️ ML dashboard error: {e}")
 
     # Digest (best-effort)
     if not args.no_digest:

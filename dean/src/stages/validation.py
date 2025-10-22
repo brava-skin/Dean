@@ -295,7 +295,8 @@ def _find_existing_scaling_adset(meta: Any, scaling_campaign_id: str, creative_l
 
 # ---------------------------------------------------------------------------
 
-def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: Any) -> Dict[str, int]:
+def run_validation_tick_legacy(meta: Any, settings: Dict[str, Any], engine: Any, store: Any, ml_pipeline: Optional[Any] = None) -> Dict[str, int]:
+    """Legacy validation tick function - kept for backward compatibility."""
     summary = {"kills": 0, "promotions": 0, "soft_passes": 0}
     try:
         if hasattr(store, "tick_seen") and store.tick_seen(now_minute_key("validation")):
@@ -410,10 +411,28 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
             r["purchase_days"] = pdays
 
         # ---- KILL checks ----
-        try:
-            kill_engine, reason_engine = engine.should_kill_validation(r)
-        except Exception:
-            kill_engine, reason_engine = False, ""
+        # Use ML pipeline if available (NEW)
+        if ml_pipeline:
+            try:
+                ml_result = ml_pipeline.process_ad_decision(
+                    ad_id=ad_id,
+                    stage='validation',
+                    performance_data=r,
+                    decision_type='kill'
+                )
+                kill_engine = (ml_result.decision == 'kill')
+                reason_engine = ml_result.reasoning
+                if ml_result.ml_influence > 0.7:
+                    notify(f"🤖 ML decision for validation {ad_id}: {ml_result.decision} (confidence: {ml_result.confidence:.1%})")
+            except Exception as e:
+                notify(f"⚠️ ML pipeline error for {ad_id}, falling back to rules: {e}")
+                kill_engine, reason_engine = engine.should_kill_validation(r)
+        else:
+            # Fallback to traditional rules
+            try:
+                kill_engine, reason_engine = engine.should_kill_validation(r)
+            except Exception:
+                kill_engine, reason_engine = False, ""
 
         kill_tripwire = (spend_life >= tripwire_life_spend_no_purchase and purch_life == 0)
         kill_condition = bool(kill_engine or kill_tripwire)
@@ -487,10 +506,28 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
         # ---- PROMOTE checks ----
         if _promotion_cooldown_active(store, ad_id):
             continue
-        try:
-            adv, adv_reason = engine.should_advance_from_validation(r)
-        except Exception:
-            adv, adv_reason = False, ""
+        # Use ML pipeline for promotion decisions (NEW)
+        if ml_pipeline:
+            try:
+                ml_result = ml_pipeline.process_ad_decision(
+                    ad_id=ad_id,
+                    stage='validation',
+                    performance_data=r,
+                    decision_type='promote'
+                )
+                adv = (ml_result.decision == 'promote')
+                adv_reason = ml_result.reasoning
+                if ml_result.ml_influence > 0.7 and adv:
+                    notify(f"🚀 ML recommends promotion for validation {ad_id}: {adv_reason} (confidence: {ml_result.confidence:.1%})")
+            except Exception as e:
+                notify(f"⚠️ ML pipeline error for {ad_id}, falling back to rules: {e}")
+                adv, adv_reason = engine.should_advance_from_validation(r)
+        else:
+            # Fallback to traditional rules
+            try:
+                adv, adv_reason = engine.should_advance_from_validation(r)
+            except Exception:
+                adv, adv_reason = False, ""
         if adv and _stable_pass(store, ad_id, "adv_valid", True, consec_required):
             creative_label = ad_name.replace("[VALID]", "").strip() or f"Ad_{ad_id}"
 
@@ -634,6 +671,7 @@ def run_validation_tick(
     settings: Dict[str, Any],
     engine,
     store,
+    ml_pipeline: Optional[Any] = None,    # NEW: ML pipeline for intelligent decisions
     **kwargs
 ) -> Dict[str, Any]:
     """
