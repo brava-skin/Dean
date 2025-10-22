@@ -1030,6 +1030,7 @@ def main() -> None:
     parser.add_argument("--profile", choices=["production", "staging"], default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-digest", action="store_true")
+    parser.add_argument("--continuous-mode", action="store_true", help="Continuous operation mode (DigitalOcean)")
     parser.add_argument(
         "--simulate", action="store_true", help="shadow mode: log intended actions only"
     )
@@ -1089,6 +1090,17 @@ def main() -> None:
     
     if not ml_mode_enabled:
         notify("📊 Legacy mode enabled - using standard automation system")
+    
+    # Continuous mode setup (DigitalOcean optimization)
+    if args.continuous_mode:
+        notify("🔄 Continuous mode enabled - optimized for DigitalOcean deployment")
+        notify("📊 Enhanced rate limiting and ML data feeding active")
+        
+        # Adjust rate limiting for continuous operation
+        os.environ["META_REQUEST_DELAY"] = "1.2"  # Slower requests
+        os.environ["META_MAX_CONCURRENT_INSIGHTS"] = "2"  # Lower concurrency
+        os.environ["META_RETRY_MAX"] = "8"  # More retries
+        os.environ["META_BACKOFF_BASE"] = "1.5"  # Exponential backoff
     
     # Merge rules configuration into settings so stages can access it
     if rules_cfg:

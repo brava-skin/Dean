@@ -1,0 +1,94 @@
+# Dean DigitalOcean Configuration
+# Optimized for continuous operation with advanced rate limiting
+
+# ML System Configuration
+ml_system:
+  enabled: true
+  learning_rate: 0.01
+  confidence_threshold: 0.7
+  retrain_frequency_hours: 6  # Retrain every 6 hours for continuous learning
+  batch_size: 100  # Process data in smaller batches
+  max_features: 50  # Limit features to prevent overfitting
+
+# Rate Limiting Configuration (Optimized for continuous operation)
+rate_limiting:
+  # Meta API Settings
+  request_delay: 1.2  # Slower requests to prevent UI interference
+  max_concurrent_insights: 2  # Very conservative concurrency
+  retry_max: 8  # More retries for reliability
+  backoff_base: 1.5  # Exponential backoff
+  jitter: 0.3  # Random jitter to prevent burst alignment
+  
+  # Usage Monitoring
+  usage_threshold: 0.8  # Pause when usage > 80%
+  throttle_check_interval: 300  # Check usage every 5 minutes
+  
+  # Special handling for UI-critical errors
+  insights_platform_wait: 120  # Wait 2 minutes for 1504022 errors
+  app_level_wait: 90  # Wait 1.5 minutes for 1504039 errors
+
+# Continuous Operation Settings
+continuous:
+  enabled: true
+  run_interval: 600  # 10 minutes between runs
+  business_hours_interval: 300  # 5 minutes during business hours (9 AM - 6 PM)
+  off_hours_interval: 1800  # 30 minutes during off-hours
+  
+  # Intelligent scheduling
+  amsterdam_timezone: true
+  business_hours_start: 9  # 9 AM Amsterdam time
+  business_hours_end: 18   # 6 PM Amsterdam time
+  
+  # Data collection optimization
+  max_data_points_per_run: 50  # Limit data collection per run
+  prioritize_recent_data: true  # Focus on recent performance
+  skip_heavy_breakdowns: true   # Skip heavy breakdowns during continuous mode
+
+# ML Data Feeding Strategy
+ml_data_feeding:
+  # Continuous learning approach
+  feed_frequency: 300  # Feed data every 5 minutes
+  batch_processing: true  # Process data in batches
+  incremental_learning: true  # Learn incrementally from new data
+  
+  # Data prioritization
+  prioritize_high_performance: true  # Focus on high-performing ads
+  prioritize_recent_data: true  # Focus on recent data
+  balance_data_types: true  # Balance between different ad types
+  
+  # Learning optimization
+  adaptive_learning_rate: true  # Adjust learning rate based on performance
+  feature_importance_tracking: true  # Track which features matter most
+  model_ensemble: true  # Use multiple models for better predictions
+
+# Monitoring and Health Checks
+monitoring:
+  health_check_interval: 300  # Check system health every 5 minutes
+  log_level: "INFO"
+  performance_tracking: true
+  error_alerting: true
+  
+  # ML System Monitoring
+  ml_accuracy_tracking: true
+  ml_prediction_monitoring: true
+  ml_model_performance_tracking: true
+  
+  # Rate Limit Monitoring
+  api_usage_tracking: true
+  rate_limit_alerting: true
+  ui_interference_detection: true
+
+# DigitalOcean Specific Settings
+digitalocean:
+  # Resource limits
+  memory_limit: "512M"
+  cpu_quota: "50%"
+  
+  # Logging
+  log_rotation: true
+  log_retention_days: 7
+  
+  # Service management
+  auto_restart: true
+  restart_delay: 30  # seconds
+  max_restarts: 5  # per hour
