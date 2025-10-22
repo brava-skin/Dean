@@ -958,19 +958,28 @@ class MLIntelligenceSystem:
                         self.logger.info(f"✅ Loaded cached {model_type} for {stage}")
                         continue
                     else:
+                        # Cached model failed to load, train new one
+                        trained = self.predictor.train_model(model_type, stage, target)
+                        if trained:
+                            success_count += 1
+                            self.logger.info(f"🔄 Trained new {model_type} for {stage}")
+                        else:
+                            self.logger.warning(f"⚠️ Failed to train {model_type} for {stage}")
                 else:
-                
-                # Train new model
-                if self.predictor.train_model(model_type, stage, target):
-                    success_count += 1
-                    self.logger.info(f"🔄 Trained new {model_type} for {stage}")
-                else:
-            
+                    # No cached model or force retrain, train new one
+                    trained = self.predictor.train_model(model_type, stage, target)
+                    if trained:
+                        success_count += 1
+                        self.logger.info(f"🔄 Trained new {model_type} for {stage}")
+                    else:
+                        self.logger.warning(f"⚠️ Failed to train {model_type} for {stage}")
+
             self.logger.info(f"Initialized {success_count}/{len(models_to_train)} models ({cached_count} from cache)")
             return success_count > 0
-            
+
         except Exception as e:
             self.logger.error(f"Error initializing models: {e}")
+            return False
             return False
     
     def _should_use_cached_model(self, model_type: str, stage: str) -> bool:
