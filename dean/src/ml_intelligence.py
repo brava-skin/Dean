@@ -131,7 +131,14 @@ class SupabaseMLClient:
             start_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
             query = query.gte('date_start', start_date)
             
+            self.logger.info(f"🔧 [ML DEBUG] Querying performance_metrics with stages: {stages}")
+            self.logger.info(f"🔧 [ML DEBUG] Date filter: date_start >= {start_date}")
+            
             response = query.execute()
+            
+            self.logger.info(f"🔧 [ML DEBUG] Query returned {len(response.data) if response.data else 0} rows")
+            if response.data:
+                self.logger.info(f"🔧 [ML DEBUG] Sample data: {response.data[0] if response.data else 'None'}")
             
             if not response.data:
                 return pd.DataFrame()
