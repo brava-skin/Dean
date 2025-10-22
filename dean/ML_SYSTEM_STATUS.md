@@ -60,10 +60,13 @@ Status: ✅ **FULLY OPERATIONAL**
 
 ## 🐛 **BUGS FIXED**
 
-### Production Hotfixes (3/3)
+### Production Hotfixes (6/6)
 1. ✅ **Model Training** - Fixed undefined `model` variable
 2. ✅ **Model Validation** - Added missing `validate_all_models()` method
 3. ✅ **Trend Predictions** - Fixed numpy/scipy unpacking (3 functions)
+4. ✅ **JSON Serialization** - Sanitize inf/nan values before saving
+5. ✅ **Schema Alignment** - Fixed ml_predictions query (model_type → stage)
+6. ✅ **Dashboard Metrics** - Extract accuracy from performance_metrics JSONB
 
 ### Reliability Improvements (9/9)
 4. ✅ **Retry Logic** - Exponential backoff (3 attempts)
@@ -76,7 +79,7 @@ Status: ✅ **FULLY OPERATIONAL**
 11. ✅ **Error Handling** - Graceful degradation everywhere
 12. ✅ **Logging** - Full context and traceability
 
-**Total Bugs Fixed: 12/12** ✅
+**Total Bugs Fixed: 15/15** ✅
 
 ---
 
