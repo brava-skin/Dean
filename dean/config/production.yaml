@@ -1,83 +1,255 @@
-# Production Configuration for ML-Enhanced Dean System
-# This configuration optimizes the system for production use
+# =====================================================
+# PRODUCTION ENVIRONMENT CONFIGURATION
+# ML System, Profiles, and Environment Overrides
+# =====================================================
 
-# System mode
-mode:
-  current: "production"
-  ml_enabled: true
-  fallback_to_legacy: true
+version: 2.0
+environment: production
 
-# ML System Configuration
+# ── Profile Settings ──────────────────────────────────
+profile:
+  name: "production"
+  dry_run: false
+  write_enabled: true
+  debug_mode: false
+
+# ── ML System Configuration ───────────────────────────
 ml_system:
   enabled: true
-  retrain_frequency_hours: 24
-  prediction_horizon_hours: 24
-  confidence_threshold: 0.7
-  learning_rate: 0.1
-  max_adjustment_pct: 0.2
+  mode: "enhanced"  # enhanced | standard | disabled
+  fallback_to_legacy: true  # If ML fails, use rule-based system
+  
+  # Model Training
+  training:
+    retrain_frequency_hours: 24
+    min_data_points: 5
+    min_confidence: 0.7
+    cross_validation_folds: 5
+  
+  # Predictions
+  predictions:
+    enabled: true
+    horizon_hours: 24
+    confidence_threshold: 0.7
+    update_frequency_hours: 6
+  
+  # Learning Parameters
+  learning:
+    learning_rate: 0.1
+    adaptation_rate: 0.05
+    memory_decay: 0.95
+    max_adjustment_pct: 0.2
+  
+  # Feature Engineering
+  features:
+    rolling_windows: [1, 3, 7, 14, 30]
+    include_interactions: true
+    include_temporal: true
+    max_features: 100
 
-# Adaptive Rules Configuration
+# ── Adaptive Rules Engine ─────────────────────────────
 adaptive_rules:
-  target_cpa: 27.50
-  target_roas: 2.0
-  target_ctr: 0.008
-  learning_rate: 0.1
-  max_adjustment_pct: 0.2
-  confidence_weight: 0.8
+  enabled: true
+  
+  # Target metrics (ML will adjust thresholds toward these)
+  targets:
+    cpa_eur: 27.50
+    roas: 2.0
+    ctr: 0.008
+  
+  # Adaptation parameters
+  adaptation:
+    learning_rate: 0.1
+    max_adjustment_pct: 0.2
+    confidence_weight: 0.8
+    min_data_points: 10
+  
+  # Rule types to adapt
+  adapt_rules:
+    - "kill_thresholds"
+    - "promotion_thresholds"
+    - "budget_allocation"
+    - "pacing_controls"
 
-# Performance Tracking
+# ── Performance Tracking ──────────────────────────────
 performance_tracking:
-  fatigue_detection: true
-  decay_analysis: true
-  half_life_calculation: true
-  momentum_tracking: true
+  enabled: true
+  
+  fatigue:
+    detection_enabled: true
+    analysis_frequency_hours: 12
+    decay_threshold: 0.2
+    half_life_calculation: true
+  
+  momentum:
+    tracking_enabled: true
+    acceleration_detection: true
+    trend_analysis: true
+  
+  quality_scores:
+    calculate: true
+    include_stability: true
+    include_momentum: true
 
-# ML Reporting
-ml_reporting:
-  daily_reports: true
-  weekly_reports: true
-  predictive_insights: true
-  confidence_scoring: true
+# ── Creative Intelligence ─────────────────────────────
+creative_intelligence:
+  enabled: true
+  
+  similarity:
+    analysis_enabled: true
+    threshold: 0.8
+    vector_dimensions: 384
+  
+  optimization:
+    enabled: true
+    recommend_variants: true
+    avoid_similar_fails: true
+  
+  patterns:
+    discovery_enabled: true
+    min_confidence: 0.7
+    min_occurrences: 3
 
-# Cross-Stage Learning
+# ── Cross-Stage Learning ──────────────────────────────
 cross_stage_learning:
   enabled: true
-  transfer_frequency: 24
+  transfer_frequency_hours: 24
   confidence_threshold: 0.75
   impact_threshold: 0.6
+  
+  # What to transfer
+  transfer:
+    - "winning_patterns"
+    - "fatigue_signals"
+    - "creative_attributes"
+    - "optimal_budgets"
 
-# Creative Intelligence
-creative_intelligence:
-  similarity_analysis: true
-  performance_patterns: true
-  creative_optimization: true
+# ── ML Reporting ──────────────────────────────────────
+ml_reporting:
+  enabled: true
+  
+  daily_reports:
+    enabled: true
+    send_to_slack: true
+    include_predictions: true
+    include_confidence: true
+    include_recommendations: true
+  
+  weekly_reports:
+    enabled: true
+    day_of_week: "monday"
+    include_learning_summary: true
+    include_model_performance: true
+  
+  insights:
+    predictive_insights: true
+    confidence_scoring: true
+    feature_importance: true
 
-# System Health Monitoring
+# ── System Health Monitoring ──────────────────────────
 system_health:
-  monitoring: true
-  alerting: true
-  auto_recovery: true
-  performance_tracking: true
+  monitoring:
+    enabled: true
+    check_frequency_hours: 6
+  
+  alerts:
+    enabled: true
+    low_confidence_threshold: 0.5
+    high_error_rate_pct: 10
+    model_degradation_threshold: 0.3
+  
+  auto_recovery:
+    enabled: true
+    retrain_on_degradation: true
+    fallback_on_failure: true
 
-# Database Configuration
+# ── Database Configuration ────────────────────────────
 database:
-  connection_pool_size: 10
-  query_timeout: 30
-  retry_attempts: 3
-  backup_frequency: "daily"
+  supabase:
+    connection_pool_size: 10
+    query_timeout_seconds: 30
+    retry_attempts: 3
+    batch_insert_size: 100
+  
+  sqlite:
+    wal_mode: true
+    synchronous: "NORMAL"
+    journal_mode: "WAL"
+    timeout_seconds: 30
 
-# Logging Configuration
+# ── Logging Configuration ─────────────────────────────
 logging:
-  level: "INFO"
-  ml_insights: true
-  performance_metrics: true
-  learning_events: true
-  error_tracking: true
+  level: "INFO"  # DEBUG | INFO | WARNING | ERROR
+  
+  include:
+    ml_insights: true
+    performance_metrics: true
+    learning_events: true
+    predictions: true
+    model_updates: true
+    error_tracking: true
+  
+  output:
+    console: true
+    slack: true
+    file: true
 
-# Notification Settings
+# ── Notification Settings ─────────────────────────────
 notifications:
-  slack_enabled: true
-  ml_insights: true
-  performance_alerts: true
-  learning_updates: true
-  error_notifications: true
+  slack:
+    enabled: true
+    
+    # What to send
+    send:
+      run_summaries: true
+      ml_insights: true
+      performance_alerts: true
+      learning_updates: true
+      error_notifications: true
+      prediction_highlights: true
+    
+    # Frequency
+    frequency:
+      immediate: ["errors", "critical_alerts"]
+      hourly: ["performance_summaries"]
+      daily: ["ml_reports", "learning_updates"]
+
+# ── Performance Optimizations ─────────────────────────
+optimizations:
+  caching:
+    enabled: true
+    ttl_seconds: 300
+  
+  parallel_processing:
+    enabled: true
+    max_workers: 4
+  
+  batch_operations:
+    enabled: true
+    batch_size: 50
+
+# ── Safety Overrides ──────────────────────────────────
+overrides:
+  # Manual controls (use with caution)
+  manual:
+    freeze_all_scaling: false
+    halt_testing_launches: false
+    read_only_mode: false
+    force_ml_retrain: false
+  
+  # Emergency controls
+  emergency:
+    stop_all_automation: false
+    pause_all_ads: false
+    disable_ml: false
+
+# ── Feature Flags ─────────────────────────────────────
+features:
+  ml_predictions: true
+  adaptive_thresholds: true
+  creative_similarity: true
+  fatigue_detection: true
+  temporal_analysis: true
+  cross_stage_transfer: true
+  auto_budget_optimization: true
+  predictive_scaling: true

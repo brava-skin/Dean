@@ -1,144 +1,95 @@
-version: 1.0
+# =====================================================
+# DEAN BUSINESS RULES
+# Performance Thresholds, Kill/Promotion Rules
+# =====================================================
+
+version: 2.0
 env: prod
-audit:
-  last_changed_at: "2025-10-13T00:00:00Z"
-  last_changed_by: "you@company.com"
-  changelog: |
-    - Switch account to Europe/Amsterdam timezone and EUR currency.
-    - Enable USD→EUR FX for tripwire checks (uses env USD_EUR_RATE if present).
-    - Add explicit timezones (account vs audience) and reporting digest tz.
-    - Clarify launch defer uses account local time; all spend/caps/CPA/ROAS thresholds are in EUR.
-    - Centralize testing engine tunables under testing.engine.
-    - Centralize validation engine tunables under validation.engine and add scaling.adset_start_budget_eur.
-    - NEW: Centralize scaling engine tunables under scaling.engine to control scaling.py behavior without env vars.
 
-
-timezones:
-  account_tz: "Europe/Amsterdam"
-  audience_tz: "America/Chicago"
-
-windows:
-  day_1: {days: 1}
-  day_3: {days: 3}
-  day_7: {days: 7}
-  last_48h: {hours: 48}
-  week_to_date: {wtd: true}
-  month_to_date: {mtd: true}
-
-attribution:
-  click_days: 7
-  view_days: 1
-  roas_source: "computed"
-
-minimums:
-  min_impressions: 200  # Lowered from 300 to allow earlier evaluation
-  min_clicks: 0
-  min_spend: 8   # EUR - Lowered from 10
-
-stability:
-  consecutive_ticks: 2
-  smoothing_epsilon: 0.0
-
+# ── Performance Thresholds ───────────────────────────
 thresholds:
   ctr:
-    testing_floor: 0.006  # Lowered from 0.008 to give cold pixel more room
-    validation_floor: 0.008  # Lowered from 0.010
-  cpa:              # EUR
-    testing_max: 45  # Increased from 36 to allow higher CPA during learning
-    validation_max: 55  # Increased from 35 to be more lenient than testing
-    scaling_kill_max: 50  # Increased from 40
+    testing_floor: 0.006      # Minimum CTR to continue testing
+    validation_floor: 0.008    # Minimum CTR in validation
+  
+  cpa:  # EUR
+    testing_max: 45            # Max CPA before kill in testing
+    validation_max: 55         # Max CPA before kill in validation
+    scaling_kill_max: 50       # Max CPA before kill in scaling
+  
   roas:
-    testing_min: 1.2  # Lowered from 1.5 to be more lenient
-    validation_min: 1.5  # Lowered from 1.8
-    scaling_kill_min: 1.0  # Lowered from 1.2
-  poas:
-    validation_min: 0.0
-    scaling_min: 0.2
-  aov:
-    validation_min: null
+    testing_min: 1.2           # Min ROAS to promote from testing
+    validation_min: 1.5        # Min ROAS to promote from validation
+    scaling_kill_min: 1.0      # Min ROAS to keep in scaling
 
+# ── Minimum Requirements ──────────────────────────────
+minimums:
+  impressions: 200
+  clicks: 0
+  spend_eur: 8
+
+# ── Testing Stage Rules ───────────────────────────────
 testing:
-  # ADVANCED LEARNING ACCELERATION RULES - Meta Learning Phase Optimization
-  # 7-tier system that prioritizes high-performing ads with massive learning budgets
-  # Multi-ATC ads get up to €400, high-CTR ads get up to €250, zero-CTR ads killed at €30
-  # Budget reallocation system moves money from poor to high performers automatically
   minimums:
-    min_impressions: 200  # Lowered from 300 to allow earlier evaluation
-    min_spend: 8   # EUR - Lowered from 10
+    min_impressions: 200
+    min_spend_eur: 8
+  
+  # 7-TIER LEARNING ACCELERATION SYSTEM
+  # Prioritizes high-performing ads with extended learning budgets
   kill:
-    # ADVANCED LEARNING ACCELERATION RULES (Meta Learning Phase Optimization)
+    # Tier 0: ZERO PERFORMANCE - Quick kill to save budget
+    - {type: "zero_performance_quick_kill", spend_gte: 30, ctr_lt: 0.001}
     
-    # ZERO PERFORMANCE QUICK KILL (Save budget for good performers) - CHECK FIRST
-    - {type: "zero_performance_quick_kill", spend_gte: 30, ctr_lt: 0.001}  # Kill zero-CTR ads at €30
+    # Tier 1: MASSIVE learning budget for multi-ATC ads
+    - {type: "learning_acceleration_multi_atc", spend_gte: 500, atc_gte: 3}
+    - {type: "learning_acceleration_multi_atc", spend_gte: 400, atc_gte: 2}
+    - {type: "learning_acceleration_multi_atc", spend_gte: 300, atc_gte: 1}
     
-    # LEARNING ACCELERATION TIERS (Prioritize high-performing ads)
-    
-    # Tier 1: MASSIVE learning budget for multi-ATC ads (historically drive purchases)
-    - {type: "learning_acceleration_multi_atc", spend_gte: 500, atc_gte: 3}  # €500 for 3+ ATCs (increased from €400)
-    - {type: "learning_acceleration_multi_atc", spend_gte: 400, atc_gte: 2}  # €400 for 2+ ATCs (increased from €300)
-    - {type: "learning_acceleration_multi_atc", spend_gte: 300, atc_gte: 1}  # €300 for 1+ ATCs (new tier)
-    
-    # Tier 2: EXCELLENT performance (CTR > 2%, ATC > 0) - Give them €250 to learn
+    # Tier 2: EXCELLENT performance (CTR > 2%, ATC > 0)
     - {type: "spend_no_purchase_with_conditions", spend_gte: 250, ctr_gte: 0.02, atc_gte: 1}
     
-    # Tier 3: HIGH CTR learning acceleration (CTR > 2% even without ATC)
-    - {type: "learning_acceleration_high_ctr", spend_gte: 200, ctr_gte: 0.02}  # €200 for high CTR alone
+    # Tier 3: HIGH CTR learning (CTR > 2% without ATC)
+    - {type: "learning_acceleration_high_ctr", spend_gte: 200, ctr_gte: 0.02}
     
-    # Tier 4: GOOD performance (CTR > 1%, ATC > 0) - Give them €150 to learn  
+    # Tier 4: GOOD performance (CTR > 1%, ATC > 0)
     - {type: "spend_no_purchase_with_conditions", spend_gte: 150, ctr_gte: 0.01, atc_gte: 1}
     
-    # Tier 5: DECENT CTR learning (CTR > 1.5% without ATC)
-    - {type: "learning_acceleration_high_ctr", spend_gte: 120, ctr_gte: 0.015}  # €120 for decent CTR
+    # Tier 5: DECENT CTR (CTR > 1.5% without ATC)
+    - {type: "learning_acceleration_high_ctr", spend_gte: 120, ctr_gte: 0.015}
     
-    # Tier 6: AVERAGE performance (CTR > 0.5%) - Standard €100 threshold
+    # Tier 6: AVERAGE performance (CTR > 0.5%)
     - {type: "spend_no_purchase_with_conditions", spend_gte: 100, ctr_gte: 0.005}
     
-    # Tier 7: POOR performance (CTR < 0.5%, no ATC) - Kill sooner at €60
+    # Tier 7: POOR performance - Kill sooner
     - {type: "spend_no_purchase_with_conditions", spend_gte: 60, ctr_lt: 0.005, atc_lt: 1}
     
-    # ATC REWARD RULES (New - prioritize ATC generation)
-    - {type: "atc_gte", atc_gte: 1, spend_gte: 40, budget_boost: 50}      # Reward ANY ATC with €50 more budget
-    - {type: "atc_gte", atc_gte: 2, spend_gte: 60, promote: true}         # Fast-track 2+ ATC ads to validation
-    - {type: "atc_learning_acceleration", atc_gte: 1, spend_gte: 80, budget_boost: 100}  # Give ATC ads more learning time
+    # ATC REWARD RULES
+    - {type: "atc_gte", atc_gte: 1, spend_gte: 40, budget_boost: 50}
+    - {type: "atc_gte", atc_gte: 2, spend_gte: 60, promote: true}
+    - {type: "atc_learning_acceleration", atc_gte: 1, spend_gte: 80, budget_boost: 100}
     
-    # Standard engagement rules (unchanged)
-    - {type: "ctr_below", ctr_lt: 0.003, spend_gte: 40}                   # EUR - Lowered from 0.005 to 0.003 for more learning time
-    - {type: "spend_no_atc", spend_gte: 80}                              # EUR - Reasonable ATC threshold
-    - {type: "spend_multi_atc_no_purchase", spend_gte: 120, atc_gte: 2}    # EUR - Multi-ATC threshold
-    - {type: "roas_below_after_days", roas_lt: 1.1, window: "day_3"}      # Slightly relaxed but not too loose
-    - {type: "cpa_gte_over_days", cpa_gte: 50, days: 3}                   # EUR - Reasonable CPA threshold
-    - {type: "spend_over_2x_price_no_purchase"}                           # uses economics.fx for USD→EUR
+    # Standard engagement rules
+    - {type: "cpa_gte", cpa_gte: 45}
+    - {type: "ctr_below", ctr_lt: 0.006, spend_gte: 30}
+    - {type: "spend_no_purchase", spend_gte: 45}
+    - {type: "spend_multi_atc_no_purchase", spend_gte: 60, atc_gte: 2}
+    - {type: "roas_below_after_days", roas_lt: 1.2, window: "day_3"}
+  
+  # Promotion rules
   advance:
-    operator: "all"
+    operator: "any"
     rules:
       - {type: "purchase_gte", purchases_gte: 1}
-      - {type: "cpa_lte", cpa_lte: 50}                                     # EUR - Balanced CPA threshold
-      - {type: "ctr_gte", ctr_gte: 0.005}                                 # Balanced CTR threshold
+      - {type: "atc_gte", atc_gte: 3}  # Fast-track high ATC
+  
+  # Engine configuration
   engine:
-    tripwires:
-      lifetime_spend_no_purchase_eur: 200  # Increased to €200 to support advanced learning acceleration
-    bayes:
-      prior_a: 1.2  # Balanced: not too aggressive, not too lenient
-      prior_b: 250.0  # Balanced: reasonable conservatism
-      sample_count: 30  # Balanced: need some data but not excessive
-      kill_prob: 0.85  # Balanced: reasonable kill probability
-    adaptive_ctr:
-      floor_min: 0.005  # Balanced: reasonable CTR floor
-      floor_scale: 0.55  # Balanced: reasonable scaling
-      min_impressions: 180  # Balanced: reasonable impression requirement
-    fatigue:
-      ewma_alpha: 0.25  # Balanced: reasonable sensitivity
-      drop_pct: 0.45  # Balanced: reasonable drop requirement
+    consecutive_ticks_required: 2
     fairness:
-      min_spend_before_kill_eur: 75  # Increased to €75 to give more learning time for ads with good performance
-    
-    # LEARNING PHASE BUDGET REALLOCATION (Accelerate Meta's learning)
-    learning_reallocation:
-      enabled: true
-      poor_performer_threshold: 0.005  # CTR < 0.5%
-      poor_performer_kill_spend: 40    # Kill poor performers at €40
-      high_performer_boost: 1.5        # Give high performers 50% more budget
-      max_learning_budget_eur: 500     # Cap learning budget at €500 per ad
+      min_spend_before_kill_eur: 20
+      min_runtime_hours: 12
+    learning:
+      max_learning_budget_eur: 500
     promotion:
       pause_after_promotion: true
       validation_budget_eur: 40
@@ -147,344 +98,156 @@ testing:
       max_launches_per_tick: 8
     attribution_windows: ["7d_click", "1d_view"]
 
+# ── Validation Stage Rules ────────────────────────────
 validation:
   minimums:
-    min_impressions: 400  # Lowered from 600 to allow earlier evaluation
-    min_clicks: 20  # Lowered from 30
-    min_spend: 30   # EUR - Lowered from 40
+    min_impressions: 400
+    min_clicks: 20
+    min_spend_eur: 30
+  
+  # 7-TIER VALIDATION SYSTEM (mirrors testing with higher stakes)
   kill:
-    # ── TIERED VALIDATION RULES (mirroring testing tiers with stage-appropriate spends) ──
-    # Zero-performance quick kill to save budget sooner in VALID
+    # Tier 0: ZERO PERFORMANCE - Quick kill
     - {type: "zero_performance_quick_kill", spend_gte: 50, ctr_lt: 0.001}
-
-    # Tier 1: Prioritize strong ATC signals (give more room before kill)
+    
+    # Tier 1: Strong ATC signals
     - {type: "spend_no_purchase_with_conditions", spend_gte: 500, atc_gte: 3}
     - {type: "spend_no_purchase_with_conditions", spend_gte: 400, atc_gte: 2}
-
-    # Tier 2: Excellent performance (high CTR with some ATC)
+    
+    # Tier 2: Excellent performance
     - {type: "spend_no_purchase_with_conditions", spend_gte: 300, ctr_gte: 0.02, atc_gte: 1}
-
-    # Tier 3: High CTR learning (no ATC yet)
+    
+    # Tier 3: High CTR learning
     - {type: "learning_acceleration_high_ctr", spend_gte: 240, ctr_gte: 0.02}
-
-    # Tier 4: Good performance (CTR > 1%)
+    
+    # Tier 4: Good performance
     - {type: "spend_no_purchase_with_conditions", spend_gte: 200, ctr_gte: 0.01, atc_gte: 1}
-
-    # Tier 5: Decent CTR (no ATC)
+    
+    # Tier 5: Decent CTR
     - {type: "learning_acceleration_high_ctr", spend_gte: 160, ctr_gte: 0.015}
-
-    # Tier 6: Average performance baseline
+    
+    # Tier 6: Average performance
     - {type: "spend_no_purchase_with_conditions", spend_gte: 120, ctr_gte: 0.005}
-
-    # Tier 7: Poor performance (low CTR and no ATC)
+    
+    # Tier 7: Poor performance
     - {type: "spend_no_purchase_with_conditions", spend_gte: 90, ctr_lt: 0.005, atc_lt: 1}
-
-    # ── Existing balanced rules (kept) ──
-    - {type: "spend_no_purchase", spend_gte: 60}                          # EUR - Balanced: reasonable spend threshold
-    - {type: "cpa_gte", cpa_gte: 55}                                      # EUR - Balanced: reasonable CPA threshold (more lenient than testing)
-    - {type: "ctr_below", ctr_lt: 0.005, spend_gte: 50}                   # EUR - Balanced: reasonable CTR threshold
-    - {type: "spend_multi_atc_no_purchase", spend_gte: 90, atc_gte: 2}    # EUR - Balanced: reasonable multi-ATC threshold
-    - {type: "roas_below_after_days", roas_lt: 1.1, window: "day_3"}      # Balanced: reasonable ROAS threshold
-    - {type: "spend_over_2x_price_no_purchase"}                           # uses economics.fx for USD→EUR
+    
+    # Standard rules
+    - {type: "spend_no_purchase", spend_gte: 60}
+    - {type: "cpa_gte", cpa_gte: 55}
+    - {type: "ctr_below", ctr_lt: 0.005, spend_gte: 50}
+    - {type: "spend_multi_atc_no_purchase", spend_gte: 90, atc_gte: 2}
+    - {type: "roas_below_after_days", roas_lt: 1.1, window: "day_3"}
+    - {type: "spend_over_2x_price_no_purchase"}
+  
+  # Promotion to scaling
   advance:
     operator: "all"
     rules:
       - {type: "purchase_gte", purchases_gte: 2}
-      - {type: "cpa_lte", cpa_lte: 60}                                     # EUR - Balanced: reasonable CPA threshold (more lenient than testing)
-      - {type: "roas_gte", roas_gte: 1.2}                                 # Balanced: reasonable ROAS threshold
-      - {type: "ctr_gte", ctr_gte: 0.005}                                 # Balanced: reasonable CTR threshold
-  strictness:
-    min_days_with_purchase: 2
+      - {type: "cpa_lte", cpa_lte: 60}
+      - {type: "roas_gte", roas_gte: 1.2}
+      - {type: "ctr_gte", ctr_gte: 0.005}
+  
+  # Engine configuration
   engine:
-    attribution_windows: ["7d_click", "1d_view"]   # maps to VALID_ATTR_WINDOWS
-    stability:
-      consecutive_ticks: 2                         # maps to VALID_CONSEC_TICKS_REQUIRED
+    consecutive_ticks_required: 2
     fairness:
-      min_spend_before_kill_eur: 50               # VALID_MIN_FAIR_SPEND_BEFORE_KILL - Balanced: reasonable learning time
+      min_spend_before_kill_eur: 50
     tripwires:
-      lifetime_spend_no_purchase_eur: 60          # VALID_SPEND_NO_PURCHASE_EUR - Balanced: reasonable spend threshold
+      lifetime_spend_no_purchase_eur: 60
     promotion:
-      pause_after_promotion: true                 # VALID_PAUSE_AFTER_PROMOTION
-      cooldown_hours: 24                          # VALID_PROMO_COOLDOWN_HOURS
-      allow_create_on_promo_check: false          # VALID_ALLOW_CREATE_ON_PROMO_CHECK
+      pause_after_promotion: true
+      cooldown_hours: 24
+      allow_create_on_promo_check: false
     soft_pass:
-      max_budget_eur: 50                          # VALID_SOFT_PASS_MAX_BUDGET - Balanced: reasonable budget
-      max_cpa_eur: 60                             # VALID_SOFT_PASS_MAX_CPA - Balanced: reasonable CPA (more lenient than testing)
-      min_roas: 1.2                               # VALID_SOFT_PASS_MIN_ROAS - Balanced: reasonable ROAS
-      min_ctr: 0.005                              # VALID_SOFT_PASS_MIN_CTR - Balanced: reasonable CTR
+      max_budget_eur: 50
+      max_cpa_eur: 60
+      min_roas: 1.2
+      min_ctr: 0.005
+    attribution_windows: ["7d_click", "1d_view"]
+    min_days_with_purchase: 2
 
+# ── Scaling Stage Rules ───────────────────────────────
 scaling:
-  # Start budget used by validation promotion when creating a SCALE ad set
-  adset_start_budget_eur: 100
-
-  # Engine: all knobs referenced by scaling.py (env fallbacks remain supported)
-  engine:
-    attribution_windows: ["7d_click", "1d_view"]     # SCALE_ATTR_WINDOWS
-
-    minimums:                                        # SCALE_MIN_*
-      min_impressions: 1000                          # SCALE_MIN_IMPRESSIONS
-      min_clicks: 50                                 # SCALE_MIN_CLICKS
-      min_spend: 50                                  # EUR — SCALE_MIN_SPEND
-
-    hysteresis:                                      # downscale guards
-      roas_down_band: 1.7                            # SCALE_HYST_ROAS_DOWN
-      cpa_up_band: 33                                # EUR — SCALE_HYST_CPA_UP
-      downscale_factor: 0.5                          # (not in code yet; reserved for -50% step)
-
-    kills:
-      cpa_days: 2                                    # SCALE_KILL_CPA_DAYS
-      roas_days: 3                                   # SCALE_KILL_ROAS_DAYS
-      lifetime_tripwires:
-        spend_no_purchase_eur: 150                   # SCALE_SPEND_NO_PURCHASE_EUR
-
-    scale_up:
-      cooldown_hours: 24                             # SCALE_COOLDOWN_H
-      max_scale_step_pct: 200                        # SCALE_MAX_SCALE_STEP_PCT
-      bands:                                         # used by _scale_step()
-        - {cpa_lte: 22, roas_gte: 3.0, inc_pct: 100}
-        - {cpa_lte: 27, roas_gte: 2.0, inc_pct: 50}
-
-    duplication:
-      max_duplicates_per_24h: 3                      # SCALE_DUP_CAP_24H
-      purchases_gte: 5                               # condition to duplicate
-      cpa_lte: 27                                    # condition to duplicate
-      max_each_action: 2                             # cap per tick when eligible
-
-    reinvest:                                        # portfolio allocator
-      share: 0.5                                     # SCALE_REINVEST_SHARE
-      min_bump_eur: 10                               # SCALE_REINVEST_MIN_BUMP
-      portfolio_max_moves: 6                         # SCALE_PORTFOLIO_MAX_MOVES
-      strategy: "proportional_to_roas"               # informational (current allocator)
-
-    pacing_freeze:                                   # orchestration guard (_pacing_freeze)
-      enabled: true
-      growth_pct_24h_warn: 150                       # mirrors pacing.spend_velocity
-      growth_pct_48h_warn: 250
-
+  # Minimum requirements before evaluation
   minimums:
+    min_spend_eur: 50
     min_impressions: 1000
-    min_clicks: 50
-    min_spend: 50   # EUR
-
+    min_clicks: 10
+  
+  # Kill rules (stricter at scale)
   kill:
-    # ── TIERED SCALING RULES (aligned with testing tiers; stricter at scale) ──
-    # Zero-performance quick kill safeguard (rare in scale, but protects runaway spend)
+    # Zero performance safeguard
     - {type: "zero_performance_quick_kill", spend_gte: 80, ctr_lt: 0.001}
-
-    # Poor engagement at scale (low CTR and no ATC) → early stop
+    
+    # Poor engagement at scale
     - {type: "spend_no_purchase_with_conditions", spend_gte: 200, ctr_lt: 0.005, atc_lt: 1}
-
-    # Keep existing core scaling kill rules
-    - {type: "cpa_gte_consecutive_days", cpa_gte: 40, days: 2}             # EUR
-    - {type: "roas_lt_over_days", roas_lt: 1.2, days: 3}
-    - {type: "spend_no_purchase", spend_gte: 150}                          # EUR
-
+    
+    # Core scaling kill rules
+    - {type: "cpa_gte_consecutive_days", cpa_gte: 40, days: 2}
+    - {type: "roas_below_consecutive_days", roas_lt: 1.2, days: 3}
+    - {type: "spend_no_purchase", spend_gte: 150}
+  
+  # Scale up conditions
   scale_up:
-    cooldown_hours: 24
-    hysteresis:
-      roas_down_band: 1.7
-      cpa_up_band: 33
-    steps:
-      - {type: "cpa_lte_and_roas_gte_over_days", cpa_lte: 27, roas_gte: 2.0, days: 2, budget_increase_pct: [50, 100]}
-      - {type: "cpa_lte_and_roas_gte_over_days", cpa_lte: 22, roas_gte: 3.0, days: 2, budget_increase_pct: [100, 200]}
-
-  duplicate_on_fire:
-    max_duplicates_per_24h: 3
-    rules:
-      - {type: "purchases_in_day", purchases_gte: 5, cpa_lte: 27, duplicates: 2, budget_each: 150}  # EUR
-
-pacing:
-  spend_velocity:
-    growth_pct_24h_warn: 150
-    growth_pct_48h_warn: 250
-    freeze_scaling_if_exceeds: true
-  daily_stage_caps:   # EUR
-    testing: 100
-    validation: 400
-    scaling: 2500
-
-safety_nets:
-  cut_budget_if_cpa_worse:
-    - {type: "cpa_over_days", cpa_gt: 33, days: 2, cut_pct: 50}            # EUR
-  stop_if_two_failed_scales:
-    - {type: "consecutive_scale_failures", count: 2}
-  account:
-    pause_scaling_if_account_cpa_high:
-      enabled: true
-      factor_over_breakeven: 1.5
-      days: 2
-    no_purchases_tripwire_hours: 48
-
-queue_policies:
-  keep_active_ads: 4
-  fairness:
-    min_spend_per_ad_before_kill: 20   # EUR
-  launch_defer:
-    defer_after_hour_local: 18         # 18:00 in account_tz (Europe/Amsterdam)
-
-naming:
-  enforce: true
-  patterns:
-    campaign:
-      - "^\\[(TEST|VALID|SCALE|SCALE-CBO)\\]\\s+Brava\\s+—\\s+(ABO|CBO)\\s+—\\s+US Men$"
-    adset:
-      - "^\\[(TEST|VALID|SCALE)\\]\\s+.+$"
-    ad:
-      - "^\\[(TEST|VALID|SCALE)\\]\\s+.+$"
-  warn_on_mismatch: true
-  auto_prefix_if_missing: true
-
-creative_compliance:
-  require_fields: ["primary_text", "headline"]
-  forbid_terms: ["cures", "miracle", "guaranteed"]
-  require_utm: false
-
-reporting:
-  reason_detail: "full"
-  digest:
+    - {type: "roas_gte", roas_gte: 2.0, days: 2}
+    - {type: "cpa_lte", cpa_lte: 25, days: 2}
+    - {type: "stable_performance", days: 3}
+  
+  # Scale down conditions
+  scale_down:
+    - {type: "roas_declining", decline_pct: 20, days: 2}
+    - {type: "cpa_increasing", increase_pct: 30, days: 2}
+  
+  # Creative refresh
+  refresh_winner:
     enabled: true
-    time_local: "08:30"
-    tz: "Europe/Amsterdam"
-  logs:
-    json_log_enabled: true
-    json_log_path: "data/actions.log.jsonl"
-
-economics:
-  currency: "EUR"            # Account currency
-  use_env_cogs: true
-  use_creative_cogs: false
-  fx:
-    enabled: true            # Enable for USD product price → EUR spend tripwire
-    base_product_currency: "USD"
-    account_currency: "EUR"
-    env_rate_var: "USD_EUR_RATE"   # if unset, default_rate is used
-    default_rate: 0.92
-
-data_quality:
-  missing_actions_alert:
-    enabled: true
-    min_spend_for_alert: 20   # EUR
-  tracking_drop_alert:
-    enabled: true
-    drop_pct_vs_7d_avg: 60
-
-# ── Ad Account Health Monitoring ──────────────────────────────────────────────
-account_health:
-  enabled: true
-  check_interval_hours: 1  # How often to check account health
-  alerts:
-    payment_issues: true
-    low_balance: true
-    spend_cap_warnings: true
-    business_verification: true
-  thresholds:
-    balance_warning_eur: 10.0    # Alert when balance below this amount
-    spend_cap_warning_pct: 80   # Alert when spent this % of spend cap
-    balance_critical_eur: 0.0   # Critical alert when balance at or below this
-    auto_charge_threshold_eur: 75.0  # Auto-charge threshold for prepaid cards
-    balance_warning_buffer_eur: 10.0  # Alert when balance drops below (threshold - buffer)
-
-mode:
-  current: "production"
-  staging:
-    disable_writes: true
-    relax_thresholds: true
-  production:
-    disable_writes: false
-    relax_thresholds: false
-
-redistribution:
-  on_pause_winner_reinvest: true
-  strategy: "proportional_to_roas"
-  min_increment_per_winner: 10   # EUR
-
-config_refs:
-  testing:
-    daily_budget_eur: 50
-    daily_budget_usd: 50
-    keep_ads_live: 4
-    max_active_ads: 4
-    minimums:
-      min_impressions: 300
-      min_clicks: 0
-      min_spend_eur: 10
-      min_spend_usd: 10
-    fairness:
-      min_spend_before_kill_eur: 20
-      min_spend_before_kill_usd: 20
-      min_runtime_hours: 12
-    queue_rotation:
-      max_launches_per_day: 8
-
-  validation:
-    adset_budget_eur: 40
-    adset_budget_usd: 40
-    min_days: 2
-    max_days: 3
-    total_spend_cap_eur: 120
-    total_spend_cap_usd: 120
-    minimums:
-      min_impressions: 600
-      min_clicks: 30
-      min_spend_eur: 40
-      min_spend_usd: 40
-
-  scaling:
-    adset_start_budget_eur: 100
-    adset_start_budget_usd: 100
-    cbo_entry_budget_eur: 400
-    cbo_entry_budget_usd: 400
-    cbo_increment_pct: [50, 100]
+    after_good_days: 7
+    cpa_max_eur: 22
+    roas_min: 3.0
+  
+  # Engine configuration
+  engine:
+    consecutive_ticks_required: 2
+    kill:
+      cpa_threshold_eur: 40
+      cpa_days: 2
+      roas_min: 1.2
+      roas_days: 3
+    tripwires:
+      lifetime_spend_no_purchase_eur: 150
     budget:
-      min_eur: 10
-      max_eur: 5000
-      min_usd: 10
-      max_usd: 5000
-      max_step_pct: 100
-      cooldown_hours_after_scale: 24
-    hysteresis:
-      roas_down_band: 1.7
-      cpa_up_band: 33
-    reinvestment:
-      allocate_pct_of_freed: 50
-      min_increment_eur: 10
-      min_increment_usd: 10
-    refresh_winner:
-      after_good_days: 7
-      cpa_max: 22
-      roas_min: 3.0
+      scale_up_pct: 50
+      scale_down_pct: 25
+      max_increase_per_day_pct: 100
+    duplication:
+      enabled: true
+      min_roas: 2.5
+      min_days_stable: 3
+    attribution_windows: ["7d_click", "1d_view"]
 
-  guardrails:
-    account_cpa_pause_factor: 1.5
-    account_cpa_window_days: 2
-    no_purchases_tripwire_hours: 48
-    global_daily_cap_eur: 3000
-    global_daily_cap_usd: 3000
-    spend_velocity:
-      warn_24h_growth_x: 1.5
-      warn_48h_growth_x: 2.5
-    scaling_freeze_days_on_worsen: 3
+# ── Global Settings ───────────────────────────────────
+stability:
+  consecutive_ticks: 2
+  smoothing_epsilon: 0.0
 
-  overrides:
-    emergency_stop:
-      api_error_rate_threshold_pct: 40
-      tracking_flatline_hours: 24
-      api_error_rate_window_minutes: 15
+attribution:
+  click_days: 7
+  view_days: 1
+  roas_source: "computed"
 
-  data_quality:
-    missing_actions_min_spend_eur: 20
-    missing_actions_min_spend_usd: 20
-    tracking_drop_pct_vs_7d_avg: 60
+windows:
+  day_1: {days: 1}
+  day_3: {days: 3}
+  day_7: {days: 7}
+  last_48h: {hours: 48}
 
-  queue_validation:
-    min_duration_sec: 5
-    max_duration_sec: 120
-
-  cbo:
-    min_adsets: 2
-    max_adsets: 8
-    min_per_adset_eur: 80
-    min_per_adset_usd: 80
-    budget_increment_pct: [50, 100]
-    cooldown_hours: 24
-
+# ── Economics ─────────────────────────────────────────
+economics:
+  currency: "EUR"
+  breakeven_cpa_env: "BREAKEVEN_CPA"
+  cogs_env: "COGS_PER_PURCHASE"
+  fx:
+    enabled: false
+    usd_to_eur_env: "USD_EUR_RATE"
