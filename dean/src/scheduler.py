@@ -53,7 +53,8 @@ class BackgroundScheduler:
         )
         
         tz_name = (
-            settings.get("account_timezone")
+            settings.get("account", {}).get("timezone")
+            or settings.get("account_timezone")
             or settings.get("timezone")
             or os.getenv("TIMEZONE")
             or "Europe/Amsterdam"
@@ -113,7 +114,7 @@ class BackgroundScheduler:
     def _run_hourly_tick(self):
         """Run the main automation tick every hour."""
         try:
-            current_time = now_local(self.settings.get("account_timezone", "Europe/Amsterdam"))
+            current_time = now_local(self.settings.get("account", {}).get("timezone") or self.settings.get("account_timezone", "Europe/Amsterdam"))
             
             # Check if we already ran this hour
             hour_key = current_time.strftime("%Y-%m-%d-%H")
@@ -195,7 +196,7 @@ class BackgroundScheduler:
     def _run_3h_summary(self):
         """Run 3-hour summary of metrics and active ads."""
         try:
-            current_time = now_local(self.settings.get("account_timezone", "Europe/Amsterdam"))
+            current_time = now_local(self.settings.get("account", {}).get("timezone") or self.settings.get("account_timezone", "Europe/Amsterdam"))
             
             # Check if we already ran this 3-hour window
             hour_window = current_time.hour // 3
@@ -234,7 +235,7 @@ class BackgroundScheduler:
     def _run_daily_summary(self):
         """Run daily morning summary of previous day."""
         try:
-            current_time = now_local(self.settings.get("account_timezone", "Europe/Amsterdam"))
+            current_time = now_local(self.settings.get("account", {}).get("timezone") or self.settings.get("account_timezone", "Europe/Amsterdam"))
             
             # Check if we already ran today
             today_key = current_time.strftime("%Y-%m-%d")
@@ -279,8 +280,8 @@ class BackgroundScheduler:
                 level="ad",
                 fields=["spend", "actions", "action_values"],
                 time_range={
-                    "since": (now_local(self.settings.get("account_timezone", "Europe/Amsterdam")) - timedelta(days=1)).strftime("%Y-%m-%d"),
-                    "until": now_local(self.settings.get("account_timezone", "Europe/Amsterdam")).strftime("%Y-%m-%d")
+                    "since": (now_local(self.settings.get("account", {}).get("timezone") or self.settings.get("account_timezone", "Europe/Amsterdam")) - timedelta(days=1)).strftime("%Y-%m-%d"),
+                    "until": now_local(self.settings.get("account", {}).get("timezone") or self.settings.get("account_timezone", "Europe/Amsterdam")).strftime("%Y-%m-%d")
                 },
                 paginate=True
             )
@@ -319,8 +320,8 @@ class BackgroundScheduler:
                 level="ad",
                 fields=["ad_id", "ad_name", "spend", "actions"],
                 time_range={
-                    "since": (now_local(self.settings.get("account_timezone", "Europe/Amsterdam")) - timedelta(days=1)).strftime("%Y-%m-%d"),
-                    "until": now_local(self.settings.get("account_timezone", "Europe/Amsterdam")).strftime("%Y-%m-%d")
+                    "since": (now_local(self.settings.get("account", {}).get("timezone") or self.settings.get("account_timezone", "Europe/Amsterdam")) - timedelta(days=1)).strftime("%Y-%m-%d"),
+                    "until": now_local(self.settings.get("account", {}).get("timezone") or self.settings.get("account_timezone", "Europe/Amsterdam")).strftime("%Y-%m-%d")
                 },
                 paginate=True
             )

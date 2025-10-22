@@ -573,7 +573,7 @@ def linter(settings: Dict[str, Any], rules: Dict[str, Any]) -> List[str]:
     issues: List[str] = []
 
     # timezone sanity
-    cfg_tz = settings.get("account_timezone") or settings.get("timezone") or DEFAULT_TZ
+    cfg_tz = settings.get("account", {}).get("timezone") or settings.get("account_timezone") or settings.get("timezone") or DEFAULT_TZ
     env_tz = os.getenv("TIMEZONE")
     if env_tz and env_tz != cfg_tz:
         issues.append(f"Timezone mismatch? config={cfg_tz} env={env_tz}")
@@ -740,7 +740,7 @@ def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dic
             # Check for low balance using configured thresholds
             balance = health_details.get("balance")
             if balance is not None:
-                currency = settings.get("economics", {}).get("currency", "EUR")
+                currency = settings.get("account", {}).get("currency") or settings.get("economics", {}).get("currency", "EUR")
                 critical_threshold = account_health_config.get("thresholds", {}).get("balance_critical_eur", 0.0)
                 if balance <= critical_threshold:
                     alert_account_balance_low(account_id, balance, currency)
