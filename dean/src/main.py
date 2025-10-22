@@ -309,7 +309,10 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         
         # Insert performance data (use upsert to handle duplicates)
         notify(f"🔍 Inserting performance data: {performance_data}")
-        result = supabase_client.table('performance_metrics').upsert(performance_data).execute()
+        result = supabase_client.table('performance_metrics').upsert(
+            performance_data,
+            on_conflict='ad_id,window_type,date_start'
+        ).execute()
         notify(f"✅ Performance data inserted: {result}")
         
         # Store in ad_lifecycle table
@@ -327,7 +330,10 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         
         # Insert lifecycle data (upsert to avoid duplicates)
         notify(f"🔍 Inserting lifecycle data: {lifecycle_data}")
-        result = supabase_client.table('ad_lifecycle').upsert(lifecycle_data).execute()
+        result = supabase_client.table('ad_lifecycle').upsert(
+            lifecycle_data,
+            on_conflict='ad_id,stage'
+        ).execute()
         notify(f"✅ Lifecycle data inserted: {result}")
         
     except Exception as e:

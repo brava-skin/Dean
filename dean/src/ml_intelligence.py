@@ -374,9 +374,9 @@ class FeatureEngineer:
             volatility_cols = ['ctr', 'cpa', 'roas']
             for col in volatility_cols:
                 if col in df.columns:
-                    df[f'{col}_volatility'] = df.groupby('ad_id')[col].rolling(
-                        window=7, min_periods=3
-                    ).std()
+                    df[f'{col}_volatility'] = df.groupby('ad_id')[col].transform(
+                        lambda x: x.rolling(window=7, min_periods=3).std()
+                    )
             
             # Relative performance
             if 'cpa' in df.columns:
@@ -558,10 +558,10 @@ class XGBoostPredictor:
             # Serialize model
             model_data = pickle.dumps(model)
             
-            # Create model metadata
+            # Create model metadata (ensure JSON serializable)
             metadata = {
                 'feature_columns': feature_cols,
-                'feature_importance': feature_importance,
+                'feature_importance': {k: float(v) for k, v in feature_importance.items()},
                 'training_date': now_utc().isoformat(),
                 'model_type': model_type,
                 'stage': stage
