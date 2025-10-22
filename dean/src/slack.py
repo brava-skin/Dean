@@ -952,9 +952,74 @@ def client() -> SlackClient:
 
 def notify(text: str, severity: Literal["info", "warn", "error"] = "info", topic: Union[str, Literal["default", "alerts", "digest", "scale"]] = "default", ttl_seconds: Optional[int] = None) -> None:
     """
-    Raw text passthrough (used by your logs/healthchecks). Keep as-is.
+    Smart notification with frequency control and content filtering.
     """
-    client().notify_text(text, severity=severity, topic=topic, ttl_seconds=ttl_seconds)
+    # Import smart notifications
+    try:
+        from smart_notifications import smart_notifications
+        
+        # Determine message type from content
+        message_type = _determine_message_type(text, topic)
+        
+        # Check if we should send this notification
+        if not smart_notifications.should_send_notification(message_type, text):
+            # Log that we skipped it
+            smart_notifications.log_message(message_type, text, sent=False)
+            return
+        
+        # Format message with smart templates
+        formatted_text = smart_notifications.format_smart_message(message_type, text, {})
+        
+        # Send the notification
+        client().notify_text(formatted_text, severity=severity, topic=topic, ttl_seconds=ttl_seconds)
+        
+        # Log that we sent it
+        smart_notifications.log_message(message_type, text, sent=True)
+        
+    except ImportError:
+        # Fallback to original behavior if smart notifications not available
+        client().notify_text(text, severity=severity, topic=topic, ttl_seconds=ttl_seconds)
+    except Exception as e:
+        # Fallback to original behavior on any error
+        client().notify_text(text, severity=severity, topic=topic, ttl_seconds=ttl_seconds)
+
+def _determine_message_type(text: str, topic: str) -> str:
+    """Determine message type from content and topic."""
+    text_lower = text.lower()
+    
+    # Critical alerts
+    if any(keyword in text_lower for keyword in ['critical', 'error', 'failed', 'alert', '🚨']):
+        return 'critical_alert'
+    
+    # ML health reports
+    if any(keyword in text_lower for keyword in ['ml health', 'ml intelligence', 'model', 'learning', 'predictions']):
+        return 'ml_health_report'
+    
+    # Performance summaries
+    if any(keyword in text_lower for keyword in ['performance', 'spend', 'purchases', 'cpa', 'roas', 'summary']):
+        return 'performance_summary'
+    
+    # Data collection messages
+    if any(keyword in text_lower for keyword in ['data stored', 'data collected', 'stored in supabase', 'inserted']):
+        return 'data_collection'
+    
+    # ML analysis messages
+    if any(keyword in text_lower for keyword in ['ml analysis', 'analysis completed', 'models trained']):
+        return 'ml_analysis'
+    
+    # Learning events
+    if any(keyword in text_lower for keyword in ['learning', 'training', 'model validation']):
+        return 'learning_event'
+    
+    # Default based on topic
+    if topic == 'alerts':
+        return 'critical_alert'
+    elif topic == 'digest':
+        return 'performance_summary'
+    elif topic == 'scale':
+        return 'performance_summary'
+    else:
+        return 'info'
 
 def alert_kill(stage: str, entity_name: str, reason: str, metrics: Dict[str, Any], link: Optional[str] = None) -> None:
     """
