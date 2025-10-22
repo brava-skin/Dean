@@ -1034,6 +1034,7 @@ class MLIntelligenceSystem:
             for model_type, stage, target in models_to_train:
                 self.logger.info(f"🔧 [ML DEBUG] Processing {model_type} for {stage} stage...")
                 self.logger.info(f"🔧 [ML DEBUG] Force retrain: {force_retrain}")
+                self.logger.info(f"🔧 [ML DEBUG] Target variable: {target}")
                 
                 # Check if model exists and is recent (< 24h old)
                 if not force_retrain and self._should_use_cached_model(model_type, stage):
