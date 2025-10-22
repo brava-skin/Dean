@@ -85,17 +85,40 @@ testing:
   # Engine configuration
   engine:
     consecutive_ticks_required: 2
+    
     fairness:
       min_spend_before_kill_eur: 20
       min_runtime_hours: 12
+    
     learning:
       max_learning_budget_eur: 500
+    
+    tripwires:
+      lifetime_spend_no_purchase_eur: 45
+    
+    bayes:
+      prior_a: 2.0
+      prior_b: 300.0
+      sample_count: 32
+      kill_prob: 0.90
+    
+    adaptive_ctr:
+      floor_min: 0.008
+      floor_scale: 0.70
+      min_impressions: 300
+    
+    fatigue:
+      ewma_alpha: 0.30
+      drop_pct: 0.35
+    
     promotion:
       pause_after_promotion: true
       validation_budget_eur: 40
       placements: ["facebook", "instagram"]
+    
     queue:
       max_launches_per_tick: 8
+    
     attribution_windows: ["7d_click", "1d_view"]
 
 # ── Validation Stage Rules ────────────────────────────
@@ -165,6 +188,8 @@ validation:
       max_cpa_eur: 60
       min_roas: 1.2
       min_ctr: 0.005
+      cooldown_hours: 24
+    
     attribution_windows: ["7d_click", "1d_view"]
     min_days_with_purchase: 2
 

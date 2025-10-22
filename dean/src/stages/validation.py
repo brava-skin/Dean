@@ -647,7 +647,7 @@ def run_validation_tick(
             return {"error": "No validation adset ID configured"}
         
         # Get current time in account timezone
-        tz_name = settings.get("account_timezone", "Europe/Amsterdam")
+        tz_name = settings.get("account", {}).get("timezone") or settings.get("account_timezone", "Europe/Amsterdam")
         from zoneinfo import ZoneInfo
         local_tz = ZoneInfo(tz_name)
         now = datetime.now(local_tz)

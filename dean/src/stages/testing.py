@@ -1161,7 +1161,7 @@ def run_testing_tick(
             return {"error": "No testing adset ID configured"}
         
         # Get current time in account timezone
-        tz_name = settings.get("account_timezone", "Europe/Amsterdam")
+        tz_name = settings.get("account", {}).get("timezone") or settings.get("account_timezone", "Europe/Amsterdam")
         local_tz = ZoneInfo(tz_name)
         now = datetime.now(local_tz)
         midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
