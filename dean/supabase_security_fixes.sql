@@ -16,7 +16,7 @@ SELECT
     mm.version,
     mm.stage,
     mm.performance_metrics,
-    mm.feature_importance,
+    mm.features_used,
     mm.created_at,
     mm.updated_at,
     -- Calculate performance score from metrics
