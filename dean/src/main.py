@@ -1617,7 +1617,9 @@ def main() -> None:
             # Small delay to ensure data is fully committed to Supabase
             time.sleep(2)
             # Train models now that we have fresh data
+            notify("🔧 [ML DEBUG] About to call ml_system.initialize_models(force_retrain=True)")
             training_success = ml_system.initialize_models(force_retrain=True)
+            notify(f"🔧 [ML DEBUG] ml_system.initialize_models() returned: {training_success}")
             if training_success:
                 notify("🔧 [ML DEBUG] ✅ ML models trained successfully with fresh data")
             else:
