@@ -69,19 +69,24 @@ class RLAction:
     confidence: float
 
 class QLearningAgent:
-    """Q-Learning agent for ad management decisions."""
+    """Q-Learning agent for ad management decisions with persistence."""
     
     def __init__(self, learning_rate: float = 0.1, discount_factor: float = 0.95,
-                 exploration_rate: float = 0.1):
+                 exploration_rate: float = 0.1, supabase_client=None):
         self.lr = learning_rate
         self.gamma = discount_factor
         self.epsilon = exploration_rate
+        self.supabase = supabase_client
         
         # Q-table: state_hash -> {action -> q_value}
         self.q_table: Dict[str, Dict[str, float]] = {}
         
         self.actions = ['kill', 'promote', 'hold', 'scale_up', 'scale_down']
         self.logger = logging.getLogger(f"{__name__}.QLearningAgent")
+        
+        # Load existing Q-table if available
+        if self.supabase:
+            self.load_q_table()
     
     def _state_to_hash(self, state: RLState) -> str:
         """Convert state to hashable representation."""
@@ -170,6 +175,67 @@ class QLearningAgent:
         
         else:
             return 0.0
+    
+    def save_q_table(self):
+        """Save Q-table to Supabase for persistence."""
+        if not self.supabase:
+            return
+        
+        try:
+            import json
+            from datetime import datetime
+            
+            # Convert Q-table to JSON
+            q_table_json = json.dumps(self.q_table)
+            
+            # Save to a simple key-value store (using ml_models table)
+            data = {
+                'model_type': 'q_learning',
+                'stage': 'all',
+                'model_data': q_table_json,
+                'hyperparameters': {
+                    'learning_rate': self.lr,
+                    'gamma': self.gamma,
+                    'epsilon': self.epsilon
+                },
+                'trained_at': datetime.now().isoformat(),
+                'is_active': True
+            }
+            
+            self.supabase.table('ml_models').upsert(data, on_conflict='model_type,stage').execute()
+            self.logger.info(f"Saved Q-table with {len(self.q_table)} states")
+            
+        except Exception as e:
+            self.logger.error(f"Error saving Q-table: {e}")
+    
+    def load_q_table(self):
+        """Load Q-table from Supabase."""
+        if not self.supabase:
+            return
+        
+        try:
+            import json
+            
+            # Load latest Q-table
+            response = self.supabase.table('ml_models').select('model_data, hyperparameters').eq(
+                'model_type', 'q_learning'
+            ).eq('stage', 'all').eq('is_active', True).order('trained_at', desc=True).limit(1).execute()
+            
+            if response.data and len(response.data) > 0:
+                model_data = response.data[0].get('model_data')
+                if model_data:
+                    self.q_table = json.loads(model_data)
+                    self.logger.info(f"Loaded Q-table with {len(self.q_table)} states")
+                    
+                    # Load hyperparameters
+                    params = response.data[0].get('hyperparameters', {})
+                    if params:
+                        self.lr = params.get('learning_rate', self.lr)
+                        self.gamma = params.get('gamma', self.gamma)
+                        self.epsilon = params.get('epsilon', self.epsilon)
+            
+        except Exception as e:
+            self.logger.error(f"Error loading Q-table: {e}")
 
 # =====================================================
 # NEURAL NETWORKS
@@ -196,17 +262,21 @@ class LSTMPredictor(nn.Module if TORCH_AVAILABLE else object):
         )
         
         self.fc = nn.Linear(hidden_size, output_size)
+        self.relu = nn.ReLU()  # Add activation
     
     def forward(self, x):
-        """Forward pass."""
+        """Forward pass with proper activations."""
         # x shape: (batch, seq_len, input_size)
         lstm_out, _ = self.lstm(x)
         
         # Take last output
         last_output = lstm_out[:, -1, :]
         
-        # Fully connected layer
-        out = self.fc(last_output)
+        # Apply ReLU activation
+        activated = self.relu(last_output)
+        
+        # Fully connected layer (no activation for regression)
+        out = self.fc(activated)
         
         return out
 

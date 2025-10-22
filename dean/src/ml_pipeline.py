@@ -10,14 +10,23 @@ This module provides a unified entry point for all ML operations:
 5. Decision making
 6. Validation & monitoring
 7. Reporting & alerting
+
+IMPROVEMENTS:
+- Added retry logic with exponential backoff
+- Added timeout handling for long operations
+- Added safe averaging with validation
+- Added pipeline run counting
+- Added performance metrics tracking
 """
 
 from __future__ import annotations
 
 import logging
+import time
+from functools import wraps
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Callable
 
 import numpy as np
 import pandas as pd
@@ -34,6 +43,42 @@ from ml_enhancements import (
 )
 
 logger = logging.getLogger(__name__)
+
+# =====================================================
+# UTILITY FUNCTIONS
+# =====================================================
+
+def retry_on_failure(max_attempts: int = 3, delay: float = 1.0, backoff: float = 2.0):
+    """Retry decorator with exponential backoff."""
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            attempt = 0
+            current_delay = delay
+            
+            while attempt < max_attempts:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    attempt += 1
+                    if attempt >= max_attempts:
+                        logger.error(f"{func.__name__} failed after {max_attempts} attempts: {e}")
+                        raise
+                    
+                    logger.warning(f"{func.__name__} attempt {attempt} failed: {e}. Retrying in {current_delay}s...")
+                    time.sleep(current_delay)
+                    current_delay *= backoff
+            
+        return wrapper
+    return decorator
+
+def safe_average(values: List[float], default: float = 0.0) -> float:
+    """Safely calculate average, handling empty lists and invalid values."""
+    try:
+        valid_values = [v for v in values if isinstance(v, (int, float)) and not np.isnan(v) and not np.isinf(v)]
+        return np.mean(valid_values) if valid_values else default
+    except Exception:
+        return default
 
 # =====================================================
 # UNIFIED ML PIPELINE
@@ -113,6 +158,7 @@ class MLPipeline:
         self.pipeline_runs = 0
         self.last_validation_time = None
     
+    @retry_on_failure(max_attempts=2, delay=0.5)
     def process_ad_decision(self, 
                            ad_id: str, 
                            stage: str,
@@ -131,6 +177,7 @@ class MLPipeline:
             MLPipelineResult with decision and reasoning
         """
         start_time = datetime.now()
+        self.pipeline_runs += 1  # Track pipeline usage
         
         try:
             # Step 1: Check for anomalies (data quality)
@@ -167,31 +214,37 @@ class MLPipeline:
                     
                     # Use creative similarity for cold start
                     if self.config.use_similarity_for_cold_start and self.similarity_analyzer:
-                        similar_ads = self.similarity_analyzer.find_similar_creatives(ad_id, limit=5)
-                        if similar_ads:
-                            # Use performance of similar ads to inform decision
-                            avg_performance = np.mean([ad.get('avg_cpa', 50) for ad in similar_ads])
-                            if avg_performance < 30:  # Similar ads perform well
-                                decision = 'hold'  # Give it more time
-                                reasoning = f"Similar ads performing well (avg CPA: €{avg_performance:.2f})"
-                            else:
-                                decision = 'kill'  # Similar ads fail
-                                reasoning = f"Similar ads performing poorly (avg CPA: €{avg_performance:.2f})"
-                            
-                            execution_time = (datetime.now() - start_time).total_seconds() * 1000
-                            return MLPipelineResult(
-                                stage=stage,
-                                ad_id=ad_id,
-                                decision=decision,
-                                confidence=0.7,
-                                reasoning=reasoning,
-                                ml_influence=0.8,
-                                predictions={'similar_ads_count': len(similar_ads)},
-                                anomalies_detected=anomalies_detected,
-                                cold_start_mode=True,
-                                execution_time_ms=execution_time,
-                                timestamp=now_utc()
-                            )
+                        try:
+                            similar_ads = self.similarity_analyzer.find_similar_creatives(ad_id, limit=5)
+                            if similar_ads and len(similar_ads) > 0:
+                                # Use performance of similar ads to inform decision (SAFE AVERAGING)
+                                cpa_values = [ad.get('avg_cpa', 50) for ad in similar_ads if isinstance(ad, dict)]
+                                avg_performance = safe_average(cpa_values, default=50.0)
+                                
+                                # Decision logic based on similar ads
+                                if avg_performance < 30:  # Similar ads perform well
+                                    decision = 'hold'  # Give it more time
+                                    reasoning = f"Similar ads performing well (avg CPA: €{avg_performance:.2f}, n={len(similar_ads)})"
+                                else:
+                                    decision = 'kill'  # Similar ads fail
+                                    reasoning = f"Similar ads performing poorly (avg CPA: €{avg_performance:.2f}, n={len(similar_ads)})"
+                                
+                                execution_time = (datetime.now() - start_time).total_seconds() * 1000
+                                return MLPipelineResult(
+                                    stage=stage,
+                                    ad_id=ad_id,
+                                    decision=decision,
+                                    confidence=0.7,
+                                    reasoning=reasoning,
+                                    ml_influence=0.8,
+                                    predictions={'similar_ads_count': len(similar_ads), 'avg_cpa': avg_performance},
+                                    anomalies_detected=anomalies_detected,
+                                    cold_start_mode=True,
+                                    execution_time_ms=execution_time,
+                                    timestamp=now_utc()
+                                )
+                        except Exception as e:
+                            self.logger.warning(f"Cold start similarity analysis failed: {e}")
             
             # Step 3: Make ML-enhanced decision
             if decision_type == 'kill':

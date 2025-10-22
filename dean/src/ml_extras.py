@@ -194,14 +194,16 @@ class CompetitorAnalyzer:
             competitor_ads = []
             
             for term in search_terms:
+                # Use correct API endpoint for ALL ad types (not just political)
                 url = f"https://graph.facebook.com/v18.0/ads_archive"
                 params = {
                     'access_token': self.access_token,
                     'search_terms': term,
                     'ad_reached_countries': country,
-                    'ad_type': 'POLITICAL_AND_ISSUE_ADS',
+                    'ad_type': 'ALL',  # FIX: Changed from POLITICAL_AND_ISSUE_ADS to ALL
                     'fields': 'id,ad_creative_bodies,ad_creative_link_titles,ad_delivery_start_time,impressions,spend',
-                    'limit': limit
+                    'limit': limit,
+                    'search_page_ids': ''  # Empty to search all pages
                 }
                 
                 response = requests.get(url, params=params, timeout=30)
@@ -320,6 +322,18 @@ class PortfolioOptimizer:
             predicted_roas = np.array([ad.get('predicted_roas', 1.0) for ad in ad_data])
             min_budgets = np.array([ad.get('min_budget', 5.0) for ad in ad_data])
             max_budgets = np.array([ad.get('max_budget', 100.0) for ad in ad_data])
+            
+            # VALIDATION: Check if constraints are feasible
+            total_min_budget = np.sum(min_budgets)
+            total_max_budget = np.sum(max_budgets)
+            
+            if total_budget < total_min_budget:
+                self.logger.warning(f"Total budget ({total_budget}) < sum of min budgets ({total_min_budget}). Using proportional allocation.")
+                return self._proportional_allocation(ad_data, total_budget)
+            
+            if total_budget > total_max_budget:
+                self.logger.warning(f"Total budget ({total_budget}) > sum of max budgets ({total_max_budget}). Capping at max.")
+                total_budget = total_max_budget
             
             # Objective function (negative because we minimize)
             def objective(budgets):
