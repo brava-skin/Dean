@@ -1608,6 +1608,19 @@ def main() -> None:
         except Exception:
             pass
 
+    # ML Model Training (if ML mode enabled and data is available)
+    if ml_mode_enabled and ml_system:
+        try:
+            notify("🔧 [ML DEBUG] Starting ML model training after data collection...")
+            # Train models now that we have fresh data
+            training_success = ml_system.initialize_models(force_retrain=True)
+            if training_success:
+                notify("🔧 [ML DEBUG] ✅ ML models trained successfully with fresh data")
+            else:
+                notify("🔧 [ML DEBUG] ❌ ML model training failed")
+        except Exception as e:
+            notify(f"🔧 [ML DEBUG] ML model training failed: {e}")
+
     # ML-Enhanced Reporting (if ML mode enabled)
     if ml_mode_enabled and reporting_system:
         try:
