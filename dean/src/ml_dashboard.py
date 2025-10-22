@@ -113,14 +113,23 @@ class MLDashboard:
     def _get_model_metrics(self, since: str) -> Dict[str, Any]:
         """Get model training metrics."""
         try:
+            # FIX: accuracy_score doesn't exist - it's in performance_metrics JSONB
             response = self.client.table('ml_models').select(
-                'id, accuracy_score, trained_at'
+                'id, performance_metrics, trained_at'
             ).gte('trained_at', since).execute()
             
             if not response.data:
                 return {'avg_accuracy': 0.0, 'count': 0}
             
-            accuracies = [m.get('accuracy_score', 0) for m in response.data if m.get('accuracy_score') is not None]
+            # Extract test_r2 from performance_metrics as a proxy for accuracy
+            accuracies = []
+            for m in response.data:
+                perf_metrics = m.get('performance_metrics', {})
+                if isinstance(perf_metrics, dict):
+                    # Use test_r2 or cv_score as accuracy proxy
+                    accuracy = perf_metrics.get('test_r2') or perf_metrics.get('cv_score', 0)
+                    if accuracy and not (np.isnan(accuracy) or np.isinf(accuracy)):
+                        accuracies.append(float(accuracy))
             
             return {
                 'avg_accuracy': np.mean(accuracies) if accuracies else 0.0,

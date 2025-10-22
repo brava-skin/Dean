@@ -54,9 +54,11 @@ class ModelValidator:
             # Get predictions from last N days
             start_date = (datetime.now() - timedelta(days=days_back)).isoformat()
             
+            # FIX: ml_predictions doesn't have model_type column, only stage and prediction_type
+            # We need to filter by stage and check the linked model's type
             predictions_response = self.client.table('ml_predictions').select('*').eq(
-                'model_type', model_type
-            ).eq('stage', stage).gte('created_at', start_date).execute()
+                'stage', stage
+            ).gte('created_at', start_date).execute()
             
             if not predictions_response.data or len(predictions_response.data) < 5:
                 return None

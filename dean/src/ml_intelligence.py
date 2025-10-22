@@ -656,10 +656,20 @@ class XGBoostPredictor:
             # Serialize model
             model_data = pickle.dumps(model)
             
-            # Create model metadata (ensure JSON serializable)
+            # Create model metadata (ensure JSON serializable) - FIX: sanitize inf/nan
+            def sanitize_float(val):
+                """Convert to JSON-safe float."""
+                try:
+                    f = float(val)
+                    if np.isnan(f) or np.isinf(f):
+                        return 0.0
+                    return f
+                except:
+                    return 0.0
+            
             metadata = {
                 'feature_columns': feature_cols,
-                'feature_importance': {k: float(v) for k, v in feature_importance.items()},
+                'feature_importance': {k: sanitize_float(v) for k, v in feature_importance.items()},
                 'training_date': now_utc().isoformat(),
                 'model_type': model_type,
                 'stage': stage
@@ -672,9 +682,9 @@ class XGBoostPredictor:
             performance_metrics = {
                 'feature_count': int(len(feature_cols)),
                 'model_size_bytes': int(len(model_data)),
-                'cv_score': float(confidence_data.get('cv_score', 0)),
-                'test_r2': float(confidence_data.get('test_r2', 0)),
-                'test_mae': float(confidence_data.get('test_mae', 0)),
+                'cv_score': sanitize_float(confidence_data.get('cv_score', 0)),
+                'test_r2': sanitize_float(confidence_data.get('test_r2', 0)),
+                'test_mae': sanitize_float(confidence_data.get('test_mae', 0)),
                 'ensemble_size': int(confidence_data.get('ensemble_size', 1))
             }
             
