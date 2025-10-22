@@ -462,14 +462,21 @@ class XGBoostPredictor:
             self.logger.info(f"🔧 [ML DEBUG] Target column: {target_col}")
             
             # Get training data
+            self.logger.info(f"🔧 [ML DEBUG] Querying Supabase for {stage} stage data...")
             df = self.supabase.get_performance_data(stages=[stage])
             self.logger.info(f"🔧 [ML DEBUG] Retrieved data shape: {df.shape}")
             self.logger.info(f"🔧 [ML DEBUG] Data columns: {list(df.columns)}")
-            self.logger.info(f"🔧 [ML DEBUG] Data sample: {df.head(2).to_dict() if not df.empty else 'Empty DataFrame'}")
+            if not df.empty:
+                self.logger.info(f"🔧 [ML DEBUG] Data sample: {df.head(2).to_dict()}")
+                self.logger.info(f"🔧 [ML DEBUG] Target column '{target_col}' values: {df[target_col].tolist() if target_col in df.columns else 'Column not found'}")
+            else:
+                self.logger.info(f"🔧 [ML DEBUG] Empty DataFrame - no data available")
             
             if df.empty:
                 self.logger.warning(f"🔧 [ML DEBUG] No data available for training {model_type} model for {stage}")
                 self.logger.warning(f"🔧 [ML DEBUG] DataFrame empty: {df.empty}, Length: {len(df)}")
+                self.logger.warning(f"🔧 [ML DEBUG] This means no historical data exists for {stage} stage")
+                self.logger.warning(f"🔧 [ML DEBUG] Models will be trained when data becomes available")
                 return False
             
             # Prepare data
@@ -482,6 +489,13 @@ class XGBoostPredictor:
             if len(X) == 0:
                 self.logger.warning(f"🔧 [ML DEBUG] No features available for training {model_type} model")
                 self.logger.warning(f"🔧 [ML DEBUG] X shape: {X.shape}, y shape: {y.shape}")
+                self.logger.warning(f"🔧 [ML DEBUG] This usually means insufficient data or feature engineering failed")
+                return False
+            
+            # Check if we have enough data for training
+            if len(X) < 2:
+                self.logger.warning(f"🔧 [ML DEBUG] Insufficient data for training: {len(X)} samples (need at least 2)")
+                self.logger.warning(f"🔧 [ML DEBUG] Cannot train {model_type} model with {len(X)} samples")
                 return False
             
             # Split data
@@ -780,15 +794,32 @@ class XGBoostPredictor:
             
             model_data = response.data[0]
             
-            # FIX: Handle both hex and direct pickle data
+            # FIX: Handle corrupted model data gracefully
             try:
-                if model_data['model_data'].startswith('80'):  # Pickle protocol header
-                    model_bytes = bytes.fromhex(model_data['model_data'])
+                model_data_str = model_data['model_data']
+                self.logger.info(f"🔧 [ML DEBUG] Model data type: {type(model_data_str)}")
+                self.logger.info(f"🔧 [ML DEBUG] Model data length: {len(model_data_str)}")
+                self.logger.info(f"🔧 [ML DEBUG] Model data preview: {model_data_str[:50]}...")
+                
+                # Try different decoding methods
+                if isinstance(model_data_str, str):
+                    if model_data_str.startswith('80'):  # Pickle protocol header
+                        self.logger.info(f"🔧 [ML DEBUG] Attempting hex decode...")
+                        model_bytes = bytes.fromhex(model_data_str)
+                    else:
+                        self.logger.info(f"🔧 [ML DEBUG] Attempting latin-1 encode...")
+                        model_bytes = model_data_str.encode('latin-1')
                 else:
-                    model_bytes = model_data['model_data'].encode('latin-1')
+                    self.logger.info(f"🔧 [ML DEBUG] Using data as-is...")
+                    model_bytes = model_data_str
+                
+                self.logger.info(f"🔧 [ML DEBUG] Model bytes length: {len(model_bytes)}")
                 model = pickle.loads(model_bytes)
-            except (ValueError, UnicodeDecodeError) as e:
-                self.logger.warning(f"Could not load model {model_type} for {stage}: {e}")
+                self.logger.info(f"🔧 [ML DEBUG] Model loaded successfully: {type(model)}")
+                
+            except (ValueError, UnicodeDecodeError, pickle.UnpicklingError) as e:
+                self.logger.warning(f"🔧 [ML DEBUG] Could not load model {model_type} for {stage}: {e}")
+                self.logger.warning(f"🔧 [ML DEBUG] Model data appears corrupted, will retrain")
                 return False
             
             # Create scaler (simplified - in production, store scaler separately)
