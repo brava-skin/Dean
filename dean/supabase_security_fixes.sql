@@ -11,22 +11,17 @@ DROP VIEW IF EXISTS public.ml_model_performance CASCADE;
 
 CREATE VIEW public.ml_model_performance AS
 SELECT 
-    mm.id,
     mm.model_type,
-    mm.version,
     mm.stage,
+    mm.version,
+    mm.is_active,
     mm.performance_metrics,
-    mm.features_used,
-    mm.created_at,
-    mm.updated_at,
-    -- Calculate performance score from metrics
-    COALESCE(
-        (mm.performance_metrics->>'test_r2')::float,
-        (mm.performance_metrics->>'cv_score')::float,
-        0.0
-    ) as performance_score
+    COUNT(mp.id) as prediction_count,
+    AVG(mp.confidence_score) as avg_confidence
 FROM ml_models mm
-WHERE mm.is_active = true;
+LEFT JOIN ml_predictions mp ON mm.id = mp.model_id
+WHERE mm.is_active = true
+GROUP BY mm.model_type, mm.stage, mm.version, mm.is_active, mm.performance_metrics;
 
 -- Drop and recreate current_active_ads view without SECURITY DEFINER
 DROP VIEW IF EXISTS public.current_active_ads CASCADE;
@@ -34,22 +29,14 @@ DROP VIEW IF EXISTS public.current_active_ads CASCADE;
 CREATE VIEW public.current_active_ads AS
 SELECT 
     al.ad_id,
-    al.creative_id,
-    al.campaign_id,
-    al.adset_id,
     al.stage,
-    al.status,
     al.lifecycle_id,
     al.created_at,
-    al.updated_at,
-    -- Get latest performance data
     pm.spend,
     pm.impressions,
     pm.clicks,
     pm.purchases,
-    pm.ctr,
-    pm.cpa,
-    pm.roas
+    pm.ctr
 FROM ad_lifecycle al
 LEFT JOIN LATERAL (
     SELECT *
@@ -73,18 +60,43 @@ DROP EXTENSION IF EXISTS vector CASCADE;
 CREATE EXTENSION IF NOT EXISTS vector SCHEMA ml_schema;
 
 -- Update creative_intelligence table to use ml_schema.vector
--- First, add new column with correct type
-ALTER TABLE public.creative_intelligence 
-ADD COLUMN IF NOT EXISTS similarity_vector_new ml_schema.vector(384);
-
--- Copy data from old column to new column (if data exists)
-UPDATE public.creative_intelligence 
-SET similarity_vector_new = similarity_vector::ml_schema.vector(384)
-WHERE similarity_vector IS NOT NULL;
-
--- Drop old column and rename new one
-ALTER TABLE public.creative_intelligence DROP COLUMN IF EXISTS similarity_vector;
-ALTER TABLE public.creative_intelligence RENAME COLUMN similarity_vector_new TO similarity_vector;
+-- Check if column already exists with correct type
+DO $$
+BEGIN
+    -- Check if similarity_vector column exists and is of correct type
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'creative_intelligence' 
+        AND column_name = 'similarity_vector' 
+        AND table_schema = 'public'
+    ) THEN
+        -- Column exists, check if it's the correct type
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'creative_intelligence' 
+            AND column_name = 'similarity_vector' 
+            AND data_type = 'USER-DEFINED'
+            AND udt_name = 'vector'
+        ) THEN
+            -- Column exists but wrong type, need to convert
+            ALTER TABLE public.creative_intelligence 
+            ADD COLUMN IF NOT EXISTS similarity_vector_new ml_schema.vector(384);
+            
+            -- Copy data if old column has data
+            UPDATE public.creative_intelligence 
+            SET similarity_vector_new = similarity_vector::ml_schema.vector(384)
+            WHERE similarity_vector IS NOT NULL;
+            
+            -- Drop old column and rename new one
+            ALTER TABLE public.creative_intelligence DROP COLUMN IF EXISTS similarity_vector;
+            ALTER TABLE public.creative_intelligence RENAME COLUMN similarity_vector_new TO similarity_vector;
+        END IF;
+    ELSE
+        -- Column doesn't exist, create it
+        ALTER TABLE public.creative_intelligence 
+        ADD COLUMN similarity_vector ml_schema.vector(384);
+    END IF;
+END $$;
 
 -- 3. FIX RLS INITIALIZATION PLAN (WARN LEVEL)
 -- Optimize RLS policies for meta_creatives table
