@@ -2,9 +2,14 @@ name: Dean ML-Enhanced Automation
 
 on:
   schedule:
-    # Run every hour for Meta Ads monitoring
-    # Public repo = unlimited free GitHub Actions minutes
-    - cron: '0 * * * *'
+    # Micro-batches to reduce API spike and prevent UI interference
+    # Spread across the hour to avoid overwhelming Meta's API
+    - cron: '7 * * * *'   # 07 minutes past hour
+    - cron: '17 * * * *'  # 17 minutes past hour  
+    - cron: '27 * * * *'  # 27 minutes past hour
+    - cron: '37 * * * *'  # 37 minutes past hour
+    - cron: '47 * * * *'  # 47 minutes past hour
+    - cron: '57 * * * *'  # 57 minutes past hour
   workflow_dispatch: # Allow manual triggering
 
 jobs:
@@ -77,7 +82,7 @@ jobs:
         # Optional: Economics
         BREAKEVEN_CPA: ${{ secrets.BREAKEVEN_CPA }}
         COGS_PER_PURCHASE: ${{ secrets.COGS_PER_PURCHASE }}
-        USD_EUR_RATE: ${{ secrets.USD_EUR_RATE }}
+        USD_EUR_RATE: ${{ secrets.USD_EUR_RATE || '1.0' }}
         
         # ML System Configuration
         ML_MODE: "true"

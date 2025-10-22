@@ -707,7 +707,7 @@ def run_testing_tick(
                 summary["kills"] += 1
                 
                 # Immediately launch a new creative to replace the killed ad
-                _launch_replacement_creative(meta, store, queue_df, adset_id, settings, instagram_actor_id, summary)
+                _launch_replacement_creative(meta, store, queue_df, adset_id, settings, instagram_actor_id, summary, set_supabase_status)
                 
             except Exception as e:
                 notify(f"❗ [TEST] Failed to pause {name}: {e}")
@@ -753,7 +753,7 @@ def run_testing_tick(
                 summary["kills"] += 1
                 
                 # Immediately launch a new creative to replace the killed ad
-                _launch_replacement_creative(meta, store, queue_df, adset_id, settings, instagram_actor_id, summary)
+                _launch_replacement_creative(meta, store, queue_df, adset_id, settings, instagram_actor_id, summary, set_supabase_status)
                 
             except Exception as e:
                 notify(f"❗ [TEST] Failed to pause {name}: {e}")
@@ -1029,7 +1029,7 @@ def run_testing_tick(
     return summary
 
 
-def _launch_replacement_creative(meta, store, queue_df, adset_id, settings, instagram_actor_id, summary):
+def _launch_replacement_creative(meta, store, queue_df, adset_id, settings, instagram_actor_id, summary, set_supabase_status):
     """
     Immediately launch a new creative to replace a killed ad.
     This ensures we don't wait until the next tick to launch a replacement.

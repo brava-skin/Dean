@@ -47,8 +47,11 @@ BUDGET_MAX_STEP_PCT = float(os.getenv("BUDGET_MAX_STEP_PCT", "200") or 200.0)
 CB_FAILS     = int(os.getenv("META_CB_FAILS", "5") or 5)
 CB_RESET_SEC = int(os.getenv("META_CB_RESET_SEC", "120") or 120)
 
-# Rate limiting
-META_REQUEST_DELAY = float(os.getenv("META_REQUEST_DELAY", "0.5") or 0.5)  # Delay between requests
+# Rate limiting - Enhanced for UI compatibility
+META_REQUEST_DELAY = float(os.getenv("META_REQUEST_DELAY", "0.8") or 0.8)  # Increased delay
+META_REQUEST_JITTER = 0.3  # Random jitter to avoid burst alignment
+META_MAX_CONCURRENT_INSIGHTS = int(os.getenv("META_MAX_CONCURRENT_INSIGHTS", "3") or 3)  # Hard concurrency cap
+META_USAGE_THRESHOLD = 0.8  # Pause when usage > 80%
 
 # Enhanced rate limiting configuration
 META_API_TIER = os.getenv("META_API_TIER", "development")  # "development" or "standard"
@@ -235,6 +238,12 @@ class RateLimitManager:
         # App-level limits (for Insights Platform)
         self.app_level_blocked_until = 0
         
+        # Usage monitoring for UI compatibility
+        self.insights_throttle_usage = 0.0
+        self.buc_usage_percent = defaultdict(float)  # BUC -> usage percentage
+        self.ad_account_usage_percent = defaultdict(float)  # Ad account -> usage percentage
+        self.app_usage_percent = 0.0
+        
         # Error tracking
         self.error_counts = defaultdict(int)
         self.last_error_reset = time.time()
@@ -335,15 +344,15 @@ class RateLimitManager:
             
             self.error_counts[f"{code}_{subcode}"] += 1
             
-            # Handle different rate limit error types
+            # Handle different rate limit error types with enhanced backoff
             if code == 4:  # Application request limit reached
-                if subcode == 1504022:  # Ads Insights Platform rate limit
-                    wait_time = 60.0
+                if subcode == 1504022:  # Ads Insights Platform rate limit (UI interference)
+                    wait_time = 120.0  # Increased from 60s to 120s
                     self.app_level_blocked_until = current_time + wait_time
-                    notify(f"⏳ Ads Insights Platform rate limit hit. Blocked for {wait_time:.1f}s")
+                    notify(f"⏳ Ads Insights Platform rate limit hit (UI interference). Blocked for {wait_time:.1f}s")
                     return wait_time
                 elif subcode == 1504039:  # General app-level rate limit
-                    wait_time = 30.0
+                    wait_time = 90.0  # Increased from 30s to 90s
                     self.app_level_blocked_until = current_time + wait_time
                     notify(f"⏳ App-level rate limit hit. Blocked for {wait_time:.1f}s")
                     return wait_time
@@ -652,9 +661,12 @@ class MetaClient:
             time.sleep(wait_time)
 
     def _request_delay(self) -> None:
-        """Add delay between API requests to prevent rate limiting."""
+        """Add delay between API requests to prevent rate limiting with jitter."""
         if META_REQUEST_DELAY > 0:
-            time.sleep(META_REQUEST_DELAY)
+            import random
+            jitter = random.uniform(-META_REQUEST_JITTER, META_REQUEST_JITTER)
+            delay = max(0.1, META_REQUEST_DELAY + jitter)  # Minimum 0.1s
+            time.sleep(delay)
 
     def _graph_post(self, endpoint: str, payload: Dict[str, Any], buc_type: str = "ads_management") -> Dict[str, Any]:
         # Check rate limits before making request
