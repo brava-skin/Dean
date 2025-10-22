@@ -1387,15 +1387,10 @@ def main() -> None:
                     # Store performance data in Supabase first
                     supabase_client = _get_supabase()
                     if supabase_client:
-                        print(f"🔍 Testing data collected: {len(overall['testing'])} items")
+                        notify(f"📊 Testing data collected: {len(overall['testing'])} items")
                         for ad_id, ad_data in overall["testing"].items():
-                            print(f"🔍 Testing data item: {ad_id} = {ad_data}")
-                            print(f"🔍 Is dict: {isinstance(ad_data, dict)}, Has spend: {'spend' in ad_data if isinstance(ad_data, dict) else False}")
                             if isinstance(ad_data, dict) and 'spend' in ad_data:
-                                print(f"🔍 Storing testing data for {ad_id}: {ad_data}")
                                 store_performance_data_in_supabase(supabase_client, ad_data, "testing")
-                            else:
-                                print(f"🔍 Skipping {ad_id} - not a dict or no spend field")
                         notify("📊 Performance data stored in Supabase for ML system")
                     
                     # Now run ML analysis on the stored data

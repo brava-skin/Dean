@@ -131,14 +131,7 @@ class SupabaseMLClient:
             start_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
             query = query.gte('date_start', start_date)
             
-            self.logger.info(f"🔧 [ML DEBUG] Querying performance_metrics with stages: {stages}")
-            self.logger.info(f"🔧 [ML DEBUG] Date filter: date_start >= {start_date}")
-            
             response = query.execute()
-            
-            self.logger.info(f"🔧 [ML DEBUG] Query returned {len(response.data) if response.data else 0} rows")
-            if response.data:
-                self.logger.info(f"🔧 [ML DEBUG] Sample data: {response.data[0] if response.data else 'None'}")
             
             if not response.data:
                 return pd.DataFrame()
@@ -465,46 +458,23 @@ class XGBoostPredictor:
     def train_model(self, model_type: str, stage: str, target_col: str) -> bool:
         """Train XGBoost model for specific prediction task."""
         try:
-            self.logger.info(f"🔧 [ML DEBUG] Starting {model_type} training for {stage}")
-            self.logger.info(f"🔧 [ML DEBUG] Target column: {target_col}")
-            
             # Get training data
-            self.logger.info(f"🔧 [ML DEBUG] Querying Supabase for {stage} stage data...")
             df = self.supabase.get_performance_data(stages=[stage])
-            self.logger.info(f"🔧 [ML DEBUG] Retrieved data shape: {df.shape}")
-            self.logger.info(f"🔧 [ML DEBUG] Data columns: {list(df.columns)}")
-            if not df.empty:
-                self.logger.info(f"🔧 [ML DEBUG] Data sample: {df.head(2).to_dict()}")
-                self.logger.info(f"🔧 [ML DEBUG] Target column '{target_col}' values: {df[target_col].tolist() if target_col in df.columns else 'Column not found'}")
-                self.logger.info(f"🔧 [ML DEBUG] ✅ {stage} stage HAS DATA - proceeding with training")
-            else:
-                self.logger.info(f"🔧 [ML DEBUG] Empty DataFrame - no data available")
-                self.logger.info(f"🔧 [ML DEBUG] ❌ {stage} stage has NO DATA - skipping training")
             
             if df.empty:
-                self.logger.warning(f"🔧 [ML DEBUG] No data available for training {model_type} model for {stage}")
-                self.logger.warning(f"🔧 [ML DEBUG] DataFrame empty: {df.empty}, Length: {len(df)}")
-                self.logger.warning(f"🔧 [ML DEBUG] This means no historical data exists for {stage} stage")
-                self.logger.warning(f"🔧 [ML DEBUG] Models will be trained when data becomes available")
+                self.logger.warning(f"No data available for training {model_type} model for {stage}")
                 return False
             
             # Prepare data
-            self.logger.info(f"🔧 [ML DEBUG] Preparing training data...")
             X, y, feature_cols = self.prepare_training_data(df, target_col)
-            self.logger.info(f"🔧 [ML DEBUG] Features shape: X={X.shape}, y={y.shape}")
-            self.logger.info(f"🔧 [ML DEBUG] Feature columns: {feature_cols}")
-            self.logger.info(f"🔧 [ML DEBUG] Target values: {y[:5] if len(y) > 0 else 'Empty'}")
             
             if len(X) == 0:
-                self.logger.warning(f"🔧 [ML DEBUG] No features available for training {model_type} model")
-                self.logger.warning(f"🔧 [ML DEBUG] X shape: {X.shape}, y shape: {y.shape}")
-                self.logger.warning(f"🔧 [ML DEBUG] This usually means insufficient data or feature engineering failed")
+                self.logger.warning(f"No features available for training {model_type} model")
                 return False
             
             # Check if we have enough data for training
             if len(X) < 2:
-                self.logger.warning(f"🔧 [ML DEBUG] Insufficient data for training: {len(X)} samples (need at least 2)")
-                self.logger.warning(f"🔧 [ML DEBUG] Cannot train {model_type} model with {len(X)} samples")
+                self.logger.warning(f"Insufficient data for training: {len(X)} samples (need at least 2)")
                 return False
             
             # Split data
