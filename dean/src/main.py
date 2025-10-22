@@ -46,6 +46,11 @@ try:
     from adaptive_rules import IntelligentRuleEngine, RuleConfig, create_intelligent_rule_engine
     from performance_tracking import PerformanceTrackingSystem, create_performance_tracking_system
     from ml_reporting import MLReportingSystem, create_ml_reporting_system
+    from ml_enhancements import (
+        create_model_validator, create_data_progress_tracker, create_anomaly_detector,
+        create_time_series_forecaster, create_creative_similarity_analyzer, create_causal_impact_analyzer
+    )
+    from ml_decision_engine import create_ml_decision_engine
     ML_AVAILABLE = True
 except ImportError as e:
     print(f"⚠️ ML system not available: {e}")
@@ -62,6 +67,13 @@ except ImportError as e:
     def create_intelligent_rule_engine(*args, **kwargs): return None
     def create_performance_tracking_system(*args, **kwargs): return None
     def create_ml_reporting_system(*args, **kwargs): return None
+    def create_model_validator(*args, **kwargs): return None
+    def create_data_progress_tracker(*args, **kwargs): return None
+    def create_anomaly_detector(*args, **kwargs): return None
+    def create_time_series_forecaster(*args, **kwargs): return None
+    def create_creative_similarity_analyzer(*args, **kwargs): return None
+    def create_causal_impact_analyzer(*args, **kwargs): return None
+    def create_ml_decision_engine(*args, **kwargs): return None
 
 # Legacy modules (updated for ML integration)
 from storage import Store
@@ -1067,33 +1079,45 @@ def main() -> None:
     rule_engine_ml = None
     performance_tracker = None
     reporting_system = None
+    ml_decision_engine = None
+    model_validator = None
+    data_progress_tracker = None
+    anomaly_detector = None
+    time_series_forecaster = None
+    creative_similarity_analyzer = None
+    causal_impact_analyzer = None
     
     if ml_mode_enabled:
         try:
-            # Initialize ML system
-            ml_system = create_ml_system(
-                os.getenv("SUPABASE_URL"),
-                os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-            )
+            supabase_url = os.getenv("SUPABASE_URL")
+            supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+            
+            # Initialize core ML system
+            ml_system = create_ml_system(supabase_url, supabase_key)
             
             # Initialize intelligent rule engine
-            rule_engine_ml = create_intelligent_rule_engine(
-                os.getenv("SUPABASE_URL"),
-                os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
-                ml_system
-            )
+            rule_engine_ml = create_intelligent_rule_engine(supabase_url, supabase_key, ml_system)
             
             # Initialize performance tracker
-            performance_tracker = create_performance_tracking_system(
-                os.getenv("SUPABASE_URL"),
-                os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-            )
+            performance_tracker = create_performance_tracking_system(supabase_url, supabase_key)
             
             # Initialize reporting system
-            reporting_system = create_ml_reporting_system(
-                os.getenv("SUPABASE_URL"),
-                os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-            )
+            reporting_system = create_ml_reporting_system(supabase_url, supabase_key)
+            
+            # Initialize ML enhancements
+            ml_decision_engine = create_ml_decision_engine(ml_system, engine, confidence_threshold=0.7)
+            model_validator = create_model_validator(supabase_url, supabase_key)
+            data_progress_tracker = create_data_progress_tracker(supabase_url, supabase_key)
+            anomaly_detector = create_anomaly_detector(supabase_url, supabase_key)
+            time_series_forecaster = create_time_series_forecaster(supabase_url, supabase_key)
+            creative_similarity_analyzer = create_creative_similarity_analyzer(supabase_url, supabase_key)
+            causal_impact_analyzer = create_causal_impact_analyzer(supabase_url, supabase_key)
+            
+            # Show ML readiness for each stage
+            if data_progress_tracker:
+                for stage_name in ['testing', 'validation', 'scaling']:
+                    readiness = data_progress_tracker.get_ml_readiness(stage_name)
+                    notify(f"📊 {stage_name.title()}: {readiness.get('message', 'Unknown')}")
             
             notify("✅ ML system initialized successfully")
             

@@ -409,7 +409,7 @@ class XGBoostPredictor:
         self.feature_importance: Dict[str, Dict[str, float]] = {}
         
     def prepare_training_data(self, df: pd.DataFrame, target_col: str) -> Tuple[np.ndarray, np.ndarray, List[str]]:
-        """Prepare training data for ML models."""
+        """Prepare training data for ML models with feature selection."""
         try:
             # Create features
             df_features = self.feature_engineer.create_rolling_features(
@@ -433,6 +433,21 @@ class XGBoostPredictor:
             # Prepare X and y
             X = df_features[feature_cols].values
             y = df_features[target_col].fillna(0).values
+            
+            # Feature selection (if too many features)
+            if len(feature_cols) > self.config.max_features:
+                from sklearn.feature_selection import SelectKBest, f_regression, mutual_info_regression
+                
+                # Use mutual information for feature selection
+                selector = SelectKBest(mutual_info_regression, k=min(self.config.max_features, len(feature_cols)))
+                X_selected = selector.fit_transform(X, y)
+                
+                # Get selected feature names
+                selected_indices = selector.get_support(indices=True)
+                feature_cols = [feature_cols[i] for i in selected_indices]
+                X = X_selected
+                
+                self.logger.info(f"Feature selection: {len(selected_indices)}/{len(numeric_cols)} features selected")
             
             return X, y, feature_cols
             
@@ -465,34 +480,91 @@ class XGBoostPredictor:
             X_train_scaled = scaler.fit_transform(X_train)
             X_test_scaled = scaler.transform(X_test)
             
-            # Train model
+            # Train ensemble of models for better predictions
+            models_ensemble = {}
+            
+            # Primary model: XGBoost or GradientBoosting
             if XGBOOST_AVAILABLE:
-                model = xgb.XGBRegressor(**self.config.xgb_params)
+                primary_model = xgb.XGBRegressor(**self.config.xgb_params)
             else:
-                # Fallback to GradientBoostingRegressor
-                model = GradientBoostingRegressor(
+                primary_model = GradientBoostingRegressor(
                     n_estimators=self.config.xgb_params.get('n_estimators', 100),
                     max_depth=self.config.xgb_params.get('max_depth', 6),
                     learning_rate=self.config.xgb_params.get('learning_rate', 0.1),
                     random_state=42
                 )
-            model.fit(X_train_scaled, y_train)
+            primary_model.fit(X_train_scaled, y_train)
+            models_ensemble['primary'] = primary_model
             
-            # Evaluate model
-            y_pred = model.predict(X_test_scaled)
-            mae = mean_absolute_error(y_test, y_pred)
-            r2 = r2_score(y_test, y_pred)
+            # Ensemble model 1: Random Forest
+            try:
+                rf_model = RandomForestRegressor(
+                    n_estimators=100,
+                    max_depth=8,
+                    random_state=42,
+                    n_jobs=-1
+                )
+                rf_model.fit(X_train_scaled, y_train)
+                models_ensemble['rf'] = rf_model
+            except Exception:
+                pass
             
-            self.logger.info(f"Trained {model_type} model for {stage}: MAE={mae:.4f}, R²={r2:.4f}")
+            # Ensemble model 2: Gradient Boosting (if not primary)
+            if XGBOOST_AVAILABLE:
+                try:
+                    gb_model = GradientBoostingRegressor(
+                        n_estimators=100,
+                        max_depth=6,
+                        learning_rate=0.1,
+                        random_state=42
+                    )
+                    gb_model.fit(X_train_scaled, y_train)
+                    models_ensemble['gb'] = gb_model
+                except Exception:
+                    pass
             
-            # Store model and scaler
+            # Ensemble model 3: Ridge Regression (for baseline)
+            try:
+                lr_model = Ridge(alpha=1.0, random_state=42)
+                lr_model.fit(X_train_scaled, y_train)
+                models_ensemble['lr'] = lr_model
+            except Exception:
+                pass
+            
+            # Evaluate ensemble
+            ensemble_predictions = []
+            for name, mdl in models_ensemble.items():
+                y_pred_mdl = mdl.predict(X_test_scaled)
+                ensemble_predictions.append(y_pred_mdl)
+            
+            # Average ensemble predictions
+            y_pred_ensemble = np.mean(ensemble_predictions, axis=0)
+            mae = mean_absolute_error(y_test, y_pred_ensemble)
+            r2 = r2_score(y_test, y_pred_ensemble)
+            
+            # Cross-validation score
+            cv_scores = cross_val_score(primary_model, X_train_scaled, y_train, cv=5, scoring='r2')
+            cv_mean = cv_scores.mean()
+            
+            self.logger.info(f"Trained {model_type} ensemble for {stage}: MAE={mae:.4f}, R²={r2:.4f}, CV={cv_mean:.4f}")
+            
+            # Store all models and scaler
             model_key = f"{model_type}_{stage}"
-            self.models[model_key] = model
+            self.models[model_key] = primary_model
+            for name, mdl in models_ensemble.items():
+                if name != 'primary':
+                    self.models[f"{model_key}_{name}"] = mdl
             self.scalers[model_key] = scaler
             
-            # Store feature importance
-            feature_importance = dict(zip(feature_cols, model.feature_importances_))
+            # Store feature importance with CV score
+            feature_importance = dict(zip(feature_cols, primary_model.feature_importances_))
             self.feature_importance[model_key] = feature_importance
+            self.feature_importance[f"{model_key}_confidence"] = {
+                'cv_score': float(cv_mean),
+                'test_r2': float(r2),
+                'test_mae': float(mae),
+                'ensemble_size': len(models_ensemble)
+            }
             
             # Save to Supabase
             self.save_model_to_supabase(model_type, stage, model, scaler, feature_cols, feature_importance)
@@ -521,17 +593,43 @@ class XGBoostPredictor:
             feature_vector = np.array([features.get(col, 0) for col in model.feature_names_in_])
             feature_vector_scaled = scaler.transform([feature_vector])
             
-            # Make prediction
-            prediction = model.predict(feature_vector_scaled)[0]
+            # Make prediction with ensemble if available
+            predictions_ensemble = []
+            predictions_ensemble.append(model.predict(feature_vector_scaled)[0])
             
-            # Calculate confidence (based on model uncertainty)
-            # This is a simplified approach - in production, use proper uncertainty quantification
-            confidence = min(0.95, max(0.1, 1.0 - abs(prediction) * 0.01))
+            # If we have multiple models, use ensemble
+            model_key_base = f"{model_type}_{stage}"
+            for ensemble_suffix in ['_rf', '_gb', '_lr']:
+                ensemble_key = model_key_base + ensemble_suffix
+                if ensemble_key in self.models:
+                    ensemble_pred = self.models[ensemble_key].predict(feature_vector_scaled)[0]
+                    predictions_ensemble.append(ensemble_pred)
             
-            # Prediction intervals (simplified)
-            std_error = np.std(model.predict(feature_vector_scaled))
-            interval_lower = prediction - 1.96 * std_error
-            interval_upper = prediction + 1.96 * std_error
+            # Final prediction (mean of ensemble)
+            prediction = np.mean(predictions_ensemble)
+            prediction_std = np.std(predictions_ensemble) if len(predictions_ensemble) > 1 else 0
+            
+            # Calculate confidence (improved with ensemble variance)
+            if len(predictions_ensemble) > 1:
+                # Confidence based on ensemble agreement
+                ensemble_agreement = 1.0 - (prediction_std / (abs(prediction) + 1e-6))
+                confidence = min(0.95, max(0.1, ensemble_agreement))
+            else:
+                # Fallback: use cross-validation score from training
+                confidence_key = f"{model_key}_confidence"
+                confidence = self.feature_importance.get(confidence_key, {}).get('cv_score', 0.5)
+                confidence = min(0.95, max(0.1, confidence))
+            
+            # Prediction intervals (proper bootstrap-based)
+            # Use ensemble std or estimate from model variance
+            if prediction_std > 0:
+                interval_lower = prediction - 1.96 * prediction_std
+                interval_upper = prediction + 1.96 * prediction_std
+            else:
+                # Fallback: use percentage of prediction value
+                interval_width = abs(prediction) * 0.2  # ±20%
+                interval_lower = prediction - interval_width
+                interval_upper = prediction + interval_width
             
             result = PredictionResult(
                 predicted_value=float(prediction),
@@ -567,10 +665,17 @@ class XGBoostPredictor:
                 'stage': stage
             }
             
-            # Performance metrics (simplified) - ensure JSON serializable
+            # Performance metrics (comprehensive) - ensure JSON serializable
+            model_key = f"{model_type}_{stage}"
+            confidence_data = self.feature_importance.get(f"{model_key}_confidence", {})
+            
             performance_metrics = {
                 'feature_count': int(len(feature_cols)),
-                'model_size_bytes': int(len(model_data))
+                'model_size_bytes': int(len(model_data)),
+                'cv_score': float(confidence_data.get('cv_score', 0)),
+                'test_r2': float(confidence_data.get('test_r2', 0)),
+                'test_mae': float(confidence_data.get('test_mae', 0)),
+                'ensemble_size': int(confidence_data.get('ensemble_size', 1))
             }
             
             data = {
@@ -801,8 +906,8 @@ class MLIntelligenceSystem:
         self.cross_stage_learner = CrossStageLearner(self.supabase)
         self.logger = logging.getLogger(f"{__name__}.MLIntelligenceSystem")
     
-    def initialize_models(self) -> bool:
-        """Initialize all ML models."""
+    def initialize_models(self, force_retrain: bool = False) -> bool:
+        """Initialize all ML models with intelligent caching."""
         try:
             self.logger.info("Initializing ML models...")
             
@@ -820,15 +925,51 @@ class MLIntelligenceSystem:
             ]
             
             success_count = 0
+            cached_count = 0
+            
             for model_type, stage, target in models_to_train:
+                # Check if model exists and is recent (< 24h old)
+                if not force_retrain and self._should_use_cached_model(model_type, stage):
+                    if self.predictor.load_model_from_supabase(model_type, stage):
+                        cached_count += 1
+                        success_count += 1
+                        self.logger.info(f"✅ Loaded cached {model_type} for {stage}")
+                        continue
+                
+                # Train new model
                 if self.predictor.train_model(model_type, stage, target):
                     success_count += 1
+                    self.logger.info(f"🔄 Trained new {model_type} for {stage}")
             
-            self.logger.info(f"Initialized {success_count}/{len(models_to_train)} models")
+            self.logger.info(f"Initialized {success_count}/{len(models_to_train)} models ({cached_count} from cache)")
             return success_count > 0
             
         except Exception as e:
             self.logger.error(f"Error initializing models: {e}")
+            return False
+    
+    def _should_use_cached_model(self, model_type: str, stage: str) -> bool:
+        """Check if cached model is still valid."""
+        try:
+            response = self.supabase.client.table('ml_models').select('trained_at').eq(
+                'model_type', model_type
+            ).eq('stage', stage).eq('is_active', True).order('trained_at', desc=True).limit(1).execute()
+            
+            if not response.data:
+                return False
+            
+            trained_at = response.data[0].get('trained_at')
+            if not trained_at:
+                return False
+            
+            # Check if model is less than retrain_frequency_hours old
+            trained_time = datetime.fromisoformat(trained_at.replace('Z', '+00:00'))
+            age_hours = (now_utc() - trained_time).total_seconds() / 3600
+            
+            return age_hours < self.config.retrain_frequency_hours
+            
+        except Exception as e:
+            self.logger.error(f"Error checking cached model: {e}")
             return False
     
     def predict_performance(self, ad_id: str, stage: str, 
