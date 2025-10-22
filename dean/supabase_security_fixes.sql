@@ -281,14 +281,9 @@ AS $$
 $$;
 
 -- 10. FINAL OPTIMIZATIONS
--- Set optimal configuration for the ML system
-
--- Set work_mem for better performance with ML queries
-ALTER SYSTEM SET work_mem = '256MB';
-ALTER SYSTEM SET shared_preload_libraries = 'vector';
-
--- Reload configuration
-SELECT pg_reload_conf();
+-- Note: ALTER SYSTEM commands cannot run in transaction blocks
+-- These settings should be configured at the database level by Supabase
+-- work_mem and shared_preload_libraries are managed by Supabase infrastructure
 
 -- Success message
 DO $$
