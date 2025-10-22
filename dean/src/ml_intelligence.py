@@ -469,8 +469,10 @@ class XGBoostPredictor:
             if not df.empty:
                 self.logger.info(f"🔧 [ML DEBUG] Data sample: {df.head(2).to_dict()}")
                 self.logger.info(f"🔧 [ML DEBUG] Target column '{target_col}' values: {df[target_col].tolist() if target_col in df.columns else 'Column not found'}")
+                self.logger.info(f"🔧 [ML DEBUG] ✅ {stage} stage HAS DATA - proceeding with training")
             else:
                 self.logger.info(f"🔧 [ML DEBUG] Empty DataFrame - no data available")
+                self.logger.info(f"🔧 [ML DEBUG] ❌ {stage} stage has NO DATA - skipping training")
             
             if df.empty:
                 self.logger.warning(f"🔧 [ML DEBUG] No data available for training {model_type} model for {stage}")
@@ -1030,18 +1032,29 @@ class MLIntelligenceSystem:
             cached_count = 0
             
             for model_type, stage, target in models_to_train:
+                self.logger.info(f"🔧 [ML DEBUG] Processing {model_type} for {stage} stage...")
                 # Check if model exists and is recent (< 24h old)
                 if not force_retrain and self._should_use_cached_model(model_type, stage):
+                    self.logger.info(f"🔧 [ML DEBUG] Attempting to load cached {model_type} for {stage}...")
                     if self.predictor.load_model_from_supabase(model_type, stage):
                         cached_count += 1
                         success_count += 1
+                        self.logger.info(f"🔧 [ML DEBUG] ✅ Successfully loaded cached {model_type} for {stage}")
                         self.logger.info(f"✅ Loaded cached {model_type} for {stage}")
                         continue
+                    else:
+                        self.logger.warning(f"🔧 [ML DEBUG] ❌ Failed to load cached {model_type} for {stage} - will train new")
+                else:
+                    self.logger.info(f"🔧 [ML DEBUG] No cached model available for {model_type} in {stage} - will train new")
                 
                 # Train new model
+                self.logger.info(f"🔧 [ML DEBUG] Attempting to train new {model_type} for {stage}...")
                 if self.predictor.train_model(model_type, stage, target):
                     success_count += 1
+                    self.logger.info(f"🔧 [ML DEBUG] ✅ Successfully trained {model_type} for {stage}")
                     self.logger.info(f"🔄 Trained new {model_type} for {stage}")
+                else:
+                    self.logger.warning(f"🔧 [ML DEBUG] ❌ Failed to train {model_type} for {stage}")
             
             self.logger.info(f"Initialized {success_count}/{len(models_to_train)} models ({cached_count} from cache)")
             return success_count > 0
