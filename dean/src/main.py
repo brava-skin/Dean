@@ -1616,10 +1616,32 @@ def main() -> None:
             notify("🔧 [ML DEBUG] Starting ML model training after data collection...")
             # Small delay to ensure data is fully committed to Supabase
             time.sleep(2)
-            # Train models now that we have fresh data
-            notify("🔧 [ML DEBUG] About to call ml_system.initialize_models(force_retrain=True)")
-            training_success = ml_system.initialize_models(force_retrain=True)
-            notify(f"🔧 [ML DEBUG] ml_system.initialize_models() returned: {training_success}")
+            
+            # DIRECT APPROACH: Train testing stage models directly
+            notify("🔧 [ML DEBUG] Training testing stage models directly...")
+            try:
+                # Train performance_predictor for testing
+                notify("🔧 [ML DEBUG] Training performance_predictor for testing...")
+                perf_success = ml_system.predictor.train_model('performance_predictor', 'testing', 'cpa')
+                notify(f"🔧 [ML DEBUG] performance_predictor training result: {perf_success}")
+                
+                # Train roas_predictor for testing
+                notify("🔧 [ML DEBUG] Training roas_predictor for testing...")
+                roas_success = ml_system.predictor.train_model('roas_predictor', 'testing', 'roas')
+                notify(f"🔧 [ML DEBUG] roas_predictor training result: {roas_success}")
+                
+                # Train purchase_probability for testing
+                notify("🔧 [ML DEBUG] Training purchase_probability for testing...")
+                purchase_success = ml_system.predictor.train_model('purchase_probability', 'testing', 'purchases')
+                notify(f"🔧 [ML DEBUG] purchase_probability training result: {purchase_success}")
+                
+                training_success = perf_success or roas_success or purchase_success
+                notify(f"🔧 [ML DEBUG] Direct training results: perf={perf_success}, roas={roas_success}, purchase={purchase_success}")
+                
+            except Exception as e:
+                notify(f"🔧 [ML DEBUG] Direct training failed: {e}")
+                training_success = False
+            
             if training_success:
                 notify("🔧 [ML DEBUG] ✅ ML models trained successfully with fresh data")
             else:
