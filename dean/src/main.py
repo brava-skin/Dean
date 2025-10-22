@@ -1614,6 +1614,9 @@ def main() -> None:
     if ml_mode_enabled and ml_system:
         try:
             notify("🔧 [ML DEBUG] Starting ML model training after data collection...")
+            # Small delay to ensure data is fully committed to Supabase
+            import time
+            time.sleep(2)
             # Train models now that we have fresh data
             training_success = ml_system.initialize_models(force_retrain=True)
             if training_success:
