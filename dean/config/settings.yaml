@@ -11,13 +11,13 @@ branding_name: "Dean"
 account:
   timezone: "Europe/Amsterdam"
   currency: "EUR"
-  
-  # Campaign & AdSet IDs
-  ids:
-    testing_campaign_id: "120231838265440160"
-    testing_adset_id: "120231838265460160"
-    validation_campaign_id: "120231838417260160"
-    scaling_campaign_id: "120231838441470160"
+
+# Campaign & AdSet IDs (root level for backward compatibility)
+ids:
+  testing_campaign_id: "120231838265440160"
+  testing_adset_id: "120231838265460160"
+  validation_campaign_id: "120231838417260160"
+  scaling_campaign_id: "120231838441470160"
 
 # ── Meta API Defaults ────────────────────────────────
 meta:

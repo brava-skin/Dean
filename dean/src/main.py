@@ -774,7 +774,7 @@ def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dic
                     # Use dynamic threshold tracking system
                     from storage import Store
                     # Use the same SQLite path as the main system
-                    sqlite_path = (settings.get("logging") or {}).get("sqlite_path", "data/automation.sqlite")
+                    sqlite_path = settings.get("logging", {}).get("sqlite", {}).get("path", "dean/data/state.sqlite")
                     store = Store(sqlite_path)
                     
                     # Get current tracked threshold from storage
@@ -827,7 +827,7 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
         import zoneinfo
         
         # Use account timezone for today's data
-        tz_name = settings.get("account_timezone", "Europe/Amsterdam")
+        tz_name = settings.get("account", {}).get("timezone", "Europe/Amsterdam")
         local_tz = zoneinfo.ZoneInfo(tz_name)
         now = datetime.now(local_tz)
         midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -944,8 +944,22 @@ def main() -> None:
     # Load config and rules
     settings, rules_cfg = load_cfg(args.settings, args.rules)
     
+    # Load production config if profile is production
+    production_cfg = {}
+    if args.profile == "production":
+        production_config_path = "config/production.yaml"
+        if os.path.exists(production_config_path):
+            production_cfg = load_yaml(production_config_path)
+            # Merge production config into settings (production config takes precedence)
+            if production_cfg:
+                settings.update(production_cfg)
+    
     # Determine ML mode (default enabled, can be disabled with --no-ml)
-    ml_mode_enabled = args.ml_mode and not args.no_ml
+    # Check production config first, then args
+    ml_mode_enabled = production_cfg.get("ml_system", {}).get("enabled", True) if production_cfg else True
+    if args.no_ml:
+        ml_mode_enabled = False
+    ml_mode_enabled = ml_mode_enabled and args.ml_mode
     
     # Check for ML mode
     if ml_mode_enabled:
@@ -972,7 +986,8 @@ def main() -> None:
     # Resolve profile/dry-run/shadow
     profile = (
         args.profile
-        or (settings.get("mode", {}) or {}).get("current")
+        or production_cfg.get("profile", {}).get("name")
+        or settings.get("mode", {}).get("current")
         or os.getenv("MODE")
         or "production"
     ).lower()
@@ -1011,14 +1026,14 @@ def main() -> None:
             print("Fatal configuration error. Exiting.", file=sys.stderr)
             sys.exit(1)
 
-    # Store (SQLite) - path from settings or default
-    sqlite_path = (settings.get("logging") or {}).get("sqlite_path", "data/automation.sqlite")
+    # Store (SQLite) - path from settings
+    sqlite_path = settings.get("logging", {}).get("sqlite", {}).get("path", "dean/data/state.sqlite")
     store = Store(sqlite_path)
 
-    # Timezone for account (prefer settings.account_timezone, then env TIMEZONE, else DEFAULT_TZ=Europe/Amsterdam)
+    # Timezone for account
     tz_name = (
-        settings.get("account_timezone")
-        or settings.get("timezone")
+        settings.get("account", {}).get("timezone")
+        or settings.get("account_timezone")
         or os.getenv("TIMEZONE")
         or DEFAULT_TZ
     )
