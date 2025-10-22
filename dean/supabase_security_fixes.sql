@@ -178,8 +178,11 @@ CREATE INDEX IF NOT EXISTS idx_ml_predictions_stage_date
 ON public.ml_predictions (stage, created_at);
 
 -- Learning events indexes
-CREATE INDEX IF NOT EXISTS idx_learning_events_stage_date 
-ON public.learning_events (stage, created_at);
+CREATE INDEX IF NOT EXISTS idx_learning_events_from_stage_date 
+ON public.learning_events (from_stage, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_learning_events_to_stage_date 
+ON public.learning_events (to_stage, created_at);
 
 -- Time series data indexes
 CREATE INDEX IF NOT EXISTS idx_time_series_ad_metric_date 
