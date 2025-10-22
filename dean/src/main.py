@@ -1609,71 +1609,41 @@ def main() -> None:
             pass
 
     # ML Model Training (if ML mode enabled and data is available)
-    notify(f"🔧 [ML DEBUG] ML mode enabled: {ml_mode_enabled}")
-    notify(f"🔧 [ML DEBUG] ML system exists: {ml_system is not None}")
     if ml_mode_enabled and ml_system:
         try:
-            notify("🔧 [ML DEBUG] Starting ML model training after data collection...")
             # Small delay to ensure data is fully committed to Supabase
             time.sleep(2)
             
-            # DIRECT APPROACH: Train testing stage models directly
-            notify("🔧 [ML DEBUG] Training testing stage models directly...")
-            try:
-                # Train performance_predictor for testing
-                notify("🔧 [ML DEBUG] Training performance_predictor for testing...")
-                perf_success = ml_system.predictor.train_model('performance_predictor', 'testing', 'cpa')
-                notify(f"🔧 [ML DEBUG] performance_predictor training result: {perf_success}")
-                
-                # Train roas_predictor for testing
-                notify("🔧 [ML DEBUG] Training roas_predictor for testing...")
-                roas_success = ml_system.predictor.train_model('roas_predictor', 'testing', 'roas')
-                notify(f"🔧 [ML DEBUG] roas_predictor training result: {roas_success}")
-                
-                # Train purchase_probability for testing
-                notify("🔧 [ML DEBUG] Training purchase_probability for testing...")
-                purchase_success = ml_system.predictor.train_model('purchase_probability', 'testing', 'purchases')
-                notify(f"🔧 [ML DEBUG] purchase_probability training result: {purchase_success}")
-                
-                training_success = perf_success or roas_success or purchase_success
-                notify(f"🔧 [ML DEBUG] Direct training results: perf={perf_success}, roas={roas_success}, purchase={purchase_success}")
-                
-            except Exception as e:
-                notify(f"🔧 [ML DEBUG] Direct training failed: {e}")
-                training_success = False
+            # Train testing stage models directly
+            perf_success = ml_system.predictor.train_model('performance_predictor', 'testing', 'cpa')
+            roas_success = ml_system.predictor.train_model('roas_predictor', 'testing', 'roas')
+            purchase_success = ml_system.predictor.train_model('purchase_probability', 'testing', 'purchases')
+            
+            training_success = perf_success or roas_success or purchase_success
             
             if training_success:
-                notify("🔧 [ML DEBUG] ✅ ML models trained successfully with fresh data")
+                notify("🧠 ML models trained successfully")
             else:
-                notify("🔧 [ML DEBUG] ❌ ML model training failed")
+                notify("⚠️ ML model training failed")
         except Exception as e:
-            notify(f"🔧 [ML DEBUG] ML model training failed: {e}")
-    else:
-        notify("🔧 [ML DEBUG] ❌ ML training skipped - ml_mode_enabled or ml_system is None")
+            notify(f"❌ ML training error: {e}")
 
     # ML-Enhanced Reporting (if ML mode enabled)
     if ml_mode_enabled and reporting_system:
         try:
-            notify("🔧 [ML DEBUG] Starting ML reporting...")
             # Generate daily ML report
             ml_report = reporting_system.generate_daily_report()
-            notify("🔧 [ML DEBUG] ML report generated successfully")
             
             # Send ML report to Slack
             reporting_system.send_report_to_slack(ml_report)
-            notify("🔧 [ML DEBUG] ML report sent to Slack")
             
             # Log ML insights
             if ml_report.ml_metrics:
                 notify(f"🧠 ML Intelligence: {ml_report.ml_metrics.get('total_predictions', 0)} predictions, "
                       f"{ml_report.ml_metrics.get('avg_confidence', 0):.2f} avg confidence")
-                notify(f"🔧 [ML DEBUG] ML metrics: {ml_report.ml_metrics}")
             
         except Exception as e:
-            notify(f"🔧 [ML DEBUG] ML reporting failed: {e}")
-            notify(f"⚠️ ML reporting failed: {e}")
-    else:
-        notify("🔧 [ML DEBUG] ML reporting skipped - ML mode disabled or reporting_system not available")
+            notify(f"❌ ML reporting error: {e}")
 
     # Console summary (logs only, not Slack)
     print("---- RUN SUMMARY ----")
