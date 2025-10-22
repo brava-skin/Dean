@@ -731,9 +731,16 @@ class XGBoostPredictor:
             
             model_data = response.data[0]
             
-            # Deserialize model
-            model_bytes = bytes.fromhex(model_data['model_data'])
-            model = pickle.loads(model_bytes)
+            # FIX: Handle both hex and direct pickle data
+            try:
+                if model_data['model_data'].startswith('80'):  # Pickle protocol header
+                    model_bytes = bytes.fromhex(model_data['model_data'])
+                else:
+                    model_bytes = model_data['model_data'].encode('latin-1')
+                model = pickle.loads(model_bytes)
+            except (ValueError, UnicodeDecodeError) as e:
+                self.logger.warning(f"Could not load model {model_type} for {stage}: {e}")
+                return False
             
             # Create scaler (simplified - in production, store scaler separately)
             scaler = StandardScaler()
