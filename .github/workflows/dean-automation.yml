@@ -2,8 +2,9 @@ name: Dean ML-Enhanced Automation
 
 on:
   schedule:
-    # Run every hour for optimal Meta Ads monitoring
-    - cron: '0 * * * *'
+    # Run every 15 minutes to compensate for GitHub Actions delays
+    # This ensures at least hourly execution even with delays
+    - cron: '0,15,30,45 * * * *'
   workflow_dispatch: # Allow manual triggering
 
 jobs:
@@ -88,7 +89,7 @@ jobs:
         echo "🚀 Running Dean ML-Enhanced automation..."
         echo "   Mode: ML-Enhanced (default)"
         echo "   Fallback: Legacy system if ML unavailable"
-        echo "   Schedule: Every hour for optimal Meta Ads monitoring"
+        echo "   Schedule: Every 15 minutes (compensates for GitHub delays)"
         echo ""
         
         # Run with ML mode (default) - will fallback to legacy if needed
