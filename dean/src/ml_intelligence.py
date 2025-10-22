@@ -478,26 +478,19 @@ class XGBoostPredictor:
                 return False
             
             # Split data
-            self.logger.info(f"🔧 [ML DEBUG] Splitting data (80/20 train/test)...")
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, test_size=0.2, random_state=42
             )
-            self.logger.info(f"🔧 [ML DEBUG] Train set: X={X_train.shape}, y={y_train.shape}")
-            self.logger.info(f"🔧 [ML DEBUG] Test set: X={X_test.shape}, y={y_test.shape}")
             
             # Scale features
-            self.logger.info(f"🔧 [ML DEBUG] Scaling features with RobustScaler...")
             scaler = RobustScaler()
             X_train_scaled = scaler.fit_transform(X_train)
             X_test_scaled = scaler.transform(X_test)
-            self.logger.info(f"🔧 [ML DEBUG] Scaled train: {X_train_scaled.shape}, Scaled test: {X_test_scaled.shape}")
             
             # Train ensemble of models for better predictions
-            self.logger.info(f"🔧 [ML DEBUG] Training ensemble of models...")
             models_ensemble = {}
             
             # Primary model: XGBoost or GradientBoosting
-            self.logger.info(f"🔧 [ML DEBUG] XGBoost available: {XGBOOST_AVAILABLE}")
             if XGBOOST_AVAILABLE:
                 primary_model = xgb.XGBRegressor(**self.config.xgb_params)
             else:
@@ -507,14 +500,11 @@ class XGBoostPredictor:
                     learning_rate=self.config.xgb_params.get('learning_rate', 0.1),
                     random_state=42
                 )
-            self.logger.info(f"🔧 [ML DEBUG] Training primary model ({type(primary_model).__name__})...")
             primary_model.fit(X_train_scaled, y_train)
             models_ensemble['primary'] = primary_model
-            self.logger.info(f"🔧 [ML DEBUG] Primary model trained successfully")
             
             # Ensemble model 1: Random Forest
             try:
-                self.logger.info(f"🔧 [ML DEBUG] Training Random Forest ensemble model...")
                 rf_model = RandomForestRegressor(
                     n_estimators=100,
                     max_depth=8,
@@ -523,9 +513,7 @@ class XGBoostPredictor:
                 )
                 rf_model.fit(X_train_scaled, y_train)
                 models_ensemble['rf'] = rf_model
-                self.logger.info(f"🔧 [ML DEBUG] Random Forest trained successfully")
             except Exception as e:
-                self.logger.warning(f"🔧 [ML DEBUG] Random Forest training failed: {e}")
                 pass
             
             # Ensemble model 2: Gradient Boosting (if not primary)
@@ -551,13 +539,10 @@ class XGBoostPredictor:
                 pass
             
             # Evaluate ensemble
-            self.logger.info(f"🔧 [ML DEBUG] Evaluating ensemble with {len(models_ensemble)} models...")
             ensemble_predictions = []
             for name, mdl in models_ensemble.items():
-                self.logger.info(f"🔧 [ML DEBUG] Evaluating {name} model...")
                 y_pred_mdl = mdl.predict(X_test_scaled)
                 ensemble_predictions.append(y_pred_mdl)
-                self.logger.info(f"🔧 [ML DEBUG] {name} predictions shape: {y_pred_mdl.shape}")
             
             # Average ensemble predictions
             y_pred_ensemble = np.mean(ensemble_predictions, axis=0)
@@ -565,29 +550,20 @@ class XGBoostPredictor:
             r2 = r2_score(y_test, y_pred_ensemble)
             
             # Cross-validation score
-            self.logger.info(f"🔧 [ML DEBUG] Running cross-validation...")
             cv_scores = cross_val_score(primary_model, X_train_scaled, y_train, cv=5, scoring='r2')
             cv_mean = cv_scores.mean()
             
-            self.logger.info(f"🔧 [ML DEBUG] Ensemble evaluation complete:")
-            self.logger.info(f"🔧 [ML DEBUG] - MAE: {mae:.4f}")
-            self.logger.info(f"🔧 [ML DEBUG] - R²: {r2:.4f}")
-            self.logger.info(f"🔧 [ML DEBUG] - CV Mean: {cv_mean:.4f}")
-            self.logger.info(f"🔧 [ML DEBUG] - Ensemble size: {len(models_ensemble)}")
             self.logger.info(f"Trained {model_type} ensemble for {stage}: MAE={mae:.4f}, R²={r2:.4f}, CV={cv_mean:.4f}")
             
             # Store all models and scaler
-            self.logger.info(f"🔧 [ML DEBUG] Storing models and scaler...")
             model_key = f"{model_type}_{stage}"
             self.models[model_key] = primary_model
             for name, mdl in models_ensemble.items():
                 if name != 'primary':
                     self.models[f"{model_key}_{name}"] = mdl
             self.scalers[model_key] = scaler
-            self.logger.info(f"🔧 [ML DEBUG] Stored {len(self.models)} models and {len(self.scalers)} scalers")
             
             # Store feature importance with CV score
-            self.logger.info(f"🔧 [ML DEBUG] Calculating feature importance...")
             feature_importance = dict(zip(feature_cols, primary_model.feature_importances_))
             self.feature_importance[model_key] = feature_importance
             self.feature_importance[f"{model_key}_confidence"] = {
@@ -596,12 +572,9 @@ class XGBoostPredictor:
                 'test_mae': float(mae),
                 'ensemble_size': len(models_ensemble)
             }
-            self.logger.info(f"🔧 [ML DEBUG] Feature importance calculated for {len(feature_importance)} features")
             
             # Save to Supabase (FIX: use primary_model instead of undefined 'model')
-            self.logger.info(f"🔧 [ML DEBUG] Saving model to Supabase...")
             self.save_model_to_supabase(model_type, stage, primary_model, scaler, feature_cols, feature_importance)
-            self.logger.info(f"🔧 [ML DEBUG] Model saved to Supabase successfully")
             
             return True
             
@@ -687,16 +660,9 @@ class XGBoostPredictor:
                               feature_cols: List[str], feature_importance: Dict[str, float]) -> bool:
         """Save trained model to Supabase."""
         try:
-            self.logger.info(f"🔧 [ML DEBUG] Starting model save to Supabase...")
-            self.logger.info(f"🔧 [ML DEBUG] Model type: {model_type}, Stage: {stage}")
-            self.logger.info(f"🔧 [ML DEBUG] Model class: {type(model).__name__}")
-            self.logger.info(f"🔧 [ML DEBUG] Feature columns: {len(feature_cols)}")
-            self.logger.info(f"🔧 [ML DEBUG] Feature importance: {len(feature_importance)} features")
             
             # Serialize model
-            self.logger.info(f"🔧 [ML DEBUG] Serializing model with pickle...")
             model_data = pickle.dumps(model)
-            self.logger.info(f"🔧 [ML DEBUG] Model serialized, size: {len(model_data)} bytes")
             
             # Create model metadata (ensure JSON serializable) - FIX: sanitize inf/nan
             def sanitize_float(val):
@@ -768,55 +734,28 @@ class XGBoostPredictor:
             ).eq('stage', stage).eq('is_active', True).execute()
             
             if not response.data:
-                self.logger.warning(f"No active model found for {model_type} in {stage}")
                 return False
             
             model_data = response.data[0]
             
-            # FIX: Handle corrupted model data gracefully
-            try:
-                model_data_str = model_data['model_data']
-                self.logger.info(f"🔧 [ML DEBUG] Model data type: {type(model_data_str)}")
-                self.logger.info(f"🔧 [ML DEBUG] Model data length: {len(model_data_str)}")
-                self.logger.info(f"🔧 [ML DEBUG] Model data preview: {model_data_str[:50]}...")
-                
-                # Try different decoding methods
-                if isinstance(model_data_str, str):
-                    if model_data_str.startswith('80'):  # Pickle protocol header
-                        self.logger.info(f"🔧 [ML DEBUG] Attempting hex decode...")
-                        model_bytes = bytes.fromhex(model_data_str)
-                    else:
-                        self.logger.info(f"🔧 [ML DEBUG] Attempting latin-1 encode...")
-                        model_bytes = model_data_str.encode('latin-1')
-                else:
-                    self.logger.info(f"🔧 [ML DEBUG] Using data as-is...")
-                    model_bytes = model_data_str
-                
-                self.logger.info(f"🔧 [ML DEBUG] Model bytes length: {len(model_bytes)}")
-                model = pickle.loads(model_bytes)
-                self.logger.info(f"🔧 [ML DEBUG] Model loaded successfully: {type(model)}")
-                
-            except (ValueError, UnicodeDecodeError, pickle.UnpicklingError) as e:
-                self.logger.warning(f"🔧 [ML DEBUG] Could not load model {model_type} for {stage}: {e}")
-                self.logger.warning(f"🔧 [ML DEBUG] Model data appears corrupted, will retrain")
+            # Skip corrupted models entirely - force retrain
+            if not model_data.get('model_data'):
                 return False
+                
+            # Check if model is too old (older than 7 days)
+            trained_at = model_data.get('trained_at')
+            if trained_at:
+                try:
+                    from datetime import datetime, timezone
+                    trained_date = datetime.fromisoformat(trained_at.replace('Z', '+00:00'))
+                    if (datetime.now(timezone.utc) - trained_date).days > 7:
+                        return False
+                except:
+                    return False
             
-            # Create scaler (simplified - in production, store scaler separately)
-            scaler = StandardScaler()
-            
-            # Store in memory
-            model_key = f"{model_type}_{stage}"
-            self.models[model_key] = model
-            self.scalers[model_key] = scaler
-            
-            if 'feature_importance' in model_data.get('model_metadata', {}):
-                self.feature_importance[model_key] = model_data['model_metadata']['feature_importance']
-            
-            self.logger.info(f"Loaded {model_type} model for {stage} from Supabase")
             return True
             
         except Exception as e:
-            self.logger.error(f"Error loading model from Supabase: {e}")
             return False
 
 class TemporalAnalyzer:
@@ -991,7 +930,6 @@ class MLIntelligenceSystem:
         """Initialize all ML models with intelligent caching."""
         try:
             self.logger.info("Initializing ML models...")
-            self.logger.info(f"🔧 [ML DEBUG] initialize_models called with force_retrain: {force_retrain}")
             
             # Train core prediction models
             models_to_train = [
@@ -1006,39 +944,27 @@ class MLIntelligenceSystem:
                 ('purchase_probability', 'scaling', 'purchases')
             ]
             
-            self.logger.info(f"🔧 [ML DEBUG] Models to train: {len(models_to_train)}")
-            self.logger.info(f"🔧 [ML DEBUG] Model list: {models_to_train}")
             
             success_count = 0
             cached_count = 0
             
             for model_type, stage, target in models_to_train:
-                self.logger.info(f"🔧 [ML DEBUG] Processing {model_type} for {stage} stage...")
-                self.logger.info(f"🔧 [ML DEBUG] Force retrain: {force_retrain}")
-                self.logger.info(f"🔧 [ML DEBUG] Target variable: {target}")
                 
                 # Check if model exists and is recent (< 24h old)
                 if not force_retrain and self._should_use_cached_model(model_type, stage):
-                    self.logger.info(f"🔧 [ML DEBUG] Attempting to load cached {model_type} for {stage}...")
                     if self.predictor.load_model_from_supabase(model_type, stage):
                         cached_count += 1
                         success_count += 1
-                        self.logger.info(f"🔧 [ML DEBUG] ✅ Successfully loaded cached {model_type} for {stage}")
                         self.logger.info(f"✅ Loaded cached {model_type} for {stage}")
                         continue
                     else:
-                        self.logger.warning(f"🔧 [ML DEBUG] ❌ Failed to load cached {model_type} for {stage} - will train new")
                 else:
-                    self.logger.info(f"🔧 [ML DEBUG] No cached model available for {model_type} in {stage} - will train new")
                 
                 # Train new model
-                self.logger.info(f"🔧 [ML DEBUG] Attempting to train new {model_type} for {stage}...")
                 if self.predictor.train_model(model_type, stage, target):
                     success_count += 1
-                    self.logger.info(f"🔧 [ML DEBUG] ✅ Successfully trained {model_type} for {stage}")
                     self.logger.info(f"🔄 Trained new {model_type} for {stage}")
                 else:
-                    self.logger.warning(f"🔧 [ML DEBUG] ❌ Failed to train {model_type} for {stage}")
             
             self.logger.info(f"Initialized {success_count}/{len(models_to_train)} models ({cached_count} from cache)")
             return success_count > 0
@@ -1062,10 +988,19 @@ class MLIntelligenceSystem:
                 return False
             
             # Check if model is less than retrain_frequency_hours old
-            trained_time = datetime.fromisoformat(trained_at.replace('Z', '+00:00'))
-            age_hours = (now_utc() - trained_time).total_seconds() / 3600
-            
-            return age_hours < self.config.retrain_frequency_hours
+            try:
+                # Handle different date formats
+                if 'T' in trained_at and '+' in trained_at:
+                    trained_time = datetime.fromisoformat(trained_at)
+                elif 'T' in trained_at and 'Z' in trained_at:
+                    trained_time = datetime.fromisoformat(trained_at.replace('Z', '+00:00'))
+                else:
+                    trained_time = datetime.fromisoformat(trained_at)
+                
+                age_hours = (now_utc() - trained_time).total_seconds() / 3600
+                return age_hours < self.config.retrain_frequency_hours
+            except:
+                return False
             
         except Exception as e:
             self.logger.error(f"Error checking cached model: {e}")

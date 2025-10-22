@@ -301,12 +301,10 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         return
     
     try:
-        notify(f"🔍 Storing data for stage {stage}: {ad_data.get('ad_id', 'unknown')}")
         
         # Test Supabase connection first
         try:
             test_result = supabase_client.table('performance_metrics').select('*').limit(1).execute()
-            notify(f"🔍 Supabase connection test: {len(test_result.data)} rows found")
         except Exception as e:
             notify(f"❌ Supabase connection failed: {e}")
             return
@@ -335,7 +333,6 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         }
         
         # Insert performance data (use upsert to handle duplicates)
-        notify(f"🔍 Inserting performance data: {performance_data}")
         result = supabase_client.table('performance_metrics').upsert(
             performance_data,
             on_conflict='ad_id,window_type,date_start'
@@ -356,7 +353,6 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         }
         
         # Insert lifecycle data (upsert to avoid duplicates)
-        notify(f"🔍 Inserting lifecycle data: {lifecycle_data}")
         result = supabase_client.table('ad_lifecycle').upsert(
             lifecycle_data,
             on_conflict='ad_id,stage'
@@ -1406,7 +1402,7 @@ def main() -> None:
                             if isinstance(ad_id, str):
                                 store_ml_insights_in_supabase(supabase_client, ad_id, testing_analysis)
                                 
-                    notify("🧠 ML analysis completed for testing stage")
+                    # ML analysis completed - status will be reported later
                     
                 except Exception as e:
                     notify(f"⚠️ ML analysis failed: {e}")
@@ -1623,22 +1619,13 @@ def main() -> None:
         except Exception as e:
             notify(f"❌ ML training error: {e}")
 
-    # ML-Enhanced Reporting (if ML mode enabled)
-    if ml_mode_enabled and reporting_system:
+    # ML Status Report (simplified)
+    if ml_mode_enabled and supabase_client:
         try:
-            # Generate daily ML report
-            ml_report = reporting_system.generate_daily_report()
-            
-            # Send ML report to Slack
-            reporting_system.send_report_to_slack(ml_report)
-            
-            # Log ML insights
-            if ml_report.ml_metrics:
-                notify(f"🧠 ML Intelligence: {ml_report.ml_metrics.get('total_predictions', 0)} predictions, "
-                      f"{ml_report.ml_metrics.get('avg_confidence', 0):.2f} avg confidence")
-            
+            from ml_status import send_ml_status_report
+            send_ml_status_report(supabase_client, notify)
         except Exception as e:
-            notify(f"❌ ML reporting error: {e}")
+            notify(f"❌ ML status error: {e}")
 
     # Console summary (logs only, not Slack)
     print("---- RUN SUMMARY ----")
