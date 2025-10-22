@@ -1609,6 +1609,8 @@ def main() -> None:
             pass
 
     # ML Model Training (if ML mode enabled and data is available)
+    notify(f"🔧 [ML DEBUG] ML mode enabled: {ml_mode_enabled}")
+    notify(f"🔧 [ML DEBUG] ML system exists: {ml_system is not None}")
     if ml_mode_enabled and ml_system:
         try:
             notify("🔧 [ML DEBUG] Starting ML model training after data collection...")
@@ -1620,6 +1622,8 @@ def main() -> None:
                 notify("🔧 [ML DEBUG] ❌ ML model training failed")
         except Exception as e:
             notify(f"🔧 [ML DEBUG] ML model training failed: {e}")
+    else:
+        notify("🔧 [ML DEBUG] ❌ ML training skipped - ml_mode_enabled or ml_system is None")
 
     # ML-Enhanced Reporting (if ML mode enabled)
     if ml_mode_enabled and reporting_system:
