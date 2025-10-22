@@ -82,11 +82,16 @@ ML_MODE=true
 ML_LEARNING_RATE=0.01
 ML_CONFIDENCE_THRESHOLD=0.7
 
-# Rate Limiting Configuration (Optimized for continuous operation)
-META_REQUEST_DELAY=1.2
-META_MAX_CONCURRENT_INSIGHTS=2
-META_RETRY_MAX=8
-META_BACKOFF_BASE=1.5
+# Rate Limiting Configuration (24/7 UI PROTECTION)
+META_REQUEST_DELAY=2.0
+META_PEAK_HOURS_DELAY=3.0
+META_NIGHT_HOURS_DELAY=1.5
+META_MAX_CONCURRENT_INSIGHTS=1
+META_RETRY_MAX=12
+META_BACKOFF_BASE=2.0
+META_USAGE_THRESHOLD=0.6
+META_EMERGENCY_THRESHOLD=0.8
+META_UI_PROTECTION_MODE=true
 META_BUC_ENABLED=true
 
 # Timezone
@@ -153,9 +158,10 @@ class DeanContinuousRunner:
     def __init__(self):
         self.running = True
         self.last_run = None
-        self.run_interval = 600  # 10 minutes between runs
-        self.business_hours_interval = 300  # 5 minutes during business hours
-        self.off_hours_interval = 1800  # 30 minutes during off-hours
+        self.run_interval = 300  # 5 minutes between runs (24/7)
+        self.peak_hours_interval = 180  # 3 minutes during peak hours (9 AM - 6 PM)
+        self.off_peak_interval = 300    # 5 minutes during off-peak hours
+        self.night_interval = 600       # 10 minutes during night hours (12 AM - 6 AM)
         
         # Setup signal handlers
         signal.signal(signal.SIGINT, self.signal_handler)
@@ -196,22 +202,26 @@ class DeanContinuousRunner:
             return False
     
     def should_run_now(self):
-        """Check if it's time to run based on intelligent scheduling"""
+        """Check if it's time to run based on 24/7 intelligent scheduling"""
         now = datetime.now()
         
         # Don't run if we just ran recently
         if self.last_run:
             time_since_last = (now - self.last_run).seconds
             
-            # Check if we're in business hours (9 AM - 6 PM Amsterdam)
+            # Check time of day for appropriate interval
             amsterdam_hour = now.hour
             if 9 <= amsterdam_hour <= 18:
-                # Business hours: run every 5 minutes
-                if time_since_last < self.business_hours_interval:
+                # Peak hours (9 AM - 6 PM): run every 3 minutes
+                if time_since_last < self.peak_hours_interval:
+                    return False
+            elif 0 <= amsterdam_hour <= 6:
+                # Night hours (12 AM - 6 AM): run every 10 minutes
+                if time_since_last < self.night_interval:
                     return False
             else:
-                # Off hours: run every 30 minutes
-                if time_since_last < self.off_hours_interval:
+                # Off-peak hours: run every 5 minutes
+                if time_since_last < self.off_peak_interval:
                     return False
         else:
             # First run
@@ -221,9 +231,12 @@ class DeanContinuousRunner:
     
     def run(self):
         """Main continuous operation loop"""
-        logger.info("🚀 Starting Dean Continuous Operation...")
+        logger.info("🚀 Starting Dean 24/7 Continuous Operation...")
         logger.info("📊 Optimized for Meta API rate limits and ML learning")
-        logger.info("🔄 Business hours: every 5 minutes, Off hours: every 30 minutes")
+        logger.info("🔄 Peak hours (9AM-6PM): every 3 minutes")
+        logger.info("🔄 Off-peak hours: every 5 minutes")
+        logger.info("🔄 Night hours (12AM-6AM): every 10 minutes")
+        logger.info("🛡️ Maximum UI protection enabled")
         
         # Create logs directory
         os.makedirs('/opt/dean/logs', exist_ok=True)
@@ -235,8 +248,15 @@ class DeanContinuousRunner:
                     self.last_run = datetime.now()
                     
                     if success:
-                        # Success: wait for next cycle
-                        wait_time = self.business_hours_interval if 9 <= datetime.now().hour <= 18 else self.off_hours_interval
+                        # Success: wait for next cycle based on time of day
+                        now = datetime.now()
+                        if 9 <= now.hour <= 18:
+                            wait_time = self.peak_hours_interval  # 3 minutes
+                        elif 0 <= now.hour <= 6:
+                            wait_time = self.night_interval  # 10 minutes
+                        else:
+                            wait_time = self.off_peak_interval  # 5 minutes
+                        
                         logger.info(f"⏳ Waiting {wait_time//60} minutes until next cycle...")
                         time.sleep(wait_time)
                     else:

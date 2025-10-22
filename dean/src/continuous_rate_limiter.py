@@ -35,36 +35,53 @@ class ContinuousRateLimiter:
         self.lock = threading.Lock()
         self.endpoints: Dict[str, RateLimitState] = defaultdict(RateLimitState)
         
-        # Continuous operation settings
-        self.base_delay = float(os.getenv("META_REQUEST_DELAY", "1.2"))
-        self.jitter = float(os.getenv("META_JITTER", "0.3"))
-        self.max_concurrent = int(os.getenv("META_MAX_CONCURRENT_INSIGHTS", "2"))
-        self.usage_threshold = float(os.getenv("META_USAGE_THRESHOLD", "0.8"))
+        # 24/7 Continuous operation settings - MAXIMUM UI PROTECTION
+        self.base_delay = float(os.getenv("META_REQUEST_DELAY", "2.0"))
+        self.peak_hours_delay = float(os.getenv("META_PEAK_HOURS_DELAY", "3.0"))
+        self.night_hours_delay = float(os.getenv("META_NIGHT_HOURS_DELAY", "1.5"))
+        self.jitter = float(os.getenv("META_JITTER", "0.5"))
+        self.max_concurrent = int(os.getenv("META_MAX_CONCURRENT_INSIGHTS", "1"))  # SINGLE REQUEST
+        self.usage_threshold = float(os.getenv("META_USAGE_THRESHOLD", "0.6"))  # VERY CONSERVATIVE
+        self.emergency_threshold = float(os.getenv("META_EMERGENCY_THRESHOLD", "0.8"))
         
-        # Enhanced backoff for UI-critical errors
-        self.insights_platform_wait = 120  # 2 minutes for 1504022
-        self.app_level_wait = 90  # 1.5 minutes for 1504039
+        # Enhanced backoff for UI-critical errors - MAXIMUM PROTECTION
+        self.insights_platform_wait = 300  # 5 minutes for 1504022
+        self.app_level_wait = 180  # 3 minutes for 1504039
+        self.ui_protection_mode = os.getenv("META_UI_PROTECTION_MODE", "true").lower() == "true"
         
         # Usage tracking
         self.usage_history = deque(maxlen=100)  # Track last 100 requests
         self.current_concurrent = 0
         
-        # Business hours optimization
-        self.business_hours_start = 9  # 9 AM Amsterdam
-        self.business_hours_end = 18   # 6 PM Amsterdam
+        # 24/7 Business hours optimization
+        self.peak_hours_start = 9   # 9 AM Amsterdam
+        self.peak_hours_end = 18    # 6 PM Amsterdam
+        self.night_hours_start = 0  # 12 AM Amsterdam
+        self.night_hours_end = 6   # 6 AM Amsterdam
         
-    def is_business_hours(self) -> bool:
-        """Check if we're in business hours (Amsterdam time)"""
+    def is_peak_hours(self) -> bool:
+        """Check if we're in peak hours (9 AM - 6 PM Amsterdam time)"""
         amsterdam_hour = datetime.now().hour
-        return self.business_hours_start <= amsterdam_hour <= self.business_hours_end
+        return self.peak_hours_start <= amsterdam_hour <= self.peak_hours_end
+    
+    def is_night_hours(self) -> bool:
+        """Check if we're in night hours (12 AM - 6 AM Amsterdam time)"""
+        amsterdam_hour = datetime.now().hour
+        return self.night_hours_start <= amsterdam_hour <= self.night_hours_end
     
     def get_adaptive_delay(self) -> float:
-        """Calculate adaptive delay based on time of day and usage"""
-        base_delay = self.base_delay
+        """Calculate adaptive delay based on time of day and usage - 24/7 OPTIMIZED"""
+        # Time-based delay selection
+        if self.is_peak_hours():
+            base_delay = self.peak_hours_delay  # 3.0s during peak hours
+        elif self.is_night_hours():
+            base_delay = self.night_hours_delay  # 1.5s during night hours
+        else:
+            base_delay = self.base_delay  # 2.0s during off-peak hours
         
-        # Business hours: more conservative
-        if self.is_business_hours():
-            base_delay *= 1.5  # 50% slower during business hours
+        # UI Protection Mode: Even more conservative
+        if self.ui_protection_mode:
+            base_delay *= 1.5  # 50% slower in UI protection mode
         
         # Add jitter to prevent burst alignment
         jitter = random.uniform(-self.jitter, self.jitter)
@@ -74,8 +91,10 @@ class ContinuousRateLimiter:
             avg_usage = sum(self.usage_history) / len(self.usage_history)
             if avg_usage > self.usage_threshold:
                 base_delay *= 2.0  # Double delay if usage is high
+            if avg_usage > self.emergency_threshold:
+                base_delay *= 3.0  # Triple delay in emergency
         
-        return max(0.5, base_delay + jitter)  # Minimum 0.5s delay
+        return max(1.0, base_delay + jitter)  # Minimum 1.0s delay for UI protection
     
     def should_wait_for_concurrency(self) -> bool:
         """Check if we should wait due to concurrency limits"""

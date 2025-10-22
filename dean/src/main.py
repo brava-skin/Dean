@@ -1091,16 +1091,22 @@ def main() -> None:
     if not ml_mode_enabled:
         notify("📊 Legacy mode enabled - using standard automation system")
     
-    # Continuous mode setup (DigitalOcean optimization)
+    # Continuous mode setup (24/7 DigitalOcean optimization)
     if args.continuous_mode:
-        notify("🔄 Continuous mode enabled - optimized for DigitalOcean deployment")
-        notify("📊 Enhanced rate limiting and ML data feeding active")
+        notify("🔄 24/7 Continuous mode enabled - optimized for DigitalOcean deployment")
+        notify("📊 Maximum UI protection and ML data feeding active")
+        notify("🛡️ Single concurrent request for UI protection")
         
-        # Adjust rate limiting for continuous operation
-        os.environ["META_REQUEST_DELAY"] = "1.2"  # Slower requests
-        os.environ["META_MAX_CONCURRENT_INSIGHTS"] = "2"  # Lower concurrency
-        os.environ["META_RETRY_MAX"] = "8"  # More retries
-        os.environ["META_BACKOFF_BASE"] = "1.5"  # Exponential backoff
+        # Adjust rate limiting for 24/7 continuous operation
+        os.environ["META_REQUEST_DELAY"] = "2.0"  # Very slow requests
+        os.environ["META_PEAK_HOURS_DELAY"] = "3.0"  # Even slower during peak hours
+        os.environ["META_NIGHT_HOURS_DELAY"] = "1.5"  # Slightly faster at night
+        os.environ["META_MAX_CONCURRENT_INSIGHTS"] = "1"  # SINGLE concurrent request
+        os.environ["META_RETRY_MAX"] = "12"  # More retries
+        os.environ["META_BACKOFF_BASE"] = "2.0"  # Stronger exponential backoff
+        os.environ["META_USAGE_THRESHOLD"] = "0.6"  # Very conservative
+        os.environ["META_EMERGENCY_THRESHOLD"] = "0.8"  # Emergency stop
+        os.environ["META_UI_PROTECTION_MODE"] = "true"  # Maximum UI protection
     
     # Merge rules configuration into settings so stages can access it
     if rules_cfg:
