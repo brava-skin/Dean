@@ -139,6 +139,73 @@ class ModelValidator:
             
         except Exception as e:
             self.logger.error(f"Error storing validation result: {e}")
+    
+    def validate_all_models(self, days_back: int = 7) -> Dict[str, Dict[str, Any]]:
+        """
+        Validate all active models across all stages.
+        
+        Args:
+            days_back: Number of days to look back for validation data
+        
+        Returns:
+            Dict of model_name -> validation metrics
+        """
+        results = {}
+        
+        try:
+            # Model types to validate
+            model_configs = [
+                ('performance_predictor', 'testing'),
+                ('performance_predictor', 'validation'),
+                ('performance_predictor', 'scaling'),
+                ('roas_predictor', 'testing'),
+                ('roas_predictor', 'validation'),
+                ('roas_predictor', 'scaling'),
+            ]
+            
+            for model_type, stage in model_configs:
+                model_name = f"{model_type}_{stage}"
+                
+                try:
+                    validation_result = self.validate_predictions(model_type, stage, days_back)
+                    
+                    if validation_result:
+                        results[model_name] = {
+                            'accuracy': validation_result.accuracy,
+                            'mae': validation_result.mae,
+                            'r2_score': validation_result.r2_score,
+                            'is_performing_well': validation_result.is_performing_well,
+                            'sample_size': len(validation_result.prediction_vs_actual)
+                        }
+                        
+                        self.logger.info(
+                            f"Validated {model_name}: "
+                            f"Accuracy={validation_result.accuracy:.2%}, "
+                            f"R²={validation_result.r2_score:.3f}"
+                        )
+                    else:
+                        results[model_name] = {
+                            'accuracy': 0.0,
+                            'mae': 0.0,
+                            'r2_score': 0.0,
+                            'is_performing_well': False,
+                            'sample_size': 0,
+                            'status': 'insufficient_data'
+                        }
+                        
+                except Exception as e:
+                    self.logger.warning(f"Could not validate {model_name}: {e}")
+                    results[model_name] = {
+                        'accuracy': 0.0,
+                        'error': str(e),
+                        'status': 'error'
+                    }
+            
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Error in validate_all_models: {e}")
+            return {}
 
 # =====================================================
 # DATA PROGRESS TRACKING

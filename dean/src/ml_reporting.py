@@ -258,12 +258,17 @@ class PredictiveReporter:
             if len(cpa_values) < 7:
                 return None
             
-            # Simple trend analysis
+            # Simple trend analysis (FIX: polyfit returns (slope, intercept) for degree 1)
             x = np.arange(len(cpa_values))
-            slope, _, r_value, p_value, _ = np.polyfit(x, cpa_values, 1)
+            coeffs = np.polyfit(x, cpa_values, 1)
+            slope = coeffs[0]
             
             # Predict future CPA
             future_cpa = cpa_values.iloc[-1] + slope * days_ahead
+            
+            # Calculate R² for confidence
+            from scipy.stats import linregress
+            _, _, r_value, p_value, _ = linregress(x, cpa_values)
             confidence = 1 - p_value if p_value < 0.1 else 0.5
             
             # Determine impact
@@ -302,12 +307,17 @@ class PredictiveReporter:
             if len(roas_values) < 7:
                 return None
             
-            # Trend analysis
+            # Trend analysis (FIX: polyfit returns (slope, intercept) for degree 1)
             x = np.arange(len(roas_values))
-            slope, _, r_value, p_value, _ = np.polyfit(x, roas_values, 1)
+            coeffs = np.polyfit(x, roas_values, 1)
+            slope = coeffs[0]
             
             # Predict future ROAS
             future_roas = roas_values.iloc[-1] + slope * days_ahead
+            
+            # Calculate R² for confidence
+            from scipy.stats import linregress
+            _, _, r_value, p_value, _ = linregress(x, roas_values)
             confidence = 1 - p_value if p_value < 0.1 else 0.5
             
             # Determine impact
@@ -385,12 +395,17 @@ class PredictiveReporter:
             if len(quality_scores) < 7:
                 return None
             
-            # Trend analysis
+            # Trend analysis (FIX: polyfit returns (slope, intercept) for degree 1)
             x = np.arange(len(quality_scores))
-            slope, _, r_value, p_value, _ = np.polyfit(x, quality_scores, 1)
+            coeffs = np.polyfit(x, quality_scores, 1)
+            slope = coeffs[0]
             
             # Predict future quality
             future_quality = quality_scores.iloc[-1] + slope * days_ahead
+            
+            # Calculate R² for confidence
+            from scipy.stats import linregress
+            _, _, r_value, p_value, _ = linregress(x, quality_scores)
             confidence = 1 - p_value if p_value < 0.1 else 0.5
             
             # Determine impact

@@ -566,8 +566,8 @@ class XGBoostPredictor:
                 'ensemble_size': len(models_ensemble)
             }
             
-            # Save to Supabase
-            self.save_model_to_supabase(model_type, stage, model, scaler, feature_cols, feature_importance)
+            # Save to Supabase (FIX: use primary_model instead of undefined 'model')
+            self.save_model_to_supabase(model_type, stage, primary_model, scaler, feature_cols, feature_importance)
             
             return True
             
