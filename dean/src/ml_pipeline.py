@@ -179,13 +179,22 @@ class MLPipeline:
         start_time = datetime.now()
         self.pipeline_runs += 1  # Track pipeline usage
         
+        self.logger.info(f"🔧 [ML DEBUG] Starting ML pipeline for ad {ad_id}")
+        self.logger.info(f"🔧 [ML DEBUG] Stage: {stage}, Decision type: {decision_type}")
+        self.logger.info(f"🔧 [ML DEBUG] Performance data keys: {list(performance_data.keys())}")
+        self.logger.info(f"🔧 [ML DEBUG] Pipeline run #{self.pipeline_runs}")
+        
         try:
             # Step 1: Check for anomalies (data quality)
+            self.logger.info(f"🔧 [ML DEBUG] Step 1: Checking for anomalies...")
             anomalies_detected = False
             if self.config.enable_anomaly_detection and self.anomaly_detector:
+                self.logger.info(f"🔧 [ML DEBUG] Anomaly detection enabled, checking...")
                 anomaly_result = self.anomaly_detector.detect_anomalies(ad_id, stage)
+                self.logger.info(f"🔧 [ML DEBUG] Anomaly result: {anomaly_result}")
                 if anomaly_result and anomaly_result.get('has_anomalies'):
                     anomalies_detected = True
+                    self.logger.warning(f"🔧 [ML DEBUG] Anomalies detected for {ad_id}: {anomaly_result.get('reason')}")
                     self.logger.warning(f"Anomalies detected for {ad_id}: {anomaly_result.get('reason')}")
                     
                     # If severe anomaly, recommend holding decision

@@ -458,32 +458,53 @@ class XGBoostPredictor:
     def train_model(self, model_type: str, stage: str, target_col: str) -> bool:
         """Train XGBoost model for specific prediction task."""
         try:
+            self.logger.info(f"🔧 [ML DEBUG] Starting {model_type} training for {stage}")
+            self.logger.info(f"🔧 [ML DEBUG] Target column: {target_col}")
+            
             # Get training data
             df = self.supabase.get_performance_data(stages=[stage])
+            self.logger.info(f"🔧 [ML DEBUG] Retrieved data shape: {df.shape}")
+            self.logger.info(f"🔧 [ML DEBUG] Data columns: {list(df.columns)}")
+            self.logger.info(f"🔧 [ML DEBUG] Data sample: {df.head(2).to_dict() if not df.empty else 'Empty DataFrame'}")
+            
             if df.empty:
-                self.logger.warning(f"No data available for training {model_type} model for {stage}")
+                self.logger.warning(f"🔧 [ML DEBUG] No data available for training {model_type} model for {stage}")
+                self.logger.warning(f"🔧 [ML DEBUG] DataFrame empty: {df.empty}, Length: {len(df)}")
                 return False
             
             # Prepare data
+            self.logger.info(f"🔧 [ML DEBUG] Preparing training data...")
             X, y, feature_cols = self.prepare_training_data(df, target_col)
+            self.logger.info(f"🔧 [ML DEBUG] Features shape: X={X.shape}, y={y.shape}")
+            self.logger.info(f"🔧 [ML DEBUG] Feature columns: {feature_cols}")
+            self.logger.info(f"🔧 [ML DEBUG] Target values: {y[:5] if len(y) > 0 else 'Empty'}")
+            
             if len(X) == 0:
-                self.logger.warning(f"No features available for training {model_type} model")
+                self.logger.warning(f"🔧 [ML DEBUG] No features available for training {model_type} model")
+                self.logger.warning(f"🔧 [ML DEBUG] X shape: {X.shape}, y shape: {y.shape}")
                 return False
             
             # Split data
+            self.logger.info(f"🔧 [ML DEBUG] Splitting data (80/20 train/test)...")
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, test_size=0.2, random_state=42
             )
+            self.logger.info(f"🔧 [ML DEBUG] Train set: X={X_train.shape}, y={y_train.shape}")
+            self.logger.info(f"🔧 [ML DEBUG] Test set: X={X_test.shape}, y={y_test.shape}")
             
             # Scale features
+            self.logger.info(f"🔧 [ML DEBUG] Scaling features with RobustScaler...")
             scaler = RobustScaler()
             X_train_scaled = scaler.fit_transform(X_train)
             X_test_scaled = scaler.transform(X_test)
+            self.logger.info(f"🔧 [ML DEBUG] Scaled train: {X_train_scaled.shape}, Scaled test: {X_test_scaled.shape}")
             
             # Train ensemble of models for better predictions
+            self.logger.info(f"🔧 [ML DEBUG] Training ensemble of models...")
             models_ensemble = {}
             
             # Primary model: XGBoost or GradientBoosting
+            self.logger.info(f"🔧 [ML DEBUG] XGBoost available: {XGBOOST_AVAILABLE}")
             if XGBOOST_AVAILABLE:
                 primary_model = xgb.XGBRegressor(**self.config.xgb_params)
             else:
@@ -493,11 +514,14 @@ class XGBoostPredictor:
                     learning_rate=self.config.xgb_params.get('learning_rate', 0.1),
                     random_state=42
                 )
+            self.logger.info(f"🔧 [ML DEBUG] Training primary model ({type(primary_model).__name__})...")
             primary_model.fit(X_train_scaled, y_train)
             models_ensemble['primary'] = primary_model
+            self.logger.info(f"🔧 [ML DEBUG] Primary model trained successfully")
             
             # Ensemble model 1: Random Forest
             try:
+                self.logger.info(f"🔧 [ML DEBUG] Training Random Forest ensemble model...")
                 rf_model = RandomForestRegressor(
                     n_estimators=100,
                     max_depth=8,
@@ -506,7 +530,9 @@ class XGBoostPredictor:
                 )
                 rf_model.fit(X_train_scaled, y_train)
                 models_ensemble['rf'] = rf_model
-            except Exception:
+                self.logger.info(f"🔧 [ML DEBUG] Random Forest trained successfully")
+            except Exception as e:
+                self.logger.warning(f"🔧 [ML DEBUG] Random Forest training failed: {e}")
                 pass
             
             # Ensemble model 2: Gradient Boosting (if not primary)
@@ -532,10 +558,13 @@ class XGBoostPredictor:
                 pass
             
             # Evaluate ensemble
+            self.logger.info(f"🔧 [ML DEBUG] Evaluating ensemble with {len(models_ensemble)} models...")
             ensemble_predictions = []
             for name, mdl in models_ensemble.items():
+                self.logger.info(f"🔧 [ML DEBUG] Evaluating {name} model...")
                 y_pred_mdl = mdl.predict(X_test_scaled)
                 ensemble_predictions.append(y_pred_mdl)
+                self.logger.info(f"🔧 [ML DEBUG] {name} predictions shape: {y_pred_mdl.shape}")
             
             # Average ensemble predictions
             y_pred_ensemble = np.mean(ensemble_predictions, axis=0)
@@ -543,20 +572,29 @@ class XGBoostPredictor:
             r2 = r2_score(y_test, y_pred_ensemble)
             
             # Cross-validation score
+            self.logger.info(f"🔧 [ML DEBUG] Running cross-validation...")
             cv_scores = cross_val_score(primary_model, X_train_scaled, y_train, cv=5, scoring='r2')
             cv_mean = cv_scores.mean()
             
+            self.logger.info(f"🔧 [ML DEBUG] Ensemble evaluation complete:")
+            self.logger.info(f"🔧 [ML DEBUG] - MAE: {mae:.4f}")
+            self.logger.info(f"🔧 [ML DEBUG] - R²: {r2:.4f}")
+            self.logger.info(f"🔧 [ML DEBUG] - CV Mean: {cv_mean:.4f}")
+            self.logger.info(f"🔧 [ML DEBUG] - Ensemble size: {len(models_ensemble)}")
             self.logger.info(f"Trained {model_type} ensemble for {stage}: MAE={mae:.4f}, R²={r2:.4f}, CV={cv_mean:.4f}")
             
             # Store all models and scaler
+            self.logger.info(f"🔧 [ML DEBUG] Storing models and scaler...")
             model_key = f"{model_type}_{stage}"
             self.models[model_key] = primary_model
             for name, mdl in models_ensemble.items():
                 if name != 'primary':
                     self.models[f"{model_key}_{name}"] = mdl
             self.scalers[model_key] = scaler
+            self.logger.info(f"🔧 [ML DEBUG] Stored {len(self.models)} models and {len(self.scalers)} scalers")
             
             # Store feature importance with CV score
+            self.logger.info(f"🔧 [ML DEBUG] Calculating feature importance...")
             feature_importance = dict(zip(feature_cols, primary_model.feature_importances_))
             self.feature_importance[model_key] = feature_importance
             self.feature_importance[f"{model_key}_confidence"] = {
@@ -565,9 +603,12 @@ class XGBoostPredictor:
                 'test_mae': float(mae),
                 'ensemble_size': len(models_ensemble)
             }
+            self.logger.info(f"🔧 [ML DEBUG] Feature importance calculated for {len(feature_importance)} features")
             
             # Save to Supabase (FIX: use primary_model instead of undefined 'model')
+            self.logger.info(f"🔧 [ML DEBUG] Saving model to Supabase...")
             self.save_model_to_supabase(model_type, stage, primary_model, scaler, feature_cols, feature_importance)
+            self.logger.info(f"🔧 [ML DEBUG] Model saved to Supabase successfully")
             
             return True
             
@@ -653,8 +694,16 @@ class XGBoostPredictor:
                               feature_cols: List[str], feature_importance: Dict[str, float]) -> bool:
         """Save trained model to Supabase."""
         try:
+            self.logger.info(f"🔧 [ML DEBUG] Starting model save to Supabase...")
+            self.logger.info(f"🔧 [ML DEBUG] Model type: {model_type}, Stage: {stage}")
+            self.logger.info(f"🔧 [ML DEBUG] Model class: {type(model).__name__}")
+            self.logger.info(f"🔧 [ML DEBUG] Feature columns: {len(feature_cols)}")
+            self.logger.info(f"🔧 [ML DEBUG] Feature importance: {len(feature_importance)} features")
+            
             # Serialize model
+            self.logger.info(f"🔧 [ML DEBUG] Serializing model with pickle...")
             model_data = pickle.dumps(model)
+            self.logger.info(f"🔧 [ML DEBUG] Model serialized, size: {len(model_data)} bytes")
             
             # Create model metadata (ensure JSON serializable) - FIX: sanitize inf/nan
             def sanitize_float(val):

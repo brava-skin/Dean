@@ -1611,19 +1611,26 @@ def main() -> None:
     # ML-Enhanced Reporting (if ML mode enabled)
     if ml_mode_enabled and reporting_system:
         try:
+            notify("🔧 [ML DEBUG] Starting ML reporting...")
             # Generate daily ML report
             ml_report = reporting_system.generate_daily_report()
+            notify("🔧 [ML DEBUG] ML report generated successfully")
             
             # Send ML report to Slack
             reporting_system.send_report_to_slack(ml_report)
+            notify("🔧 [ML DEBUG] ML report sent to Slack")
             
             # Log ML insights
             if ml_report.ml_metrics:
                 notify(f"🧠 ML Intelligence: {ml_report.ml_metrics.get('total_predictions', 0)} predictions, "
                       f"{ml_report.ml_metrics.get('avg_confidence', 0):.2f} avg confidence")
+                notify(f"🔧 [ML DEBUG] ML metrics: {ml_report.ml_metrics}")
             
         except Exception as e:
+            notify(f"🔧 [ML DEBUG] ML reporting failed: {e}")
             notify(f"⚠️ ML reporting failed: {e}")
+    else:
+        notify("🔧 [ML DEBUG] ML reporting skipped - ML mode disabled or reporting_system not available")
 
     # Console summary (logs only, not Slack)
     print("---- RUN SUMMARY ----")
