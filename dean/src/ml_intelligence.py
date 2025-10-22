@@ -691,6 +691,7 @@ class XGBoostPredictor:
             data = {
                 'model_type': model_type,
                 'stage': stage,
+                'version': 1,  # Add version for upsert
                 'model_name': f"{model_type}_{stage}_v1",
                 'model_data': model_data.hex(),  # Convert to hex for storage
                 'model_metadata': metadata,
@@ -700,7 +701,11 @@ class XGBoostPredictor:
                 'trained_at': now_utc().isoformat()
             }
             
-            response = self.supabase.client.table('ml_models').insert(data).execute()
+            # FIX: Use upsert instead of insert to handle duplicates
+            response = self.supabase.client.table('ml_models').upsert(
+                data, 
+                on_conflict='model_type,version,stage'
+            ).execute()
             
             if response.data:
                 self.logger.info(f"Saved {model_type} model for {stage} to Supabase")

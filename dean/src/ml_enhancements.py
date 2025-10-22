@@ -267,6 +267,7 @@ class DataProgressTracker:
                 'ready': ready,
                 'days_available': days_available,
                 'unique_ads': unique_ads,
+                'samples': len(response.data) if response.data else 0,  # FIX: Add 'samples' key for ml_pipeline
                 'data_points': len(response.data) if response.data else 0,
                 'progress_pct': min(100, int((days_available / optimal_days) * 100))
             }
