@@ -68,8 +68,11 @@ jobs:
         echo "⏰ Running every 30 minutes"
         echo ""
         
+        # Change to dean directory where config files are located
+        cd dean
+        
         # Run Dean with production profile
-        python dean/src/main.py --profile production
+        python src/main.py --profile production
         
         echo ""
         echo "✅ Dean automation cycle completed"
