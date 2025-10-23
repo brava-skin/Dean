@@ -438,6 +438,36 @@ class AdvancedRuleEngine:
             ok = (m.spend or 0) >= rule.get("min_spend_for_alert", 20) and (m.purchases or 0) == 0 and (m.add_to_cart or 0) == 0
             return ok, "Spend present but no actions" if ok else ""
 
+        # NEW RULE TYPES FOR LEARNING PHASE
+        if t == "cpm_increase":
+            # Kill if CPM increased by specified percentage
+            current_cpm = m.cpm or 0.0
+            spend_ok = (m.spend or 0) >= rule["spend_gte"]
+            # This would need historical CPM data - simplified for now
+            return spend_ok and current_cpm > 200, f"CPM increase detected: {current_cpm:.2f}" if spend_ok and current_cpm > 200 else ""
+
+        if t == "cpm_above":
+            # Kill if CPM above threshold
+            current_cpm = m.cpm or 0.0
+            spend_ok = (m.spend or 0) >= rule["spend_gte"]
+            cpm_ok = current_cpm > rule["cpm_above"]
+            return spend_ok and cpm_ok, f"CPM above threshold: {current_cpm:.2f} > {rule['cpm_above']}" if spend_ok and cpm_ok else ""
+
+        if t == "roas_below":
+            # Kill if ROAS below threshold
+            current_roas = m.roas or 0.0
+            spend_ok = (m.spend or 0) >= rule["spend_gte"]
+            roas_ok = current_roas < rule["roas_lt"]
+            return spend_ok and roas_ok, f"ROAS below threshold: {current_roas:.3f} < {rule['roas_lt']}" if spend_ok and roas_ok else ""
+
+        if t == "atc_no_purchase":
+            # Kill if ATC but no purchase after specified days
+            atc_ok = (m.add_to_cart or 0) >= rule["atc_gte"]
+            purchase_ok = (m.purchases or 0) == 0
+            spend_ok = (m.spend or 0) >= rule["spend_gte"]
+            # Note: days parameter would need to be tracked separately
+            return atc_ok and purchase_ok and spend_ok, f"ATC≥{rule['atc_gte']} but no purchase after {rule.get('days', 3)}d" if atc_ok and purchase_ok and spend_ok else ""
+
         return False, ""
 
     # ---------- Stage decisions ----------

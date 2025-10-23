@@ -9,13 +9,13 @@ env: prod
 # ── Performance Thresholds ───────────────────────────
 thresholds:
   ctr:
-    testing_floor: 0.006      # Minimum CTR to continue testing
+    testing_floor: 0.005      # Minimum CTR to continue testing (learning phase)
     validation_floor: 0.008    # Minimum CTR in validation
   
-  cpa:  # EUR
-    testing_max: 45            # Max CPA before kill in testing
-    validation_max: 55         # Max CPA before kill in validation
-    scaling_kill_max: 50       # Max CPA before kill in scaling
+  cpa:  # EUR - Learning Phase Adjusted
+    testing_max: 35            # Max CPA before kill in testing (learning phase)
+    validation_max: 45         # Max CPA before kill in validation (learning phase)
+    scaling_kill_max: 40       # Max CPA before kill in scaling (learning phase)
   
   roas:
     testing_min: 1.2           # Min ROAS to promote from testing
@@ -24,9 +24,9 @@ thresholds:
 
 # ── Minimum Requirements ──────────────────────────────
 minimums:
-  impressions: 200
-  clicks: 0
-  spend_eur: 8
+  impressions: 300      # Learning phase - need more data
+  clicks: 5             # Learning phase - need some engagement
+  spend_eur: 12        # Learning phase - slightly higher minimum
 
 # ── Testing Stage Rules ───────────────────────────────
 testing:
@@ -34,45 +34,57 @@ testing:
     min_impressions: 200
     min_spend_eur: 8
   
-  # 7-TIER LEARNING ACCELERATION SYSTEM
+  # 7-TIER LEARNING ACCELERATION SYSTEM (LEARNING PHASE ADJUSTED)
   # Prioritizes high-performing ads with extended learning budgets
   kill:
     # Tier 0: ZERO PERFORMANCE - Quick kill to save budget
     - {type: "zero_performance_quick_kill", spend_gte: 30, ctr_lt: 0.001}
     
-    # Tier 1: MASSIVE learning budget for multi-ATC ads
-    - {type: "learning_acceleration_multi_atc", spend_gte: 500, atc_gte: 3}
-    - {type: "learning_acceleration_multi_atc", spend_gte: 400, atc_gte: 2}
-    - {type: "learning_acceleration_multi_atc", spend_gte: 300, atc_gte: 1}
+    # NEW: CPM monitoring for learning phase
+    - {type: "cpm_increase", cpm_increase_pct: 80, spend_gte: 50}
+    - {type: "cpm_above", cpm_above: 250, spend_gte: 40}
+    
+    # NEW: ROAS floor rules for learning phase
+    - {type: "roas_below", roas_lt: 0.3, spend_gte: 100}
+    - {type: "roas_below", roas_lt: 0.2, spend_gte: 80}
+    
+    # Tier 1: MASSIVE learning budget for multi-ATC ads (LEARNING PHASE ADJUSTED)
+    - {type: "learning_acceleration_multi_atc", spend_gte: 200, atc_gte: 3}
+    - {type: "learning_acceleration_multi_atc", spend_gte: 150, atc_gte: 2}
+    - {type: "learning_acceleration_multi_atc", spend_gte: 120, atc_gte: 1}
     
     # Tier 2: EXCELLENT performance (CTR > 2%, ATC > 0)
-    - {type: "spend_no_purchase_with_conditions", spend_gte: 250, ctr_gte: 0.02, atc_gte: 1}
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 180, ctr_gte: 0.02, atc_gte: 1}
     
     # Tier 3: HIGH CTR learning (CTR > 2% without ATC)
-    - {type: "learning_acceleration_high_ctr", spend_gte: 200, ctr_gte: 0.02}
+    - {type: "learning_acceleration_high_ctr", spend_gte: 150, ctr_gte: 0.02}
     
     # Tier 4: GOOD performance (CTR > 1%, ATC > 0)
-    - {type: "spend_no_purchase_with_conditions", spend_gte: 150, ctr_gte: 0.01, atc_gte: 1}
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 120, ctr_gte: 0.01, atc_gte: 1}
     
     # Tier 5: DECENT CTR (CTR > 1.5% without ATC)
-    - {type: "learning_acceleration_high_ctr", spend_gte: 120, ctr_gte: 0.015}
+    - {type: "learning_acceleration_high_ctr", spend_gte: 100, ctr_gte: 0.015}
     
     # Tier 6: AVERAGE performance (CTR > 0.5%)
-    - {type: "spend_no_purchase_with_conditions", spend_gte: 100, ctr_gte: 0.005}
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 80, ctr_gte: 0.005}
     
     # Tier 7: POOR performance - Kill sooner
     - {type: "spend_no_purchase_with_conditions", spend_gte: 60, ctr_lt: 0.005, atc_lt: 1}
     
-    # ATC REWARD RULES
-    - {type: "atc_gte", atc_gte: 1, spend_gte: 40, budget_boost: 50}
-    - {type: "atc_gte", atc_gte: 2, spend_gte: 60, promote: true}
-    - {type: "atc_learning_acceleration", atc_gte: 1, spend_gte: 80, budget_boost: 100}
+    # NEW: ATC efficiency rules for learning phase
+    - {type: "atc_no_purchase", atc_gte: 1, spend_gte: 150, days: 5}
+    - {type: "atc_no_purchase", atc_gte: 2, spend_gte: 120, days: 4}
     
-    # Standard engagement rules
-    - {type: "cpa_gte", cpa_gte: 45}
-    - {type: "ctr_below", ctr_lt: 0.006, spend_gte: 30}
-    - {type: "spend_no_purchase", spend_gte: 45}
-    - {type: "spend_multi_atc_no_purchase", spend_gte: 60, atc_gte: 2}
+    # ATC REWARD RULES (LEARNING PHASE ADJUSTED)
+    - {type: "atc_gte", atc_gte: 1, spend_gte: 60, budget_boost: 75}
+    - {type: "atc_gte", atc_gte: 2, spend_gte: 80, promote: true}
+    - {type: "atc_learning_acceleration", atc_gte: 1, spend_gte: 100, budget_boost: 100}
+    
+    # Standard engagement rules (LEARNING PHASE ADJUSTED)
+    - {type: "cpa_gte", cpa_gte: 35}
+    - {type: "ctr_below", ctr_lt: 0.005, spend_gte: 30}
+    - {type: "spend_no_purchase", spend_gte: 80}
+    - {type: "spend_multi_atc_no_purchase", spend_gte: 100, atc_gte: 2}
     - {type: "roas_below_after_days", roas_lt: 1.2, window: "day_3"}
   
   # Promotion rules
@@ -91,10 +103,10 @@ testing:
       min_runtime_hours: 12
     
     learning:
-      max_learning_budget_eur: 500
+      max_learning_budget_eur: 200  # Learning phase - more reasonable limit
     
     tripwires:
-      lifetime_spend_no_purchase_eur: 45
+      lifetime_spend_no_purchase_eur: 80  # Learning phase - more generous
     
     bayes:
       prior_a: 2.0
@@ -128,47 +140,59 @@ validation:
     min_clicks: 20
     min_spend_eur: 30
   
-  # 7-TIER VALIDATION SYSTEM (mirrors testing with higher stakes)
+  # 7-TIER VALIDATION SYSTEM (LEARNING PHASE ADJUSTED)
   kill:
     # Tier 0: ZERO PERFORMANCE - Quick kill
     - {type: "zero_performance_quick_kill", spend_gte: 50, ctr_lt: 0.001}
     
-    # Tier 1: Strong ATC signals
-    - {type: "spend_no_purchase_with_conditions", spend_gte: 500, atc_gte: 3}
-    - {type: "spend_no_purchase_with_conditions", spend_gte: 400, atc_gte: 2}
+    # NEW: CPM monitoring for validation
+    - {type: "cpm_increase", cpm_increase_pct: 70, spend_gte: 60}
+    - {type: "cpm_above", cpm_above: 200, spend_gte: 50}
+    
+    # NEW: ROAS floor rules for validation
+    - {type: "roas_below", roas_lt: 0.4, spend_gte: 120}
+    - {type: "roas_below", roas_lt: 0.3, spend_gte: 100}
+    
+    # Tier 1: Strong ATC signals (LEARNING PHASE ADJUSTED)
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 300, atc_gte: 3}
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 250, atc_gte: 2}
     
     # Tier 2: Excellent performance
-    - {type: "spend_no_purchase_with_conditions", spend_gte: 300, ctr_gte: 0.02, atc_gte: 1}
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 200, ctr_gte: 0.02, atc_gte: 1}
     
     # Tier 3: High CTR learning
-    - {type: "learning_acceleration_high_ctr", spend_gte: 240, ctr_gte: 0.02}
+    - {type: "learning_acceleration_high_ctr", spend_gte: 180, ctr_gte: 0.02}
     
     # Tier 4: Good performance
-    - {type: "spend_no_purchase_with_conditions", spend_gte: 200, ctr_gte: 0.01, atc_gte: 1}
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 150, ctr_gte: 0.01, atc_gte: 1}
     
     # Tier 5: Decent CTR
-    - {type: "learning_acceleration_high_ctr", spend_gte: 160, ctr_gte: 0.015}
+    - {type: "learning_acceleration_high_ctr", spend_gte: 130, ctr_gte: 0.015}
     
     # Tier 6: Average performance
-    - {type: "spend_no_purchase_with_conditions", spend_gte: 120, ctr_gte: 0.005}
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 100, ctr_gte: 0.005}
     
     # Tier 7: Poor performance
-    - {type: "spend_no_purchase_with_conditions", spend_gte: 90, ctr_lt: 0.005, atc_lt: 1}
+    - {type: "spend_no_purchase_with_conditions", spend_gte: 80, ctr_lt: 0.005, atc_lt: 1}
     
-    # Standard rules
-    - {type: "spend_no_purchase", spend_gte: 60}
-    - {type: "cpa_gte", cpa_gte: 55}
+    # NEW: ATC efficiency rules for validation
+    - {type: "atc_no_purchase", atc_gte: 1, spend_gte: 120, days: 4}
+    - {type: "atc_no_purchase", atc_gte: 2, spend_gte: 100, days: 3}
+    
+    # Standard rules (LEARNING PHASE ADJUSTED)
+    - {type: "spend_no_purchase", spend_gte: 100}
+    - {type: "cpa_gte", cpa_gte: 45}
     - {type: "ctr_below", ctr_lt: 0.005, spend_gte: 50}
-    - {type: "spend_multi_atc_no_purchase", spend_gte: 90, atc_gte: 2}
+    - {type: "spend_multi_atc_no_purchase", spend_gte: 120, atc_gte: 2}
     - {type: "roas_below_after_days", roas_lt: 1.1, window: "day_3"}
     - {type: "spend_over_2x_price_no_purchase"}
   
-  # Promotion to scaling
+  # Promotion to scaling (LEARNING PHASE ADJUSTED)
   advance:
     operator: "all"
     rules:
       - {type: "purchase_gte", purchases_gte: 2}
-      - {type: "cpa_lte", cpa_lte: 60}
+      - {type: "cpa_lte", cpa_lte: 45}
       - {type: "roas_gte", roas_gte: 1.2}
       - {type: "ctr_gte", ctr_gte: 0.005}
   
@@ -178,7 +202,7 @@ validation:
     fairness:
       min_spend_before_kill_eur: 50
     tripwires:
-      lifetime_spend_no_purchase_eur: 60
+      lifetime_spend_no_purchase_eur: 100  # Learning phase - more generous
     promotion:
       pause_after_promotion: true
       cooldown_hours: 24
@@ -201,18 +225,30 @@ scaling:
     min_impressions: 1000
     min_clicks: 10
   
-  # Kill rules (stricter at scale)
+  # Kill rules (LEARNING PHASE ADJUSTED)
   kill:
     # Zero performance safeguard
     - {type: "zero_performance_quick_kill", spend_gte: 80, ctr_lt: 0.001}
     
+    # NEW: CPM monitoring for scaling
+    - {type: "cpm_increase", cpm_increase_pct: 60, spend_gte: 80}
+    - {type: "cpm_above", cpm_above: 180, spend_gte: 70}
+    
+    # NEW: ROAS floor rules for scaling
+    - {type: "roas_below", roas_lt: 0.5, spend_gte: 150}
+    - {type: "roas_below", roas_lt: 0.4, spend_gte: 120}
+    
     # Poor engagement at scale
     - {type: "spend_no_purchase_with_conditions", spend_gte: 200, ctr_lt: 0.005, atc_lt: 1}
     
-    # Core scaling kill rules
+    # Core scaling kill rules (LEARNING PHASE ADJUSTED)
     - {type: "cpa_gte_consecutive_days", cpa_gte: 40, days: 2}
     - {type: "roas_below_consecutive_days", roas_lt: 1.2, days: 3}
     - {type: "spend_no_purchase", spend_gte: 150}
+    
+    # NEW: ATC efficiency rules for scaling
+    - {type: "atc_no_purchase", atc_gte: 1, spend_gte: 200, days: 3}
+    - {type: "atc_no_purchase", atc_gte: 2, spend_gte: 150, days: 2}
   
   # Scale up conditions
   scale_up:
@@ -241,7 +277,7 @@ scaling:
       roas_min: 1.2
       roas_days: 3
     tripwires:
-      lifetime_spend_no_purchase_eur: 150
+      lifetime_spend_no_purchase_eur: 200  # Learning phase - more generous
     budget:
       scale_up_pct: 50
       scale_down_pct: 25
