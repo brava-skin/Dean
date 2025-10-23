@@ -36,6 +36,10 @@ content_filters:
     - "ml_analysis_completed"  # Skip "ML analysis completed" messages
     - "performance_data_inserted"  # Skip detailed insertion logs
     - "lifecycle_data_inserted"  # Skip lifecycle insertion logs
+    - "4_day_mandatory_kill"  # Skip 4-day mandatory kill messages
+    - "metric_based_kill"  # Skip metric-based kill messages
+    - "atc_performance_kill"  # Skip ATC performance kill messages
+    - "cpm_management_kill"  # Skip CPM management kill messages
   
   # Keep these important messages
   keep_messages:
@@ -43,6 +47,10 @@ content_filters:
     - "performance_summary"  # Keep performance summaries
     - "critical_alerts"  # Keep critical alerts
     - "learning_events"  # Keep learning events
+    - "4_day_testing_summary"  # Keep 4-day testing summaries
+    - "metric_performance_alerts"  # Keep metric performance alerts
+    - "atc_efficiency_alerts"  # Keep ATC efficiency alerts
+    - "cpm_spike_alerts"  # Keep CPM spike alerts
 
 # Smart Aggregation
 aggregation:
@@ -96,6 +104,12 @@ templates:
     
     🎯 **Key Insights:**
     {key_insights}
+    
+    📊 **4-Day Testing System:**
+    • Active Creatives: {active_creatives}/4
+    • 4-Day Kills: {4_day_kills}
+    • Metric-Based Kills: {metric_kills}
+    • ATC Efficiency: {atc_efficiency}%
     
     ⚡ **System Health:**
     • Uptime: {uptime}

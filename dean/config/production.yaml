@@ -56,6 +56,10 @@ adaptive_rules:
     cpa_eur: 27.50
     roas: 2.0
     ctr: 0.008
+    atc_rate: 0.005                        # ATC rate target (0.5%)
+    cpm_eur: 80                            # CPM target (€80)
+    cost_per_atc_eur: 15                   # Cost per ATC target (€15)
+    impression_drop_pct: 30                # Impression drop threshold (30%)
   
   # Adaptation parameters
   adaptation:
@@ -70,6 +74,10 @@ adaptive_rules:
     - "promotion_thresholds"
     - "budget_allocation"
     - "pacing_controls"
+    - "metric_based_rules"                  # New metric-based rules
+    - "4_day_testing_rules"                 # 4-day testing system rules
+    - "atc_performance_rules"               # ATC performance rules
+    - "cpm_management_rules"                # CPM management rules
 
 # ── Performance Tracking ──────────────────────────────
 performance_tracking:
@@ -90,6 +98,9 @@ performance_tracking:
     calculate: true
     include_stability: true
     include_momentum: true
+    include_metric_performance: true        # Include new metric performance
+    include_4_day_testing: true             # Include 4-day testing performance
+    include_atc_efficiency: true           # Include ATC efficiency metrics
 
 # ── Creative Intelligence ─────────────────────────────
 creative_intelligence:

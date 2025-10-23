@@ -69,18 +69,20 @@ testing:
   daily_budget_eur: 50
   keep_ads_live: 4
   max_active_ads: 4
+  max_testing_days: 4                    # 4-day maximum testing window
   optimization_goal: "PURCHASE"
   naming_prefix: "[TEST]"
   
   queue:
     enable_rotation: true
     refill_on_kill: true
-    max_launches_per_day: 8
+    max_launches_per_day: 4              # Reduced to align with 4-creative system
+    maintain_creative_count: 4           # Always keep 4 creatives running
 
 validation:
   adset_budget_eur: 40
   min_days: 2
-  max_days: 3
+  max_days: 7                              # Updated to align with 7-day validation window
   total_spend_cap_eur: 120
   optimization_goal: "PURCHASE"
   naming_prefix: "[VALID]"
