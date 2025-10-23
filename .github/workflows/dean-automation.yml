@@ -1,138 +1,76 @@
-name: Dean ML-Enhanced Automation
+name: Dean 4-Day Testing System
 
 on:
   schedule:
-    # Micro-batches to reduce API spike and prevent UI interference
-    # Spread across the hour to avoid overwhelming Meta's API
-    - cron: '7 * * * *'   # 07 minutes past hour
-    - cron: '17 * * * *'  # 17 minutes past hour  
-    - cron: '27 * * * *'  # 27 minutes past hour
-    - cron: '37 * * * *'  # 37 minutes past hour
-    - cron: '47 * * * *'  # 47 minutes past hour
-    - cron: '57 * * * *'  # 57 minutes past hour
-  workflow_dispatch: # Allow manual triggering
+    # Run every 30 minutes
+    - cron: '*/30 * * * *'
+  workflow_dispatch: # Allow manual runs
 
 jobs:
-  dean-ml-automation:
+  dean-automation:
     runs-on: ubuntu-latest
-    timeout-minutes: 60  # Increased for ML processing
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-
-    - name: Set up Python
+      
+    - name: Set up Python 3.11
       uses: actions/setup-python@v4
       with:
-        python-version: '3.9'
-
+        python-version: '3.11'
+        
     - name: Install dependencies
       run: |
-        cd dean
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-
-    - name: Test ML system
-      run: |
-        cd dean
-        python -c "
-        import xgboost as xgb
-        import sklearn
-        import pandas as pd
-        import numpy as np
-        print('✅ ML packages ready')
-        "
-
-    - name: Setup ML system
-      run: |
-        cd dean
-        echo "🧠 ML system initialization..."
-        python -c "
-        try:
-            from src.ml_intelligence import create_ml_system
-            print('✅ ML Intelligence ready')
-        except Exception as e:
-            print(f'⚠️ ML Intelligence: {e}')
-        "
-
-    - name: Run Dean ML-Enhanced Automation
+        
+    - name: Run Dean 4-Day Testing System
       env:
-        # Meta API Credentials
+        # Meta Ads API Configuration
         FB_APP_ID: ${{ secrets.FB_APP_ID }}
         FB_APP_SECRET: ${{ secrets.FB_APP_SECRET }}
         FB_ACCESS_TOKEN: ${{ secrets.FB_ACCESS_TOKEN }}
         FB_AD_ACCOUNT_ID: ${{ secrets.FB_AD_ACCOUNT_ID }}
         FB_PIXEL_ID: ${{ secrets.FB_PIXEL_ID }}
         FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
-        
-        # Optional: Instagram
         IG_ACTOR_ID: ${{ secrets.IG_ACTOR_ID }}
         
-        # Store Configuration
-        STORE_URL: ${{ secrets.STORE_URL }}
-        
-        # Slack Notifications
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        
-        # Supabase (Required for ML mode)
+        # Supabase Configuration
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         SUPABASE_TABLE: ${{ secrets.SUPABASE_TABLE }}
         
-        # Optional: Economics
+        # Business Configuration
+        STORE_URL: ${{ secrets.STORE_URL }}
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         BREAKEVEN_CPA: ${{ secrets.BREAKEVEN_CPA }}
         COGS_PER_PURCHASE: ${{ secrets.COGS_PER_PURCHASE }}
-        USD_EUR_RATE: ${{ secrets.USD_EUR_RATE || '1.0' }}
+        USD_EUR_RATE: ${{ secrets.USD_EUR_RATE }}
         
-        # ML System Configuration
-        ML_MODE: "true"
-        ML_LEARNING_RATE: "0.1"
-        ML_CONFIDENCE_THRESHOLD: "0.7"
+        # ML Configuration
+        ML_MODE: true
+        ML_LEARNING_RATE: 0.01
+        ML_CONFIDENCE_THRESHOLD: 0.7
+        
+        # Rate Limiting Configuration
+        META_REQUEST_DELAY: 2.0
+        META_MAX_CONCURRENT_INSIGHTS: 1
+        META_RETRY_MAX: 5
+        META_BACKOFF_BASE: 2.0
+        META_BUC_ENABLED: true
+        
+        # Timezone
+        TZ: Europe/Amsterdam
         
       run: |
-        cd dean
-        echo "🚀 Running Dean ML-Enhanced automation..."
-        echo "   Mode: ML-Enhanced (default)"
-        echo "   Fallback: Legacy system if ML unavailable"
-        echo "   Schedule: Every hour (24 checks/day)"
-        echo "   Cost: FREE (public repo = unlimited minutes)"
+        echo "🚀 Starting Dean 4-Day Testing System..."
+        echo "📊 Features: 4-day testing, metric-based rules, CPM management"
+        echo "⏰ Running every 30 minutes"
         echo ""
         
-        # Run with ML mode (default) - will fallback to legacy if needed
+        # Run Dean with production profile
         python src/main.py --profile production
-
-    - name: Upload logs and ML data
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: dean-ml-logs-${{ github.run_number }}
-        path: |
-          dean/data/
-          dean/logs/
-        retention-days: 14
-
-    - name: ML System Health Check
-      if: always()
-      run: |
-        cd dean
-        echo "🏥 ML System Health Check:"
-        echo "   - Checking ML system status..."
-        python -c "
-        try:
-            import xgboost as xgb
-            print('   ✅ XGBoost: Ready')
-        except:
-            print('   ⚠️ XGBoost: Not available')
         
-        try:
-            import sklearn
-            print('   ✅ Scikit-learn: Ready')
-        except:
-            print('   ⚠️ Scikit-learn: Not available')
-        
-        try:
-            import pandas as pd
-            print('   ✅ Pandas: Ready')
-        except:
-            print('   ⚠️ Pandas: Not available')
-        "
+        echo ""
+        echo "✅ Dean automation cycle completed"
+        echo "📊 Next run in 30 minutes"
