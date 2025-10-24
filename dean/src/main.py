@@ -1364,6 +1364,9 @@ def main() -> None:
             notify("   Falling back to legacy system...")
             ml_mode_enabled = False
 
+    # Initialize Supabase client
+    supabase_client = _get_supabase()
+    
     # Initialize Creative Intelligence System
     creative_system = None
     if supabase_client:
@@ -1493,7 +1496,6 @@ def main() -> None:
             if ml_mode_enabled and ml_system and overall["testing"]:
                 try:
                     # Store performance data in Supabase first
-                    supabase_client = _get_supabase()
                     if supabase_client:
                         notify(f"📊 Testing data collected: {len(overall['testing'])} items")
                         # Collect actual ad data for Supabase storage
@@ -1540,7 +1542,6 @@ def main() -> None:
                     notify(f"⚠️ ML analysis failed: {e}")
             # Store performance data in Supabase for ML system (standard path)
             if overall["testing"] and not (ml_mode_enabled and ml_system):
-                supabase_client = _get_supabase()
                 if supabase_client:
                     try:
                         # Collect actual ad data for Supabase storage
@@ -1568,7 +1569,6 @@ def main() -> None:
             )
             if overall["validation"]:
                 # Store validation stage performance data in Supabase
-                supabase_client = _get_supabase()
                 if supabase_client:
                     try:
                         # Collect actual ad data for Supabase storage
@@ -1609,7 +1609,6 @@ def main() -> None:
             overall["scaling"] = run_stage(run_scaling_tick, "SCALING", client, settings, store)
             if overall["scaling"]:
                 # Store scaling stage performance data in Supabase
-                supabase_client = _get_supabase()
                 if supabase_client:
                     try:
                         # Collect actual ad data for Supabase storage
