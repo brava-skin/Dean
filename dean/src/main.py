@@ -1371,7 +1371,7 @@ def main() -> None:
     creative_system = None
     if supabase_client:
         try:
-            creative_system = initialize_creative_intelligence_system(supabase_client)
+            creative_system = initialize_creative_intelligence_system(supabase_client, settings)
         except Exception as e:
             notify(f"⚠️ Creative Intelligence System initialization error: {e}")
 
