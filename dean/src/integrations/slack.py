@@ -312,7 +312,7 @@ def build_basic_blocks(title: str, lines: List[str], severity: str = "info", foo
 
 # ---------- New messaging helpers ----------
 
-def format_run_header(status: str, time_str: str, profile: str, spend: float, purch: int, cpa: Optional[float], be: Optional[float], impressions: int = 0, clicks: int = 0, ctr: Optional[float] = None, cpc: Optional[float] = None, atc: int = 0, ic: int = 0) -> str:
+def format_run_header(status: str, time_str: str, profile: str, spend: float, purch: int, cpa: Optional[float], be: Optional[float], impressions: int = 0, clicks: int = 0, ctr: Optional[float] = None, cpc: Optional[float] = None, cpm: Optional[float] = None, atc: int = 0, ic: int = 0) -> str:
     """Format the main run header line with comprehensive metrics in European format."""
     status_emoji = "✅" if status == "OK" else "⚠️"
     
@@ -332,14 +332,19 @@ def format_run_header(status: str, time_str: str, profile: str, spend: float, pu
     def _fmt_cpc_european(value: float) -> str:
         return f"€{value:.2f}".replace(".", ",")
     
+    # Format currency for CPM
+    def _fmt_cpm_european(value: float) -> str:
+        return f"€{value:.2f}".replace(".", ",")
+    
     spend_str = _fmt_eur_european(spend)
     cpa_str = "–" if cpa is None else _fmt_eur_european(cpa)
     be_str = "–" if be is None else _fmt_eur_european(be)
     ctr_str = "–" if ctr is None else _fmt_pct_european(ctr)
     cpc_str = "–" if cpc is None else _fmt_cpc_european(cpc)
+    cpm_str = "–" if cpm is None else _fmt_cpm_european(cpm)
     
     # Main metrics line in requested format
-    main_line = f"{status_emoji} Run {status}, {time_str}\nSpend {spend_str}. ATC: {atc}, IC: {ic}, PUR: {purch}. CPA: {cpa_str}, IMP: {_fmt_int_european(impressions)}, Clicks: {_fmt_int_european(clicks)}, CTR: {ctr_str}, CPC: {cpc_str}."
+    main_line = f"{status_emoji} Run {status}, {time_str}\nSpend {spend_str}. ATC: {atc}, IC: {ic}, PUR: {purch}. CPA: {cpa_str}, IMP: {_fmt_int_european(impressions)}, Clicks: {_fmt_int_european(clicks)}, CTR: {ctr_str}, CPC: {cpc_str}, CPM: {cpm_str}."
     
     return main_line
 
@@ -445,11 +450,12 @@ def post_run_header_and_get_thread_ts(
     clicks: int = 0,
     ctr: Optional[float] = None,
     cpc: Optional[float] = None,
+    cpm: Optional[float] = None,
     atc: int = 0,
     ic: int = 0
 ) -> Optional[str]:
     """Post the main run header and return thread timestamp for replies."""
-    header_text = format_run_header(status, time_str, profile, spend, purch, cpa, be, impressions, clicks, ctr, cpc, atc, ic)
+    header_text = format_run_header(status, time_str, profile, spend, purch, cpa, be, impressions, clicks, ctr, cpc, cpm, atc, ic)
     
     # Add stage summaries
     stage_lines = []

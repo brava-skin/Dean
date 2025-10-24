@@ -1047,10 +1047,10 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
             or 27.51
         )
         
-        # Get active ads count
+        # Get active ads count from insights data
         try:
-            active_ads = meta.get_ads(status="ACTIVE")
-            active_ads_count = len(active_ads) if active_ads else 0
+            # Count unique ads from insights data (these are active ads)
+            active_ads_count = len(rows) if rows else 0
         except Exception:
             active_ads_count = 0
         
@@ -1734,6 +1734,7 @@ def main() -> None:
             clicks=account_info['clicks'],
             ctr=account_info['ctr'],
             cpc=account_info['cpc'],
+            cpm=account_info['cpm'],
             atc=account_info['atc'],
             ic=account_info['ic']
         )
