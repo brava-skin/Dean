@@ -1274,6 +1274,8 @@ def main() -> None:
     time_series_forecaster = None
     creative_similarity_analyzer = None
     causal_impact_analyzer = None
+    ml_pipeline = None
+    ml_dashboard = None
     
     if ml_mode_enabled:
         try:
@@ -1364,27 +1366,27 @@ def main() -> None:
             notify("   Falling back to legacy system...")
             ml_mode_enabled = False
 
-# Initialize Supabase client
-supabase_client = _get_supabase()
+    # Initialize Supabase client
+    supabase_client = _get_supabase()
 
     # Initialize Table Monitoring System
-table_monitor = None
-if supabase_client:
-    try:
-        from analytics.table_monitoring import create_table_monitor
-        table_monitor = create_table_monitor(supabase_client)
-        notify("📊 Table monitoring system initialized")
-        
-        # Get initial table state
-        initial_insights = table_monitor.get_all_table_insights()
-        notify("📊 Initial table state:")
-        notify(f"   • Total tables: {initial_insights.total_tables}")
-        notify(f"   • Total rows: {initial_insights.total_rows:,}")
-        notify(f"   • Healthy tables: {initial_insights.healthy_tables}")
-        if initial_insights.problematic_tables > 0:
-            notify(f"   • Problematic tables: {initial_insights.problematic_tables}")
-    except Exception as e:
-        notify(f"⚠️ Failed to initialize table monitoring: {e}")
+    table_monitor = None
+    if supabase_client:
+        try:
+            from analytics.table_monitoring import create_table_monitor
+            table_monitor = create_table_monitor(supabase_client)
+            notify("📊 Table monitoring system initialized")
+            
+            # Get initial table state
+            initial_insights = table_monitor.get_all_table_insights()
+            notify("📊 Initial table state:")
+            notify(f"   • Total tables: {initial_insights.total_tables}")
+            notify(f"   • Total rows: {initial_insights.total_rows:,}")
+            notify(f"   • Healthy tables: {initial_insights.healthy_tables}")
+            if initial_insights.problematic_tables > 0:
+                notify(f"   • Problematic tables: {initial_insights.problematic_tables}")
+        except Exception as e:
+            notify(f"⚠️ Failed to initialize table monitoring: {e}")
     
     # Initialize Creative Intelligence System
     creative_system = None
