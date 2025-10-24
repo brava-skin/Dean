@@ -1,4 +1,4 @@
-name: Dean 10-Creative Andromeda System
+name: Dean 10-Creative System
 
 on:
   schedule:
@@ -77,9 +77,7 @@ jobs:
         TZ: Europe/Amsterdam
         
       run: |
-        echo "🚀 Starting Dean 10-Creative Andromeda System..."
-        echo "📊 Features: 10-creative testing, Andromeda optimization, weekly rotation"
-        echo "⏰ Running every 30 minutes"
+        echo "🚀 Starting Dean 10-Creative System..."
         echo ""
         
         # Change to dean directory where config files are located

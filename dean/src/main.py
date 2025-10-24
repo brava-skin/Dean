@@ -919,13 +919,7 @@ def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dic
                 payment_details = health_details.get("funding_source", {})
                 alert_payment_issue(account_id, "Payment Failed", str(payment_details))
             
-            # Check for low balance using configured thresholds
-            balance = health_details.get("balance")
-            if balance is not None:
-                currency = settings.get("account", {}).get("currency") or settings.get("economics", {}).get("currency", "EUR")
-                critical_threshold = account_health_config.get("thresholds", {}).get("balance_critical_eur", 0.0)
-                if balance <= critical_threshold:
-                    alert_account_balance_low(account_id, balance, currency)
+            # Balance monitoring removed as requested
             
             return {"ok": False, "critical_issues": critical_issues, "health_details": health_details}
         
@@ -981,10 +975,7 @@ def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dic
                 warning_buffer = account_health_config.get("thresholds", {}).get("balance_warning_buffer_eur", 10.0)
                 warning_threshold = auto_charge_threshold - warning_buffer
                 
-                # Alert when balance is HIGH (approaching auto-charge threshold)
-                if balance >= warning_threshold:
-                    from integrations import alert_account_balance_low
-                    alert_account_balance_low(account_id, balance, currency, auto_charge_threshold)
+                # Balance monitoring removed as requested
             
             # Send general warnings if any
             if warnings:
@@ -1048,12 +1039,20 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
         cpa = (spend / purch) if purch > 0 else float("inf")
         ctr = (clicks / impressions * 100) if impressions > 0 else 0
         cpc = (spend / clicks) if clicks > 0 else 0
+        cpm = (spend / impressions * 1000) if impressions > 0 else 0
         
         be = float(
             os.getenv("BREAKEVEN_CPA")
             or (settings.get("economics", {}) or {}).get("breakeven_cpa")
             or 27.51
         )
+        
+        # Get active ads count
+        try:
+            active_ads = meta.get_ads(status="ACTIVE")
+            active_ads_count = len(active_ads) if active_ads else 0
+        except Exception:
+            active_ads_count = 0
         
         return {
             "spend": round(spend, 2),
@@ -1064,14 +1063,16 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
             "clicks": clicks,
             "ctr": round(ctr, 2),
             "cpc": round(cpc, 2),
+            "cpm": round(cpm, 2),
             "atc": int(atc),
             "ic": int(ic),
+            "active_ads": active_ads_count,
         }
     except Exception:
         return {
             "spend": None, "purchases": None, "cpa": None, "breakeven": None,
             "impressions": None, "clicks": None, "ctr": None, "cpc": None,
-            "atc": None, "ic": None
+            "cpm": None, "atc": None, "ic": None, "active_ads": None
         }
 
 
@@ -1860,6 +1861,21 @@ def main() -> None:
     
     print("---- RUN SUMMARY ----")
     print(f"Time: {amsterdam_time}")
+    
+    # Display key metrics summary
+    if acct.get('spend') is not None:
+        print(f"💰 Today's Spend: €{acct.get('spend', 0):.2f}")
+        print(f"📊 Active Ads: {acct.get('active_ads', 0)}")
+        print(f"👀 Impressions: {acct.get('impressions', 0):,}")
+        print(f"🖱️ Clicks: {acct.get('clicks', 0):,}")
+        print(f"📈 CTR: {acct.get('ctr', 0):.1f}%")
+        print(f"💵 CPC: €{acct.get('cpc', 0):.2f}")
+        print(f"📊 CPM: €{acct.get('cpm', 0):.2f}")
+        if acct.get('purchases', 0) > 0:
+            print(f"🛒 Purchases: {acct.get('purchases', 0)}")
+            print(f"🎯 CPA: €{acct.get('cpa', 0):.2f}")
+        print()
+    
     print(
         json.dumps(
             {
