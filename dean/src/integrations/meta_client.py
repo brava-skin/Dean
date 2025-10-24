@@ -14,8 +14,8 @@ import json
 
 import requests
 
-from utils import today_ymd, yesterday_ymd
-from slack import notify
+from infrastructure.utils import today_ymd, yesterday_ymd
+from .slack import notify
 
 USE_SDK = False
 try:

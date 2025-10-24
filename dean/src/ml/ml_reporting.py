@@ -17,8 +17,8 @@ import numpy as np
 import pandas as pd
 from supabase import create_client, Client
 
-from utils import now_utc, today_ymd_account, yesterday_ymd_account
-from slack import (
+from infrastructure.utils import now_utc, today_ymd_account, yesterday_ymd_account
+from integrations.slack import (
     notify, post_digest, alert_kill, alert_promote, alert_scale,
     alert_fatigue, alert_data_quality, alert_error
 )

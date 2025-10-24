@@ -19,7 +19,7 @@ from scipy import stats
 from scipy.signal import find_peaks
 from supabase import create_client, Client
 
-from utils import now_utc, today_ymd_account, yesterday_ymd_account
+from infrastructure.utils import now_utc, today_ymd_account, yesterday_ymd_account
 
 logger = logging.getLogger(__name__)
 

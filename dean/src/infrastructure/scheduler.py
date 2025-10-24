@@ -13,18 +13,18 @@ import threading
 import schedule
 from pathlib import Path
 
-from storage import Store
-from slack import (
+from .storage import Store
+from integrations.slack import (
     notify, alert_kill, alert_promote, alert_scale, alert_fatigue, 
     alert_data_quality, alert_error, alert_queue_empty, alert_new_launch,
     alert_system_health, alert_budget_alert, post_digest, client as slack_client
 )
-from meta_client import MetaClient, AccountAuth, ClientConfig
-from utils import now_local, getenv_f, getenv_i, getenv_b, cfg, cfg_or_env_f, cfg_or_env_i, cfg_or_env_b, cfg_or_env_list, safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name
+# Note: MetaClient imported lazily to avoid circular imports
+from .utils import now_local, getenv_f, getenv_i, getenv_b, cfg, cfg_or_env_f, cfg_or_env_i, cfg_or_env_b, cfg_or_env_list, safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name
 from stages.testing import run_testing_tick
 from stages.validation import run_validation_tick
 from stages.scaling import run_scaling_tick
-from rules import RuleEngine
+from rules.rules import AdvancedRuleEngine as RuleEngine
 
 
 class BackgroundScheduler:
@@ -44,6 +44,7 @@ class BackgroundScheduler:
         self.thread = None
         
         # Initialize Meta client
+        from integrations.meta_client import AccountAuth
         account = AccountAuth(
             account_id=os.getenv("FB_AD_ACCOUNT_ID", ""),
             access_token=os.getenv("FB_ACCESS_TOKEN", ""),
@@ -60,6 +61,7 @@ class BackgroundScheduler:
             or "Europe/Amsterdam"
         )
         
+        from integrations.meta_client import ClientConfig, MetaClient
         cfg = ClientConfig(timezone=tz_name)
         self.client = MetaClient(
             accounts=[account],

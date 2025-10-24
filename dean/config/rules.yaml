@@ -1,9 +1,9 @@
 # =====================================================
-# DEAN BUSINESS RULES - REBUILT FOR 4-DAY TESTING
+# DEAN BUSINESS RULES - UPDATED FOR 10-CREATIVE ANDROMEDA SYSTEM
 # Based on 2-week performance analysis (Oct 9-22, 2025)
 # =====================================================
 
-version: 2.1
+version: 2.2
 env: prod
 
 # ── Performance Thresholds ───────────────────────────
@@ -29,11 +29,11 @@ minimums:
   spend_eur: 15        # Lowered for 4-day testing
 
 # ── Testing Stage Rules ───────────────────────────────
-# 4-DAY AGGRESSIVE TESTING SYSTEM
-# Based on performance data: Day 1-4 = peak performance, Day 5+ = fatigue
+# 7-DAY ANDROMEDA TESTING SYSTEM (10 CREATIVES)
+# Based on Andromeda requirements: More creatives, longer learning window
 testing:
-  # 4-DAY MAXIMUM TESTING WINDOW
-  max_testing_days: 4
+  # 7-DAY MAXIMUM TESTING WINDOW (Extended for Andromeda learning)
+  max_testing_days: 7
   
   minimums:
     min_impressions: 150
@@ -84,10 +84,10 @@ testing:
     # ATC Conversion Rules
     - {type: "atc_no_ic", atc_gte: 2, ic_lt: 1, spend_gte: 40}    # Kill if >2 ATC but no IC
     
-    # DAY 4: MANDATORY KILL
-    # Kill after 4 days if not promoted - no exceptions
-    - {type: "max_runtime", days: 4, action: "kill"}              # Kill after 4 days if not promoted
-    - {type: "mandatory_kill_after_days", days: 4}               # Kill after 4 days regardless of minimums
+    # DAY 7: MANDATORY KILL (Extended for Andromeda)
+    # Kill after 7 days if not promoted - no exceptions
+    - {type: "max_runtime", days: 7, action: "kill"}              # Kill after 7 days if not promoted
+    - {type: "mandatory_kill_after_days", days: 7}               # Kill after 7 days regardless of minimums
   
   # FAST-TRACK PROMOTION (Based on your data showing winners emerge quickly)
   advance:
@@ -134,10 +134,10 @@ testing:
       placements: ["facebook", "instagram"]
     
     queue:
-      max_launches_per_tick: 4                                     # Keep exactly 4 creatives alive
+      max_launches_per_tick: 10                                    # Keep exactly 10 creatives alive (Andromeda)
       ugc_priority_boost: 2.0                                      # Higher UGC priority
-      max_ugc_tests_per_tick: 4                                    # Maintain 4 UGC tests always
-      maintain_creative_count: 4                                    # Always keep 4 creatives running
+      max_ugc_tests_per_tick: 10                                   # Maintain 10 UGC tests always
+      maintain_creative_count: 10                                   # Always keep 10 creatives running
     
     attribution_windows: ["7d_click", "1d_view"]
 
@@ -273,13 +273,13 @@ windows:
 
 # ── UGC CREATIVE MANAGEMENT ──────────────────────────
 ugc_creative_rules:
-  # Global UGC rotation settings
+  # Global UGC rotation settings (Updated for 10-creative Andromeda system)
   global_rotation:
-    max_runtime_days: 4                # Force rotation every 4 days
-    min_testing_budget_eur: 12.5        # €50 budget / 4 creatives = €12.5 per creative
-    max_concurrent_ugc_tests: 4        # Keep exactly 4 UGC tests running (€50 budget spread)
-    maintain_count: 4                        # Always keep 4 creatives alive
-    budget_per_creative_eur: 12.5        # €12.5 per creative (€50 total / 4)
+    max_runtime_days: 7                # Force rotation every 7 days (Andromeda learning)
+    min_testing_budget_eur: 5.0        # €50 budget / 10 creatives = €5 per creative
+    max_concurrent_ugc_tests: 10       # Keep exactly 10 UGC tests running (€50 budget spread)
+    maintain_count: 10                 # Always keep 10 creatives alive
+    budget_per_creative_eur: 5.0       # €5 per creative (€50 total / 10)
   
   # CPM-based UGC switching
   cpm_ugc_switching:

@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
-from utils import now_utc
+from infrastructure.utils import now_utc
 
 logger = logging.getLogger(__name__)
 

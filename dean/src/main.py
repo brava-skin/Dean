@@ -42,24 +42,20 @@ except Exception:
 
 # ML Intelligence System (NEW) - Conditional imports
 try:
-    from ml_intelligence import MLIntelligenceSystem, MLConfig, create_ml_system
-    from adaptive_rules import IntelligentRuleEngine, RuleConfig, create_intelligent_rule_engine
-    from performance_tracking import PerformanceTrackingSystem, create_performance_tracking_system
-    from ml_reporting import MLReportingSystem, create_ml_reporting_system
-    from ml_enhancements import (
+    from ml.ml_intelligence import MLIntelligenceSystem, MLConfig, create_ml_system
+    from rules import IntelligentRuleEngine, RuleConfig, create_intelligent_rule_engine
+    from analytics import PerformanceTrackingSystem, create_performance_tracking_system
+    from ml.ml_reporting import MLReportingSystem, create_ml_reporting_system
+    from ml.ml_enhancements import (
         create_model_validator, create_data_progress_tracker, create_anomaly_detector,
         create_time_series_forecaster, create_creative_similarity_analyzer, create_causal_impact_analyzer
     )
-    from ml_decision_engine import create_ml_decision_engine
-    from ml_pipeline import create_ml_pipeline, MLPipelineConfig
-    from ml_dashboard import create_ml_dashboard
-    from ml_advanced import (
-        create_rl_agent, create_neural_predictor, create_multi_objective_optimizer,
-        create_shap_explainer, create_lr_scheduler, create_active_learner, create_lookahead_protector
-    )
-    from ml_extras import (
-        create_auto_feature_engineer, create_bayesian_optimizer, create_competitor_analyzer,
-        create_portfolio_optimizer, create_seasonality_analyzer
+    from ml.ml_decision_engine import create_ml_decision_engine
+    from ml.ml_pipeline import create_ml_pipeline, MLPipelineConfig
+    from ml.ml_monitoring import create_ml_dashboard, get_ml_learning_summary, send_ml_learning_report
+    from ml.ml_advanced_features import (
+        create_ql_agent, create_lstm_predictor, create_auto_feature_engineer,
+        create_bayesian_optimizer, create_portfolio_optimizer, create_seasonality_detector, create_shap_explainer
     )
     ML_AVAILABLE = True
 except ImportError as e:
@@ -82,24 +78,28 @@ except ImportError as e:
     def create_anomaly_detector(*args, **kwargs): return None
     def create_ml_pipeline(*args, **kwargs): return None
     def create_ml_dashboard(*args, **kwargs): return None
-    def create_rl_agent(*args, **kwargs): return None
+    def get_ml_learning_summary(*args, **kwargs): return {}
+    def send_ml_learning_report(*args, **kwargs): return None
+    def create_ql_agent(*args, **kwargs): return None
+    def create_lstm_predictor(*args, **kwargs): return None
+    def create_auto_feature_engineer(*args, **kwargs): return None
+    def create_bayesian_optimizer(*args, **kwargs): return None
     def create_portfolio_optimizer(*args, **kwargs): return None
-    def create_seasonality_analyzer(*args, **kwargs): return None
-    def create_time_series_forecaster(*args, **kwargs): return None
-    def create_creative_similarity_analyzer(*args, **kwargs): return None
+    def create_seasonality_detector(*args, **kwargs): return None
+    def create_shap_explainer(*args, **kwargs): return None
     def create_causal_impact_analyzer(*args, **kwargs): return None
     def create_ml_decision_engine(*args, **kwargs): return None
 
 # Legacy modules (updated for ML integration)
-from storage import Store
-from slack import notify, post_run_header_and_get_thread_ts, post_thread_ads_snapshot, prettify_ad_name, fmt_eur, fmt_pct, fmt_roas, fmt_int
-from meta_client import MetaClient, AccountAuth, ClientConfig
-from rules import RuleEngine
+from infrastructure import Store
+from integrations import notify, post_run_header_and_get_thread_ts, post_thread_ads_snapshot, prettify_ad_name, fmt_eur, fmt_pct, fmt_roas, fmt_int
+from integrations import MetaClient, AccountAuth, ClientConfig
+from rules.rules import AdvancedRuleEngine as RuleEngine
 from stages.testing import run_testing_tick
 from stages.validation import run_validation_tick
 from stages.scaling import run_scaling_tick
-from utils import now_local, getenv_f, getenv_i, getenv_b, cfg, cfg_or_env_f, cfg_or_env_i, cfg_or_env_b, cfg_or_env_list, safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name
-from scheduler import start_background_scheduler, stop_background_scheduler, get_scheduler
+from infrastructure import now_local, getenv_f, getenv_i, getenv_b, cfg, cfg_or_env_f, cfg_or_env_i, cfg_or_env_b, cfg_or_env_list, safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name
+from infrastructure import start_background_scheduler, stop_background_scheduler, get_scheduler
 
 # ------------------------------- Constants --------------------------------
 REQUIRED_ENVS = [
@@ -838,7 +838,7 @@ def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dic
             account_id = client.ad_account_id_act
             
             # Send critical alerts
-            from slack import alert_ad_account_health_critical, alert_payment_issue, alert_account_balance_low
+            from integrations import alert_ad_account_health_critical, alert_payment_issue, alert_account_balance_low
             
             alert_ad_account_health_critical(account_id, critical_issues)
             
@@ -872,7 +872,7 @@ def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dic
                 percentage = (spent / cap) * 100
                 warning_threshold = account_health_config.get("thresholds", {}).get("spend_cap_warning_pct", 80)
                 if percentage >= warning_threshold:
-                    from slack import alert_spend_cap_approaching
+                    from integrations import alert_spend_cap_approaching
                     alert_spend_cap_approaching(account_id, spent, cap, currency)
             
             # Check balance warnings - alert when approaching auto-charge threshold
@@ -883,7 +883,7 @@ def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dic
                 
                 if auto_charge_threshold is None:
                     # Use dynamic threshold tracking system
-                    from storage import Store
+                    from infrastructure import Store
                     # Use the same SQLite path as the main system
                     sqlite_path = settings.get("logging", {}).get("sqlite", {}).get("path", "dean/data/state.sqlite")
                     store = Store(sqlite_path)
@@ -905,7 +905,7 @@ def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dic
                         auto_charge_threshold = new_threshold
                         
                         # Send notification about threshold update
-                        from slack import alert_threshold_updated
+                        from integrations import alert_threshold_updated
                         alert_threshold_updated(account_id, new_threshold, currency)
                 
                 warning_buffer = account_health_config.get("thresholds", {}).get("balance_warning_buffer_eur", 10.0)
@@ -913,12 +913,12 @@ def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dic
                 
                 # Alert when balance is HIGH (approaching auto-charge threshold)
                 if balance >= warning_threshold:
-                    from slack import alert_account_balance_low
+                    from integrations import alert_account_balance_low
                     alert_account_balance_low(account_id, balance, currency, auto_charge_threshold)
             
             # Send general warnings if any
             if warnings:
-                from slack import alert_ad_account_health_warning
+                from integrations import alert_ad_account_health_warning
                 alert_ad_account_health_warning(account_id, warnings)
             
             return {"ok": True, "warnings": warnings, "health_details": health_details}
@@ -926,7 +926,7 @@ def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dic
     except Exception as e:
         # If health check fails, it's a critical issue
         account_id = getattr(client, 'ad_account_id_act', 'unknown')
-        from slack import alert_ad_account_health_critical
+        from integrations import alert_ad_account_health_critical
         alert_ad_account_health_critical(account_id, [f"Health check failed: {str(e)}"])
         return {"ok": False, "error": str(e)}
 
@@ -1609,7 +1609,7 @@ def main() -> None:
                 )
                 
                 # Build snapshot using helper
-                from slack import build_ads_snapshot
+                from integrations import build_ads_snapshot
                 ad_lines = build_ads_snapshot(rows_today or [], rows_lifetime or [], tz_name)
                 
                 if ad_lines:
@@ -1633,7 +1633,7 @@ def main() -> None:
             if training_success:
                 # Get learning summary
                 try:
-                    from ml_status import get_ml_learning_summary
+                    from ml.ml_monitoring import get_ml_learning_summary
                     summary = get_ml_learning_summary(supabase_client)
                     if summary["recent_training"]:
                         training_info = ", ".join([f"{t['type']}({t['stage']})" for t in summary["recent_training"]])
@@ -1650,7 +1650,7 @@ def main() -> None:
     # ML Learning Report (enhanced diagnostics)
     if ml_mode_enabled and supabase_client:
         try:
-            from ml_status import send_ml_learning_report
+            from ml.ml_monitoring import send_ml_learning_report
             send_ml_learning_report(supabase_client, notify)
         except Exception as e:
             notify(f"❌ ML status error: {e}")

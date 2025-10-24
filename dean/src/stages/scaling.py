@@ -47,9 +47,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from metrics import Metrics, MetricsConfig, metrics_from_row
-from slack import notify, alert_kill, alert_scale, alert_error
-from utils import (
+from analytics.metrics import Metrics, MetricsConfig, metrics_from_row
+from integrations.slack import notify, alert_kill, alert_scale, alert_error
+from infrastructure.utils import (
     getenv_f, getenv_i, getenv_b, cfg, cfg_or_env_f, cfg_or_env_i, cfg_or_env_b, cfg_or_env_list,
     safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name
 )

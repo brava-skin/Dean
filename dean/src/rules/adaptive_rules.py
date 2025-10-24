@@ -17,8 +17,8 @@ import numpy as np
 import pandas as pd
 from supabase import create_client, Client
 
-from utils import now_utc, today_ymd_account
-from ml_intelligence import MLIntelligenceSystem, PredictionResult
+from infrastructure.utils import now_utc, today_ymd_account
+# Note: MLIntelligenceSystem imported lazily to avoid circular imports
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +160,7 @@ class PerformanceAnalyzer:
         """Analyze overall stage performance for rule adaptation."""
         try:
             # Get performance data
-            from ml_intelligence import SupabaseMLClient
+            from ml.ml_intelligence import SupabaseMLClient
             ml_client = SupabaseMLClient(
                 self.supabase.client.supabase_url,
                 self.supabase.client.supabase_key
@@ -278,7 +278,7 @@ class RuleAdaptationEngine:
     """Engine for adapting rules based on performance and ML insights."""
     
     def __init__(self, config: RuleConfig, supabase_client: SupabaseRulesClient,
-                 ml_system: MLIntelligenceSystem):
+                 ml_system: 'MLIntelligenceSystem'):
         self.config = config
         self.supabase = supabase_client
         self.ml_system = ml_system
@@ -488,7 +488,7 @@ class IntelligentRuleEngine:
     """Main intelligent rule engine with ML integration."""
     
     def __init__(self, supabase_url: str, supabase_key: str,
-                 ml_system: MLIntelligenceSystem, config: Optional[RuleConfig] = None):
+                 ml_system: 'MLIntelligenceSystem', config: Optional[RuleConfig] = None):
         self.config = config or RuleConfig()
         self.supabase = SupabaseRulesClient(supabase_url, supabase_key)
         self.ml_system = ml_system
@@ -786,7 +786,7 @@ class IntelligentRuleEngine:
 # =====================================================
 
 def create_intelligent_rule_engine(supabase_url: str, supabase_key: str,
-                                 ml_system: MLIntelligenceSystem,
+                                 ml_system: 'MLIntelligenceSystem',
                                  config: Optional[RuleConfig] = None) -> IntelligentRuleEngine:
     """Create intelligent rule engine with ML integration."""
     return IntelligentRuleEngine(supabase_url, supabase_key, ml_system, config)

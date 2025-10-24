@@ -67,17 +67,28 @@ placements:
 # ── Stage Configurations ─────────────────────────────
 testing:
   daily_budget_eur: 50
-  keep_ads_live: 4
-  max_active_ads: 4
-  max_testing_days: 4                    # 4-day maximum testing window
+  keep_ads_live: 10
+  max_active_ads: 10
+  target_active_ads: 10                  # NEW: Always maintain 10 creatives
+  max_testing_days: 7                    # Extended for Andromeda learning
   optimization_goal: "PURCHASE"
   naming_prefix: "[TEST]"
+  
+  # Budget allocation for 10 creatives
+  budget_per_creative_eur: 5.0          # NEW: €5 per creative (€50 ÷ 10)
+  min_budget_per_creative_eur: 2.0      # NEW: Minimum budget per creative
+  max_budget_per_creative_eur: 8.0      # NEW: Maximum budget per creative
+  
+  # Andromeda-specific settings
+  creative_rotation_frequency: "weekly"  # NEW: Weekly creative refresh
+  andromeda_optimized: true             # NEW: Flag for Andromeda features
   
   queue:
     enable_rotation: true
     refill_on_kill: true
-    max_launches_per_day: 4              # Reduced to align with 4-creative system
-    maintain_creative_count: 4           # Always keep 4 creatives running
+    max_launches_per_day: 10             # Updated for 10-creative system
+    maintain_creative_count: 10          # Always keep 10 creatives running
+    # Creative selection is now random - no diversity checking needed
 
 validation:
   adset_budget_eur: 40

@@ -12,8 +12,8 @@ from typing import Any, Dict, List, Optional, Tuple, Callable
 import pandas as pd
 from zoneinfo import ZoneInfo  # account-local timezone
 
-from slack import alert_kill, alert_promote, alert_fatigue, alert_data_quality, alert_error, notify
-from utils import (
+from integrations.slack import alert_kill, alert_promote, alert_fatigue, alert_data_quality, alert_error, notify
+from infrastructure.utils import (
     getenv_f, getenv_i, getenv_b, cfg, cfg_or_env_f, cfg_or_env_i, cfg_or_env_b, cfg_or_env_list,
     safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name
 )
@@ -512,14 +512,14 @@ def run_testing_tick(
     validation_budget_eur = cfg_or_env_f(settings, "testing.engine.promotion.validation_budget_eur", "TEST_VALIDATION_BUDGET_EUR", 40.0)
     promotion_placements = cfg_or_env_list(settings, "testing.engine.promotion.placements", "TEST_PROMOTION_PLACEMENTS", ["facebook", "instagram"])
 
-    max_launches_per_tick = cfg_or_env_i(settings, "testing.engine.queue.max_launches_per_tick", "TEST_MAX_LAUNCHES_PER_TICK", 8)
+    max_launches_per_tick = cfg_or_env_i(settings, "testing.engine.queue.max_launches_per_tick", "TEST_MAX_LAUNCHES_PER_TICK", 10)
 
     attr_windows = cfg_or_env_list(settings, "testing.engine.attribution_windows", "TEST_ATTR_WINDOWS", ["7d_click", "1d_view"])
 
     adset_id = cfg(settings, "ids.testing_adset_id")
     validation_campaign_id = cfg(settings, "ids.validation_campaign_id")
 
-    keep_live = int(cfg(settings, "queue_policies.keep_active_ads", cfg(settings, "testing.keep_ads_live", 4)))
+    keep_live = int(cfg(settings, "queue_policies.keep_active_ads", cfg(settings, "testing.keep_ads_live", 10)))
 
     copy_bank = _load_copy_bank(settings)
     copy_strategy = (settings.get("copy_bank") or {}).get("strategy", "round_robin")
@@ -866,7 +866,7 @@ def run_testing_tick(
         else:
             _stable_pass(store, ad_id, "adv_test", False, consec_required)
 
-    # -------- Top-up launches to keep N active --------
+    # -------- Ensure exactly 10 creatives are always live (Andromeda optimization) --------
     if not current_ads:
         try:
             current_ads = meta.list_ads_in_adset(adset_id)
@@ -875,12 +875,31 @@ def run_testing_tick(
             return summary
 
     active_count = _active_count(current_ads)
-    need = max(0, min(max_launches_per_tick, keep_live - active_count))
+    
+    # NEW: Always maintain exactly 10 creatives for Andromeda
+    target_count = 10
+    need = max(0, target_count - active_count)
+    
+    # If we have more than 10, we need to pause some (shouldn't happen with proper management)
+    if active_count > target_count:
+        notify(f"⚠️ [TEST] Too many active ads ({active_count}), should be {target_count}")
+    
+    # NEW: Budget allocation for 10 creatives
+    daily_budget = cfg_or_env_f(settings, "testing.daily_budget_eur", "TEST_DAILY_BUDGET_EUR", 50.0)
+    budget_per_creative = daily_budget / target_count
+    notify(f"💰 [TEST] Budget allocation: €{budget_per_creative:.2f} per creative (€{daily_budget} ÷ {target_count})")
+    
+    # NEW: Simple creative rotation for Andromeda (random selection)
+    rotation_frequency = cfg_or_env_list(settings, "testing.creative_rotation_frequency", "TEST_CREATIVE_ROTATION_FREQUENCY", "weekly")
+    
+    # Check if it's time for rotation
+    _check_and_rotate_creatives(meta, store, current_ads, rotation_frequency, target_count, summary)
+    
     if need <= 0:
         return summary
 
     if queue_df is None or queue_df.empty:
-        notify(f"⚠️ [TEST] Queue empty; cannot top-up to {keep_live}.")
+        notify(f"⚠️ [TEST] Queue empty; cannot top-up to {target_count}.")
         return summary
 
     existing_names = {str(a.get("name", "")).strip() for a in current_ads}
@@ -1027,6 +1046,71 @@ def run_testing_tick(
             notify(f"❗ [TEST] Failed to launch '{label_core}': {e}")
 
     return summary
+
+
+def _check_and_rotate_creatives(meta, store, current_ads, rotation_frequency, target_count, summary):
+    """
+    Simple creative rotation for Andromeda - randomly select creatives to rotate.
+    """
+    try:
+        # Get current time for rotation checks
+        now = datetime.now(LOCAL_TZ)
+        
+        # Check if it's time for rotation based on frequency
+        rotation_key = f"creative_rotation::{rotation_frequency}"
+        last_rotation = store.get_counter(f"{rotation_key}::last_rotation")
+        
+        should_rotate = False
+        if rotation_frequency == "weekly":
+            # Rotate every 7 days
+            days_since_rotation = (now.timestamp() - last_rotation) / (24 * 3600) if last_rotation > 0 else 999
+            should_rotate = days_since_rotation >= 7
+        elif rotation_frequency == "bi-weekly":
+            # Rotate every 14 days
+            days_since_rotation = (now.timestamp() - last_rotation) / (24 * 3600) if last_rotation > 0 else 999
+            should_rotate = days_since_rotation >= 14
+        
+        if should_rotate:
+            notify(f"🔄 [TEST] Creative rotation time ({rotation_frequency}) - rotating creatives randomly")
+            
+            # Rotate 3-5 creatives (30-50% of the 10)
+            rotate_count = min(5, max(3, target_count // 2))
+            
+            # Get active ads and rotate randomly
+            active_ads = [ad for ad in current_ads if str(ad.get("status", "")).upper() == "ACTIVE"]
+            if len(active_ads) >= rotate_count:
+                # Randomly select creatives to rotate
+                import random
+                ads_to_rotate = random.sample(active_ads, rotate_count)
+                
+                for ad in ads_to_rotate:
+                    ad_id = ad.get("id")
+                    ad_name = ad.get("name", "")
+                    
+                    try:
+                        _pause_ad(meta, ad_id)
+                        notify(f"🔄 [TEST] Rotated out: {ad_name}")
+                        summary["kills"] += 1  # Count as rotation
+                        
+                        # Log the rotation
+                        store.log(
+                            entity_type="ad",
+                            entity_id=ad_id,
+                            action="ROTATE",
+                            reason=f"Creative rotation ({rotation_frequency}) - random selection",
+                            level="info",
+                            stage="TEST",
+                            meta={"rotation_frequency": rotation_frequency, "selection_method": "random"}
+                        )
+                    except Exception as e:
+                        notify(f"❗ [TEST] Failed to rotate {ad_name}: {e}")
+                
+                # Update rotation timestamp
+                store.set_counter(f"{rotation_key}::last_rotation", int(now.timestamp()))
+                notify(f"✅ [TEST] Creative rotation completed - {rotate_count} creatives rotated randomly")
+        
+    except Exception as e:
+        notify(f"⚠️ [TEST] Creative rotation check failed: {e}")
 
 
 def _launch_replacement_creative(meta, store, queue_df, adset_id, settings, instagram_actor_id, summary, set_supabase_status):

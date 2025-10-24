@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 from supabase import Client
 
-from utils import now_utc
+from infrastructure.utils import now_utc
 
 logger = logging.getLogger(__name__)
 

@@ -38,7 +38,7 @@ except ImportError:
 from supabase import create_client, Client
 import joblib
 
-from utils import now_utc, today_ymd_account, yesterday_ymd_account
+from infrastructure.utils import now_utc, today_ymd_account, yesterday_ymd_account
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 
@@ -281,18 +281,36 @@ class FeatureEngineer:
                             lambda x: x.rolling(window=window, min_periods=1).mean()
                         )
                         
-                        # Rolling std
-                        df[f'{value_col}_rolling_std_{window}d'] = df.groupby(group_col)[value_col].transform(
-                            lambda x: x.rolling(window=window, min_periods=1).std()
-                        )
+                        # Rolling std (safe)
+                        def safe_rolling_std(series):
+                            std_vals = series.rolling(window=window, min_periods=1).std()
+                            return std_vals.replace([np.inf, -np.inf, np.nan], 0)
                         
-                        # Rolling trend (slope) - only for windows >= 2
+                        df[f'{value_col}_rolling_std_{window}d'] = df.groupby(group_col)[value_col].transform(safe_rolling_std)
+                        
+                        # Rolling trend (slope) - only for windows >= 2 (safe)
                         if window >= 2:
-                            df[f'{value_col}_rolling_trend_{window}d'] = df.groupby(group_col)[value_col].transform(
-                                lambda x: x.rolling(window=window, min_periods=2).apply(
-                                    lambda y: np.polyfit(range(len(y)), y, 1)[0] if len(y) >= 2 else 0
-                                )
-                            )
+                            def safe_rolling_trend(series):
+                                def calc_trend(y):
+                                    try:
+                                        if len(y) >= 2:
+                                            slope = np.polyfit(range(len(y)), y, 1)[0]
+                                            return slope if not (np.isinf(slope) or np.isnan(slope)) else 0
+                                        return 0
+                                    except:
+                                        return 0
+                                
+                                trend_vals = series.rolling(window=window, min_periods=2).apply(calc_trend)
+                                # Replace NaN values with 0
+                                return trend_vals.fillna(0)
+                            
+                            df[f'{value_col}_rolling_trend_{window}d'] = df.groupby(group_col)[value_col].transform(safe_rolling_trend)
+            
+            # Clean infinity and NaN values
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            for col in numeric_cols:
+                df[col] = df[col].replace([np.inf, -np.inf], np.nan).fillna(0)
+                df[col] = df[col].clip(-1e6, 1e6)
             
             return df
             
@@ -309,9 +327,13 @@ class FeatureEngineer:
             if 'ctr' in df.columns and 'atc_rate' in df.columns:
                 df['ctr_atc_interaction'] = df['ctr'] * df['atc_rate']
             
-            # CPA * ROAS efficiency
+            # CPA * ROAS efficiency (safe division)
             if 'cpa' in df.columns and 'roas' in df.columns:
-                df['cpa_roas_efficiency'] = df['roas'] / (df['cpa'] + 1e-6)
+                # Use safe division to prevent infinity
+                cpa_safe = df['cpa'].replace([0, np.inf, -np.inf], np.nan).fillna(1.0)
+                df['cpa_roas_efficiency'] = df['roas'] / cpa_safe
+                # Cap extreme values
+                df['cpa_roas_efficiency'] = df['cpa_roas_efficiency'].clip(-1000, 1000)
             
             # Engagement quality score
             engagement_cols = ['ctr', 'atc_rate', 'purchase_rate']
@@ -330,6 +352,12 @@ class FeatureEngineer:
                     df['fatigue_index'] * 0.3 + 
                     df['momentum_score'] * 0.2
                 )
+            
+            # Clean infinity and NaN values
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            for col in numeric_cols:
+                df[col] = df[col].replace([np.inf, -np.inf], np.nan).fillna(0)
+                df[col] = df[col].clip(-1e6, 1e6)
             
             return df
             
@@ -354,6 +382,12 @@ class FeatureEngineer:
                 df['month_sin'] = np.sin(2 * np.pi * df['month'] / 12)
                 df['month_cos'] = np.cos(2 * np.pi * df['month'] / 12)
             
+            # Clean infinity and NaN values
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            for col in numeric_cols:
+                df[col] = df[col].replace([np.inf, -np.inf], np.nan).fillna(0)
+                df[col] = df[col].clip(-1e6, 1e6)
+            
             return df
             
         except Exception as e:
@@ -365,28 +399,49 @@ class FeatureEngineer:
         try:
             df = df.copy()
             
-            # Performance momentum
+            # Performance momentum (safe percentage change)
             if 'ctr' in df.columns:
-                df['ctr_momentum'] = df.groupby('ad_id')['ctr'].pct_change()
-                df['ctr_acceleration'] = df.groupby('ad_id')['ctr_momentum'].diff()
+                # Safe percentage change that handles division by zero
+                def safe_pct_change(series):
+                    pct = series.pct_change()
+                    # Replace infinity and NaN with 0
+                    return pct.replace([np.inf, -np.inf, np.nan], 0)
+                
+                df['ctr_momentum'] = df.groupby('ad_id')['ctr'].transform(safe_pct_change)
+                df['ctr_acceleration'] = df.groupby('ad_id')['ctr_momentum'].transform(safe_pct_change)
             
-            # Volatility measures
+            # Volatility measures (safe rolling std)
             volatility_cols = ['ctr', 'cpa', 'roas']
             for col in volatility_cols:
                 if col in df.columns:
-                    df[f'{col}_volatility'] = df.groupby('ad_id')[col].transform(
-                        lambda x: x.rolling(window=7, min_periods=3).std()
-                    )
+                    def safe_rolling_std(series):
+                        std_vals = series.rolling(window=7, min_periods=3).std()
+                        # Replace NaN and infinity with 0
+                        return std_vals.replace([np.inf, -np.inf, np.nan], 0)
+                    
+                    df[f'{col}_volatility'] = df.groupby('ad_id')[col].transform(safe_rolling_std)
             
-            # Relative performance
+            # Relative performance (safe division and ranking)
             if 'cpa' in df.columns:
-                df['cpa_vs_account'] = df['cpa'] / df.groupby('stage')['cpa'].transform('mean')
-                df['cpa_percentile'] = df.groupby('stage')['cpa'].rank(pct=True)
+                # Safe division for relative performance
+                stage_mean = df.groupby('stage')['cpa'].transform('mean')
+                stage_mean_safe = stage_mean.replace([0, np.inf, -np.inf], np.nan).fillna(1.0)
+                df['cpa_vs_account'] = (df['cpa'] / stage_mean_safe).clip(-100, 100)
+                
+                # Safe ranking that handles identical values
+                df['cpa_percentile'] = df.groupby('stage')['cpa'].rank(pct=True, method='average')
+                df['cpa_percentile'] = df['cpa_percentile'].fillna(0.5)  # Default to median for NaN
             
             # Fatigue indicators
             if 'fatigue_index' in df.columns:
                 df['fatigue_trend'] = df.groupby('ad_id')['fatigue_index'].diff()
                 df['fatigue_acceleration'] = df.groupby('ad_id')['fatigue_trend'].diff()
+            
+            # Clean infinity and NaN values
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            for col in numeric_cols:
+                df[col] = df[col].replace([np.inf, -np.inf], np.nan).fillna(0)
+                df[col] = df[col].clip(-1e6, 1e6)
             
             return df
             
@@ -427,27 +482,54 @@ class XGBoostPredictor:
             numeric_cols = df_features[feature_cols].select_dtypes(include=[np.number]).columns
             feature_cols = [col for col in feature_cols if col in numeric_cols]
             
-            # Handle missing values
+            # Handle missing values and infinity
             df_features[feature_cols] = df_features[feature_cols].fillna(0)
+            
+            # Clean infinity and extreme values
+            for col in feature_cols:
+                if col in df_features.columns:
+                    # Replace infinity with large but finite values
+                    df_features[col] = df_features[col].replace([np.inf, -np.inf], np.nan)
+                    df_features[col] = df_features[col].fillna(0)
+                    
+                    # Clip extreme values to prevent overflow
+                    df_features[col] = df_features[col].clip(-1e6, 1e6)
             
             # Prepare X and y
             X = df_features[feature_cols].values
             y = df_features[target_col].fillna(0).values
             
+            # Final data validation
+            if np.any(np.isinf(X)) or np.any(np.isnan(X)):
+                self.logger.warning("Found infinity or NaN in features, cleaning...")
+                X = np.nan_to_num(X, nan=0.0, posinf=1e6, neginf=-1e6)
+            
+            if np.any(np.isinf(y)) or np.any(np.isnan(y)):
+                self.logger.warning("Found infinity or NaN in target, cleaning...")
+                y = np.nan_to_num(y, nan=0.0, posinf=1e6, neginf=-1e6)
+            
+            # Check if we have any valid features
+            if len(feature_cols) == 0 or X.shape[1] == 0:
+                self.logger.warning("No features available for training")
+                return np.array([]), np.array([]), []
+            
             # Feature selection (if too many features)
             if len(feature_cols) > self.config.max_features:
-                from sklearn.feature_selection import SelectKBest, f_regression, mutual_info_regression
-                
-                # Use mutual information for feature selection
-                selector = SelectKBest(mutual_info_regression, k=min(self.config.max_features, len(feature_cols)))
-                X_selected = selector.fit_transform(X, y)
-                
-                # Get selected feature names
-                selected_indices = selector.get_support(indices=True)
-                feature_cols = [feature_cols[i] for i in selected_indices]
-                X = X_selected
-                
-                self.logger.info(f"Feature selection: {len(selected_indices)}/{len(numeric_cols)} features selected")
+                try:
+                    from sklearn.feature_selection import SelectKBest, f_regression, mutual_info_regression
+                    
+                    # Use mutual information for feature selection
+                    selector = SelectKBest(mutual_info_regression, k=min(self.config.max_features, len(feature_cols)))
+                    X_selected = selector.fit_transform(X, y)
+                    
+                    # Get selected feature names
+                    selected_indices = selector.get_support(indices=True)
+                    feature_cols = [feature_cols[i] for i in selected_indices]
+                    X = X_selected
+                    
+                    self.logger.info(f"Feature selection: {len(selected_indices)}/{len(numeric_cols)} features selected")
+                except Exception as e:
+                    self.logger.warning(f"Feature selection failed: {e}, using all features")
             
             return X, y, feature_cols
             

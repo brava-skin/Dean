@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pytz
 
-from metrics import (
+from analytics.metrics import (
     MetricsConfig,
     Metrics,
     metrics_from_row,
