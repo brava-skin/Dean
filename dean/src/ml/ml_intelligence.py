@@ -107,7 +107,7 @@ class LearningEvent:
     created_at: datetime
 
 class SupabaseMLClient:
-    """Enhanced Supabase client for ML operations."""
+    """Enhanced Supabase client for ML operations with historical data integration."""
     
     def __init__(self, supabase_url: str, supabase_key: str):
         self.client: Client = create_client(supabase_url, supabase_key)
@@ -162,6 +162,74 @@ class SupabaseMLClient:
         except Exception as e:
             self.logger.error(f"Error fetching performance data: {e}")
             return pd.DataFrame()
+    
+    def get_historical_metrics(self, ad_id: str, metric_names: List[str], 
+                             days_back: int = 30) -> pd.DataFrame:
+        """Get comprehensive historical metrics for an ad."""
+        try:
+            start_date = (datetime.now() - timedelta(days=days_back)).isoformat()
+            
+            # Query historical_data table
+            response = self.client.table('historical_data').select('*').eq(
+                'ad_id', ad_id
+            ).in_('metric_name', metric_names).gte('ts_iso', start_date).order(
+                'ts_epoch', desc=False
+            ).execute()
+            
+            if not response.data:
+                return pd.DataFrame()
+            
+            df = pd.DataFrame(response.data)
+            df['ts_iso'] = pd.to_datetime(df['ts_iso'])
+            
+            # Pivot to get metrics as columns
+            pivot_df = df.pivot_table(
+                index=['ts_iso', 'ad_id', 'stage'], 
+                columns='metric_name', 
+                values='metric_value', 
+                aggfunc='mean'
+            ).reset_index()
+            
+            # Fill missing values
+            pivot_df = pivot_df.fillna(0)
+            
+            return pivot_df
+            
+        except Exception as e:
+            self.logger.error(f"Error getting historical metrics: {e}")
+            return pd.DataFrame()
+    
+    def get_ad_age_features(self, ad_id: str) -> Dict[str, Any]:
+        """Get age-based features for an ad."""
+        try:
+            # Get ad creation time
+            response = self.client.table('ad_creation_times').select('*').eq(
+                'ad_id', ad_id
+            ).execute()
+            
+            if not response.data:
+                return {}
+            
+            creation_data = response.data[0]
+            created_at = datetime.fromisoformat(creation_data['created_at_iso'].replace('Z', '+00:00'))
+            
+            # Calculate age in different units
+            now = now_utc()
+            age_delta = now - created_at
+            
+            age_features = {
+                'ad_age_days': age_delta.total_seconds() / (24 * 3600),
+                'ad_age_hours': age_delta.total_seconds() / 3600,
+                'ad_age_weeks': age_delta.days / 7,
+                'created_at_epoch': creation_data['created_at_epoch'],
+                'stage': creation_data['stage']
+            }
+            
+            return age_features
+            
+        except Exception as e:
+            self.logger.error(f"Error getting ad age features: {e}")
+            return {}
     
     def get_time_series_data(self, 
                            ad_id: str,
@@ -841,7 +909,7 @@ class XGBoostPredictor:
             return False
 
 class TemporalAnalyzer:
-    """Advanced temporal analysis and trend detection."""
+    """Advanced temporal analysis and trend detection with historical data integration."""
     
     def __init__(self, supabase_client: SupabaseMLClient):
         self.supabase = supabase_client
@@ -939,6 +1007,116 @@ class TemporalAnalyzer:
         except Exception as e:
             self.logger.error(f"Error detecting fatigue for {ad_id}: {e}")
             return {}
+    
+    def analyze_comprehensive_trends(self, ad_id: str, days_back: int = 14) -> Dict[str, Any]:
+        """Analyze comprehensive performance trends using historical data."""
+        try:
+            # Get historical metrics
+            metric_names = ['cpm', 'ctr', 'spend', 'impressions', 'clicks', 'purchases']
+            df = self.supabase.get_historical_metrics(ad_id, metric_names, days_back)
+            
+            if df.empty:
+                return {'status': 'insufficient_data'}
+            
+            # Calculate trend analysis for each metric
+            trends = {}
+            
+            for metric in metric_names:
+                if metric in df.columns:
+                    values = df[metric].values
+                    if len(values) >= 3:
+                        # Linear trend analysis
+                        x = np.arange(len(values))
+                        slope, _, r_value, p_value, _ = np.polyfit(x, values, 1)
+                        
+                        # Trend classification
+                        if p_value < 0.05:  # Significant trend
+                            if slope > 0:
+                                trend_direction = 'improving'
+                            else:
+                                trend_direction = 'declining'
+                        else:
+                            trend_direction = 'stable'
+                        
+                        # Volatility analysis
+                        volatility = np.std(values) / (np.mean(values) + 1e-6)
+                        
+                        # Recent vs older performance
+                        if len(values) >= 6:
+                            recent_avg = np.mean(values[-3:])
+                            older_avg = np.mean(values[:-3])
+                            momentum = (recent_avg - older_avg) / (older_avg + 1e-6)
+                        else:
+                            momentum = 0
+                        
+                        trends[metric] = {
+                            'trend_direction': trend_direction,
+                            'slope': float(slope),
+                            'r_squared': float(r_value ** 2),
+                            'volatility': float(volatility),
+                            'momentum': float(momentum),
+                            'current_value': float(values[-1]) if len(values) > 0 else 0,
+                            'avg_value': float(np.mean(values))
+                        }
+            
+            return {
+                'status': 'success',
+                'trends': trends,
+                'data_points': len(df),
+                'analysis_period_days': days_back
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error analyzing comprehensive trends: {e}")
+            return {'status': 'error', 'error': str(e)}
+    
+    def detect_performance_anomalies(self, ad_id: str, days_back: int = 7) -> Dict[str, Any]:
+        """Detect performance anomalies using historical data."""
+        try:
+            # Get historical metrics
+            metric_names = ['cpm', 'ctr', 'spend', 'impressions', 'clicks']
+            df = self.supabase.get_historical_metrics(ad_id, metric_names, days_back)
+            
+            if df.empty or len(df) < 3:
+                return {'status': 'insufficient_data'}
+            
+            anomalies = {}
+            
+            for metric in metric_names:
+                if metric in df.columns:
+                    values = df[metric].values
+                    
+                    # Statistical anomaly detection
+                    mean_val = np.mean(values[:-1])  # Exclude latest value
+                    std_val = np.std(values[:-1])
+                    
+                    if std_val > 0:
+                        current_val = values[-1]
+                        z_score = abs(current_val - mean_val) / std_val
+                        
+                        # Anomaly threshold (2 standard deviations)
+                        if z_score > 2.0:
+                            anomaly_type = 'spike' if current_val > mean_val else 'drop'
+                            severity = 'high' if z_score > 3.0 else 'medium'
+                            
+                            anomalies[metric] = {
+                                'type': anomaly_type,
+                                'severity': severity,
+                                'z_score': float(z_score),
+                                'current_value': float(current_val),
+                                'expected_value': float(mean_val),
+                                'deviation_pct': float(abs(current_val - mean_val) / (mean_val + 1e-6) * 100)
+                            }
+            
+            return {
+                'status': 'success',
+                'anomalies': anomalies,
+                'analysis_period_days': days_back
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error detecting performance anomalies: {e}")
+            return {'status': 'error', 'error': str(e)}
 
 class CrossStageLearner:
     """Cross-stage transfer learning system."""
