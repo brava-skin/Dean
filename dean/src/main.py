@@ -522,7 +522,7 @@ def store_creative_data_in_supabase(supabase_client, meta_client, ad_id: str, st
         print(f"⚠️ Failed to store creative data: {e}")
 
 
-def initialize_creative_intelligence_system(supabase_client) -> Optional[Any]:
+def initialize_creative_intelligence_system(supabase_client, settings) -> Optional[Any]:
     """Initialize the creative intelligence system."""
     try:
         from creative.creative_intelligence import create_creative_intelligence_system
