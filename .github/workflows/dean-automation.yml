@@ -19,10 +19,21 @@ jobs:
       with:
         python-version: '3.11'
         
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
     - name: Install dependencies
       run: |
+        echo "📦 Installing Python dependencies..."
+        echo "💾 Using cached dependencies when available"
         python -m pip install --upgrade pip
-        pip install -r dean/requirements.txt
+        pip install --cache-dir ~/.cache/pip -r dean/requirements.txt
+        echo "✅ Dependencies installed successfully"
         
     - name: Run Dean 10-Creative Andromeda System
       env:
