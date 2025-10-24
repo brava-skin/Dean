@@ -287,8 +287,12 @@ class MLDashboard:
                     if accuracy and not (np.isnan(accuracy) or np.isinf(accuracy)):
                         accuracies.append(float(accuracy))
             
+            avg_accuracy = np.mean(accuracies) if accuracies else 0.0
+            # Ensure accuracy is never negative (R2 can be negative for poor models)
+            avg_accuracy = max(0.0, avg_accuracy)
+            
             return {
-                'avg_accuracy': np.mean(accuracies) if accuracies else 0.0,
+                'avg_accuracy': avg_accuracy,
                 'count': len(response.data)
             }
             

@@ -1311,10 +1311,12 @@ def main() -> None:
         table = os.getenv("SUPABASE_TABLE", "meta_creatives")
         queue_df = load_queue_supabase(table=table, status_filter="pending", limit=64)
         queue_len_before = len(queue_df)
+        notify(f"📊 Queue loaded from Supabase: {len(queue_df)} creatives available")
     else:
         queue_path = (settings.get("queue") or {}).get("path", "data/creatives_queue.csv")
         queue_df = load_queue(queue_path)
         queue_len_before = len(queue_df)
+        notify(f"📊 Queue loaded from file: {len(queue_df)} creatives available")
 
     # Context ping - now using consolidated messaging
     local_now = now_local(tz_name)

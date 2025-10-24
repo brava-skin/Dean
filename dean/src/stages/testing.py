@@ -900,7 +900,11 @@ def run_testing_tick(
 
     if queue_df is None or queue_df.empty:
         notify(f"⚠️ [TEST] Queue empty; cannot top-up to {target_count}.")
+        notify(f"📊 [TEST] Current active ads: {active_count}, Target: {target_count}, Need: {need}")
         return summary
+    
+    notify(f"📊 [TEST] Queue loaded: {len(queue_df)} creatives available")
+    notify(f"📊 [TEST] Current active ads: {active_count}, Target: {target_count}, Need: {need}")
 
     existing_names = {str(a.get("name", "")).strip() for a in current_ads}
     candidates: List[Dict[str, Any]] = []
