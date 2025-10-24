@@ -441,10 +441,24 @@ class AdvancedRuleEngine:
         # NEW RULE TYPES FOR LEARNING PHASE
         if t == "cpm_increase":
             # Kill if CPM increased by specified percentage
-            current_cpm = m.cpm or 0.0
-            spend_ok = (m.spend or 0) >= rule["spend_gte"]
-            # This would need historical CPM data - simplified for now
-            return spend_ok and current_cpm > 200, f"CPM increase detected: {current_cpm:.2f}" if spend_ok and current_cpm > 200 else ""
+            ad_id = row.get("ad_id")
+            if not ad_id:
+                return False, ""
+            
+            store = getattr(self, 'store', None)
+            if store:
+                # Get historical CPM data
+                historical_cpm = store.get_historical_data(ad_id, "cpm", since_days=2)
+                if len(historical_cpm) >= 1:
+                    current_cpm = m.cpm or 0.0
+                    spend_ok = (m.spend or 0) >= rule["spend_gte"]
+                    # Calculate average CPM from yesterday
+                    avg_cpm = sum(h["metric_value"] for h in historical_cpm) / len(historical_cpm)
+                    increase_threshold = rule.get("cpm_increase_pct", 80) / 100.0
+                    
+                    if spend_ok and current_cpm > avg_cpm * (1 + increase_threshold):
+                        return True, f"CPM increase: {current_cpm:.2f} vs avg {avg_cpm:.2f} (+{increase_threshold*100:.0f}%)"
+            return False, ""
 
         if t == "cpm_above":
             # Kill if CPM above threshold
@@ -504,28 +518,91 @@ class AdvancedRuleEngine:
             return atc_ok and ic_ok and spend_ok, f"ATC≥{rule['atc_gte']} but IC<{rule['ic_lt']}" if atc_ok and ic_ok and spend_ok else ""
 
         if t == "max_runtime":
-            # Kill after maximum runtime (would need to track ad creation time)
-            # This is a placeholder - actual implementation would need ad creation timestamp
+            # Kill after maximum runtime
+            ad_id = row.get("ad_id")
+            if not ad_id:
+                return False, ""
+            
+            # Get ad age from store
+            store = getattr(self, 'store', None)
+            if store:
+                ad_age_days = store.get_ad_age_days(ad_id)
+                if ad_age_days is not None and ad_age_days >= rule.get("days", 7):
+                    return True, f"Ad runtime≥{rule.get('days', 7)}d (age: {ad_age_days:.1f}d)"
             return False, ""
 
         if t == "mandatory_kill_after_days":
-            # Kill after specified days (would need to track ad creation time)
-            # This is a placeholder - actual implementation would need ad creation timestamp
+            # Kill after specified days regardless of performance
+            ad_id = row.get("ad_id")
+            if not ad_id:
+                return False, ""
+            
+            # Get ad age from store
+            store = getattr(self, 'store', None)
+            if store:
+                ad_age_days = store.get_ad_age_days(ad_id)
+                if ad_age_days is not None and ad_age_days >= rule.get("days", 7):
+                    return True, f"Mandatory kill after {rule.get('days', 7)}d (age: {ad_age_days:.1f}d)"
             return False, ""
 
         if t == "cpm_spike":
-            # Kill if CPM spikes (would need historical data)
-            # This is a placeholder - actual implementation would need historical CPM data
+            # Kill if CPM spikes significantly
+            ad_id = row.get("ad_id")
+            if not ad_id:
+                return False, ""
+            
+            store = getattr(self, 'store', None)
+            if store:
+                # Get historical CPM data
+                historical_cpm = store.get_historical_data(ad_id, "cpm", since_days=3)
+                if len(historical_cpm) >= 2:
+                    current_cpm = m.cpm or 0.0
+                    # Calculate average CPM from last 2 days
+                    avg_cpm = sum(h["metric_value"] for h in historical_cpm[1:]) / len(historical_cpm[1:])
+                    spike_threshold = rule.get("cpm_spike_pct", 100) / 100.0
+                    
+                    if current_cpm > avg_cpm * (1 + spike_threshold):
+                        return True, f"CPM spike: {current_cpm:.2f} vs avg {avg_cpm:.2f} (+{spike_threshold*100:.0f}%)"
             return False, ""
 
         if t == "impression_drop":
-            # Kill if impressions drop (would need historical data)
-            # This is a placeholder - actual implementation would need historical impression data
+            # Kill if impressions drop significantly
+            ad_id = row.get("ad_id")
+            if not ad_id:
+                return False, ""
+            
+            store = getattr(self, 'store', None)
+            if store:
+                # Get historical impression data
+                historical_impressions = store.get_historical_data(ad_id, "impressions", since_days=3)
+                if len(historical_impressions) >= 2:
+                    current_impressions = m.impressions or 0
+                    # Calculate average impressions from last 2 days
+                    avg_impressions = sum(h["metric_value"] for h in historical_impressions[1:]) / len(historical_impressions[1:])
+                    drop_threshold = rule.get("impression_drop_pct", 30) / 100.0
+                    
+                    if current_impressions < avg_impressions * (1 - drop_threshold):
+                        return True, f"Impression drop: {current_impressions} vs avg {avg_impressions:.0f} (-{drop_threshold*100:.0f}%)"
             return False, ""
 
         if t == "atc_rate_drop":
-            # Kill if ATC rate drops (would need historical data)
-            # This is a placeholder - actual implementation would need historical ATC rate data
+            # Kill if ATC rate drops significantly
+            ad_id = row.get("ad_id")
+            if not ad_id:
+                return False, ""
+            
+            store = getattr(self, 'store', None)
+            if store:
+                # Get historical ATC rate data
+                historical_atc_rate = store.get_historical_data(ad_id, "atc_rate", since_days=3)
+                if len(historical_atc_rate) >= 2:
+                    current_atc_rate = (m.add_to_cart or 0) / max(1, m.impressions or 1)
+                    # Calculate average ATC rate from last 2 days
+                    avg_atc_rate = sum(h["metric_value"] for h in historical_atc_rate[1:]) / len(historical_atc_rate[1:])
+                    drop_threshold = rule.get("atc_rate_drop_pct", 25) / 100.0
+                    
+                    if current_atc_rate < avg_atc_rate * (1 - drop_threshold):
+                        return True, f"ATC rate drop: {current_atc_rate:.3f} vs avg {avg_atc_rate:.3f} (-{drop_threshold*100:.0f}%)"
             return False, ""
 
         return False, ""

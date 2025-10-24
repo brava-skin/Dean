@@ -1189,7 +1189,7 @@ def main() -> None:
     )
 
     # Rule engine
-    engine = RuleEngine(rules_cfg)
+    engine = RuleEngine(rules_cfg, store)
     
     # ML System initialization (if ML mode enabled)
     ml_system = None
@@ -1418,6 +1418,22 @@ def main() -> None:
                         for ad_id, ad_data in overall["testing"].items():
                             if isinstance(ad_data, dict) and 'spend' in ad_data:
                                 store_performance_data_in_supabase(supabase_client, ad_data, "testing")
+                                
+                                # Record historical data for rule evaluation
+                                if store and ad_data.get("ad_id"):
+                                    ad_id = ad_data["ad_id"]
+                                    lifecycle_id = ad_data.get("lifecycle_id", "")
+                                    
+                                    # Record ad creation time if not already recorded
+                                    creation_time = store.get_ad_creation_time(ad_id)
+                                    if not creation_time:
+                                        store.record_ad_creation(ad_id, lifecycle_id, "testing")
+                                    
+                                    # Store historical metrics for rule evaluation
+                                    metrics_to_track = ["cpm", "ctr", "impressions", "clicks", "spend", "add_to_cart", "purchases"]
+                                    for metric in metrics_to_track:
+                                        if metric in ad_data and ad_data[metric] is not None:
+                                            store.store_historical_data(ad_id, lifecycle_id, "testing", metric, float(ad_data[metric]))
                         notify("📊 Performance data stored in Supabase for ML system")
                     
                     # Now run ML analysis on the stored data
@@ -1472,6 +1488,23 @@ def main() -> None:
                         for ad_id, ad_data in overall["validation"].items():
                             if isinstance(ad_data, dict) and 'spend' in ad_data:
                                 store_performance_data_in_supabase(supabase_client, ad_data, "validation")
+                                
+                                # Record historical data for rule evaluation
+                                if store and ad_data.get("ad_id"):
+                                    ad_id = ad_data["ad_id"]
+                                    lifecycle_id = ad_data.get("lifecycle_id", "")
+                                    
+                                    # Record ad creation time if not already recorded
+                                    creation_time = store.get_ad_creation_time(ad_id)
+                                    if not creation_time:
+                                        store.record_ad_creation(ad_id, lifecycle_id, "validation")
+                                    
+                                    # Store historical metrics for rule evaluation
+                                    metrics_to_track = ["cpm", "ctr", "impressions", "clicks", "spend", "add_to_cart", "purchases"]
+                                    for metric in metrics_to_track:
+                                        if metric in ad_data and ad_data[metric] is not None:
+                                            store.store_historical_data(ad_id, lifecycle_id, "validation", metric, float(ad_data[metric]))
+                                
                                 # NEW: Store time-series and creative data
                                 store_timeseries_data_in_supabase(supabase_client, ad_id, ad_data, "validation")
                                 store_creative_data_in_supabase(supabase_client, client, ad_id, "validation")
@@ -1494,6 +1527,23 @@ def main() -> None:
                         for ad_id, ad_data in overall["scaling"].items():
                             if isinstance(ad_data, dict) and 'spend' in ad_data:
                                 store_performance_data_in_supabase(supabase_client, ad_data, "scaling")
+                                
+                                # Record historical data for rule evaluation
+                                if store and ad_data.get("ad_id"):
+                                    ad_id = ad_data["ad_id"]
+                                    lifecycle_id = ad_data.get("lifecycle_id", "")
+                                    
+                                    # Record ad creation time if not already recorded
+                                    creation_time = store.get_ad_creation_time(ad_id)
+                                    if not creation_time:
+                                        store.record_ad_creation(ad_id, lifecycle_id, "scaling")
+                                    
+                                    # Store historical metrics for rule evaluation
+                                    metrics_to_track = ["cpm", "ctr", "impressions", "clicks", "spend", "add_to_cart", "purchases"]
+                                    for metric in metrics_to_track:
+                                        if metric in ad_data and ad_data[metric] is not None:
+                                            store.store_historical_data(ad_id, lifecycle_id, "scaling", metric, float(ad_data[metric]))
+                                
                                 # NEW: Store time-series and creative data
                                 store_timeseries_data_in_supabase(supabase_client, ad_id, ad_data, "scaling")
                                 store_creative_data_in_supabase(supabase_client, client, ad_id, "scaling")

@@ -169,7 +169,7 @@ class ActionRecord:
 
 
 class Store:
-    SCHEMA_VERSION = 5
+    SCHEMA_VERSION = 6
 
     def __init__(self, path: str):
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -259,6 +259,38 @@ class Store:
                 updated_at INTEGER NOT NULL
               );
             """)
+            
+            # Historical data tracking for rules
+            c.exec_driver_sql("""
+              CREATE TABLE IF NOT EXISTS historical_data(
+                id TEXT PRIMARY KEY,
+                ad_id TEXT NOT NULL,
+                lifecycle_id TEXT,
+                stage TEXT NOT NULL,
+                metric_name TEXT NOT NULL,
+                metric_value REAL NOT NULL,
+                ts_epoch INTEGER NOT NULL,
+                ts_iso TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                INDEX(ad_id, metric_name, ts_epoch),
+                INDEX(lifecycle_id, metric_name, ts_epoch),
+                INDEX(stage, metric_name, ts_epoch)
+              );
+            """)
+            
+            # Ad creation tracking for time-based rules
+            c.exec_driver_sql("""
+              CREATE TABLE IF NOT EXISTS ad_creation_times(
+                ad_id TEXT PRIMARY KEY,
+                lifecycle_id TEXT,
+                stage TEXT NOT NULL,
+                created_at_epoch INTEGER NOT NULL,
+                created_at_iso TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                INDEX(stage, created_at_epoch),
+                INDEX(lifecycle_id, created_at_epoch)
+              );
+            """)
 
     def _migrate(self, conn, current: int, target: int) -> None:
         for v in range(current + 1, target + 1):
@@ -271,6 +303,39 @@ class Store:
             if v == 5:
                 try:
                     conn.exec_driver_sql("ALTER TABLE actions ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;")
+                except Exception:
+                    pass
+            if v == 6:
+                try:
+                    # Add historical data tracking tables
+                    conn.exec_driver_sql("""
+                      CREATE TABLE IF NOT EXISTS historical_data(
+                        id TEXT PRIMARY KEY,
+                        ad_id TEXT NOT NULL,
+                        lifecycle_id TEXT,
+                        stage TEXT NOT NULL,
+                        metric_name TEXT NOT NULL,
+                        metric_value REAL NOT NULL,
+                        ts_epoch INTEGER NOT NULL,
+                        ts_iso TEXT NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        INDEX(ad_id, metric_name, ts_epoch),
+                        INDEX(lifecycle_id, metric_name, ts_epoch),
+                        INDEX(stage, metric_name, ts_epoch)
+                      );
+                    """)
+                    conn.exec_driver_sql("""
+                      CREATE TABLE IF NOT EXISTS ad_creation_times(
+                        ad_id TEXT PRIMARY KEY,
+                        lifecycle_id TEXT,
+                        stage TEXT NOT NULL,
+                        created_at_epoch INTEGER NOT NULL,
+                        created_at_iso TEXT NOT NULL,
+                        updated_at INTEGER NOT NULL,
+                        INDEX(stage, created_at_epoch),
+                        INDEX(lifecycle_id, created_at_epoch)
+                      );
+                    """)
                 except Exception:
                     pass
             conn.execute(text("UPDATE schema_version SET version=:v"), {"v": v})
@@ -734,6 +799,122 @@ class Store:
                 )
         except Exception:
             pass
+
+    # ------------------------ Historical Data Tracking ------------------------
+
+    @_retry_sql()
+    def store_historical_data(self, ad_id: str, lifecycle_id: str, stage: str, 
+                            metric_name: str, metric_value: float, 
+                            ts: Optional[datetime] = None) -> str:
+        """Store historical data point for rule evaluation."""
+        now = ts or _now_utc()
+        data_id = str(uuid.uuid7()) if hasattr(uuid, "uuid7") else str(uuid.uuid4())
+        
+        with self._begin() as c:
+            c.execute(text("""
+                INSERT INTO historical_data
+                (id, ad_id, lifecycle_id, stage, metric_name, metric_value, ts_epoch, ts_iso, created_at)
+                VALUES (:id, :ad_id, :lifecycle_id, :stage, :metric_name, :metric_value, :ts_epoch, :ts_iso, :created_at)
+            """), {
+                "id": data_id,
+                "ad_id": ad_id,
+                "lifecycle_id": lifecycle_id,
+                "stage": stage,
+                "metric_name": metric_name,
+                "metric_value": float(metric_value),
+                "ts_epoch": _epoch(now),
+                "ts_iso": _iso(now),
+                "created_at": _epoch_now()
+            })
+        return data_id
+
+    @_retry_sql()
+    def get_historical_data(self, ad_id: str, metric_name: str, 
+                          since_days: int = 7, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get historical data for an ad and metric."""
+        since_epoch = _epoch(_now_utc() - timedelta(days=since_days))
+        
+        with self._begin() as c:
+            rows = c.execute(text("""
+                SELECT metric_value, ts_epoch, ts_iso, stage
+                FROM historical_data
+                WHERE ad_id = :ad_id AND metric_name = :metric_name AND ts_epoch >= :since_epoch
+                ORDER BY ts_epoch DESC
+                LIMIT :limit
+            """), {
+                "ad_id": ad_id,
+                "metric_name": metric_name,
+                "since_epoch": since_epoch,
+                "limit": limit
+            }).fetchall()
+        
+        return [
+            {
+                "metric_value": float(row[0]),
+                "ts_epoch": int(row[1]),
+                "ts_iso": row[2],
+                "stage": row[3]
+            }
+            for row in rows
+        ]
+
+    @_retry_sql()
+    def record_ad_creation(self, ad_id: str, lifecycle_id: str, stage: str, 
+                          created_at: Optional[datetime] = None) -> None:
+        """Record when an ad was created for time-based rules."""
+        now = created_at or _now_utc()
+        
+        with self._begin() as c:
+            c.execute(text("""
+                INSERT OR REPLACE INTO ad_creation_times
+                (ad_id, lifecycle_id, stage, created_at_epoch, created_at_iso, updated_at)
+                VALUES (:ad_id, :lifecycle_id, :stage, :created_at_epoch, :created_at_iso, :updated_at)
+            """), {
+                "ad_id": ad_id,
+                "lifecycle_id": lifecycle_id,
+                "stage": stage,
+                "created_at_epoch": _epoch(now),
+                "created_at_iso": _iso(now),
+                "updated_at": _epoch_now()
+            })
+
+    @_retry_sql()
+    def get_ad_creation_time(self, ad_id: str) -> Optional[datetime]:
+        """Get when an ad was created."""
+        with self._begin() as c:
+            row = c.execute(text("""
+                SELECT created_at_epoch
+                FROM ad_creation_times
+                WHERE ad_id = :ad_id
+            """), {"ad_id": ad_id}).fetchone()
+        
+        if not row:
+            return None
+        
+        return datetime.fromtimestamp(int(row[0]), tz=UTC)
+
+    @_retry_sql()
+    def get_ad_age_days(self, ad_id: str) -> Optional[float]:
+        """Get ad age in days."""
+        creation_time = self.get_ad_creation_time(ad_id)
+        if not creation_time:
+            return None
+        
+        now = _now_utc()
+        age_delta = now - creation_time
+        return age_delta.total_seconds() / (24 * 3600)  # Convert to days
+
+    @_retry_sql()
+    def cleanup_old_historical_data(self, days_to_keep: int = 30) -> int:
+        """Clean up old historical data to keep database size manageable."""
+        cutoff_epoch = _epoch(_now_utc() - timedelta(days=days_to_keep))
+        
+        with self._begin() as c:
+            cur = c.execute(text("""
+                DELETE FROM historical_data 
+                WHERE ts_epoch < :cutoff
+            """), {"cutoff": cutoff_epoch})
+            return cur.rowcount or 0
 
 
 __all__ = [
