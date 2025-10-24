@@ -880,6 +880,8 @@ def run_testing_tick(
     target_count = 10
     need = max(0, target_count - active_count)
     
+    notify(f"🔍 [TEST] DEBUG: active_count={active_count}, target_count={target_count}, need={need}")
+    
     # If we have more than 10, we need to pause some (shouldn't happen with proper management)
     if active_count > target_count:
         notify(f"⚠️ [TEST] Too many active ads ({active_count}), should be {target_count}")
@@ -896,6 +898,7 @@ def run_testing_tick(
     _check_and_rotate_creatives(meta, store, current_ads, rotation_frequency, target_count, summary)
     
     if need <= 0:
+        notify(f"🔍 [TEST] DEBUG: need <= 0, returning summary. need={need}")
         return summary
 
     if queue_df is None or queue_df.empty:
