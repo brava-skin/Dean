@@ -195,7 +195,7 @@ class MLPipeline:
             anomalies_detected = False
             if self.config.enable_anomaly_detection and self.anomaly_detector:
                 self.logger.info(f"🔧 [ML DEBUG] Anomaly detection enabled, checking...")
-                anomaly_result = self.anomaly_detector.detect_anomalies(ad_id, stage)
+                anomaly_result = self.anomaly_detector.detect_anomalies(ad_id, days_back=14)
                 self.logger.info(f"🔧 [ML DEBUG] Anomaly result: {anomaly_result}")
                 if anomaly_result and anomaly_result.get('has_anomalies'):
                     anomalies_detected = True

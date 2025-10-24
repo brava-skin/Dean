@@ -47,7 +47,7 @@ class MLDecisionEngine:
         """Enhanced kill decision using ML predictions."""
         try:
             # Get rule-based decision first
-            from rules import Metrics
+            from analytics.metrics import Metrics
             
             metrics = Metrics(
                 cpa=performance_data.get('cpa'),
@@ -147,13 +147,37 @@ class MLDecisionEngine:
         except Exception as e:
             self.logger.error(f"Error in ML-enhanced kill decision: {e}")
             # Fallback to rules
-            return rule_kill, f"Rules: {rule_reason} (ML error)", 0.0
+            try:
+                from analytics.metrics import Metrics
+                metrics = Metrics(
+                    cpa=performance_data.get('cpa'),
+                    roas=performance_data.get('roas'),
+                    ctr=performance_data.get('ctr'),
+                    cpm=performance_data.get('cpm'),
+                    spend=performance_data.get('spend'),
+                    impressions=performance_data.get('impressions'),
+                    clicks=performance_data.get('clicks'),
+                    purchases=performance_data.get('purchases'),
+                    atc=performance_data.get('atc', 0),
+                    ic=performance_data.get('ic', 0)
+                )
+                if stage == 'testing':
+                    rule_kill, rule_reason = self.rule_engine.should_kill_testing(metrics)
+                elif stage == 'validation':
+                    rule_kill, rule_reason = self.rule_engine.should_kill_validation(metrics)
+                else:
+                    rule_kill = False
+                    rule_reason = "No rule check"
+                return rule_kill, f"Rules: {rule_reason} (ML error)", 0.0
+            except Exception as rule_error:
+                self.logger.error(f"Error in fallback rules: {rule_error}")
+                return False, "Error in decision system", 0.0
     
     def should_promote_ad(self, ad_id: str, stage: str, performance_data: Dict[str, Any]) -> Tuple[bool, str, float]:
         """Enhanced promotion decision using ML predictions."""
         try:
             # Get rule-based decision
-            from rules import Metrics
+            from analytics.metrics import Metrics
             
             metrics = Metrics(
                 cpa=performance_data.get('cpa'),
@@ -247,7 +271,31 @@ class MLDecisionEngine:
             
         except Exception as e:
             self.logger.error(f"Error in ML-enhanced promotion decision: {e}")
-            return rule_promote, f"Rules: {rule_reason} (ML error)", 0.0
+            try:
+                from analytics.metrics import Metrics
+                metrics = Metrics(
+                    cpa=performance_data.get('cpa'),
+                    roas=performance_data.get('roas'),
+                    ctr=performance_data.get('ctr'),
+                    cpm=performance_data.get('cpm'),
+                    spend=performance_data.get('spend'),
+                    impressions=performance_data.get('impressions'),
+                    clicks=performance_data.get('clicks'),
+                    purchases=performance_data.get('purchases'),
+                    atc=performance_data.get('atc', 0),
+                    ic=performance_data.get('ic', 0)
+                )
+                if stage == 'testing':
+                    rule_promote, rule_reason = self.rule_engine.should_advance_from_testing(metrics)
+                elif stage == 'validation':
+                    rule_promote, rule_reason = self.rule_engine.should_advance_from_validation(metrics)
+                else:
+                    rule_promote = False
+                    rule_reason = "Not applicable"
+                return rule_promote, f"Rules: {rule_reason} (ML error)", 0.0
+            except Exception as rule_error:
+                self.logger.error(f"Error in fallback rules: {rule_error}")
+                return False, "Error in decision system", 0.0
     
     def recommend_budget(self, ad_id: str, stage: str, current_budget: float,
                         performance_data: Dict[str, Any]) -> Tuple[float, str, float]:

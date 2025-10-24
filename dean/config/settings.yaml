@@ -12,6 +12,11 @@ account:
   timezone: "Europe/Amsterdam"
   currency: "EUR"
 
+# Copy bank configuration
+copy_bank:
+  path: "data/copy_bank.json"
+  strategy: "round_robin"
+
 # Campaign & AdSet IDs (root level for backward compatibility)
 ids:
   testing_campaign_id: "120231838265440160"
