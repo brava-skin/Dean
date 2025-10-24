@@ -532,7 +532,8 @@ def initialize_creative_intelligence_system(supabase_client) -> Optional[Any]:
         
         creative_system = create_creative_intelligence_system(
             supabase_client=supabase_client,
-            openai_api_key=openai_api_key
+            openai_api_key=openai_api_key,
+            settings=settings
         )
         
         # Load copy bank data to Supabase

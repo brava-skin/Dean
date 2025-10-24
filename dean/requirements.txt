@@ -56,3 +56,14 @@ gplearn>=0.4.2  # Genetic programming features
 scikit-optimize>=0.9.0  # Bayesian optimization
 imbalanced-learn>=0.11.0  # Handling imbalanced data
 pyod>=1.1.0  # Outlier/anomaly detection
+
+# Creative Intelligence System Dependencies
+openai>=1.0.0  # GPT-5 integration
+sentence-transformers>=2.2.0  # Semantic similarity analysis
+transformers>=4.30.0  # Advanced NLP models
+spacy>=3.6.0  # Advanced NLP
+nltk>=3.8.0  # Natural language processing
+Pillow>=9.0.0  # Image processing for creative analysis
+opencv-python>=4.8.0  # Image processing
+textblob>=0.17.0  # Text analysis
+vaderSentiment>=3.3.0  # Sentiment analysis

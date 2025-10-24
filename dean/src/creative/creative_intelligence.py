@@ -65,16 +65,23 @@ class CreativeInsight:
 class CreativeIntelligenceSystem:
     """Advanced creative intelligence system with ML and AI capabilities."""
     
-    def __init__(self, supabase_client=None, openai_api_key=None):
+    def __init__(self, supabase_client=None, openai_api_key=None, settings=None):
         self.supabase_client = supabase_client
         self.openai_api_key = openai_api_key
+        self.settings = settings or {}
         self.logger = logging.getLogger(__name__)
+        
+        # Get configuration from settings
+        self.config = self.settings.get('creative_intelligence', {})
+        self.ai_config = self.config.get('ai_generation', {})
+        self.similarity_config = self.config.get('similarity_analysis', {})
         
         # Initialize AI models
         self.sentence_model = None
         if SENTENCE_TRANSFORMERS_AVAILABLE:
             try:
-                self.sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
+                model_name = self.similarity_config.get("model", "all-MiniLM-L6-v2")
+                self.sentence_model = SentenceTransformer(model_name)
             except Exception as e:
                 self.logger.warning(f"Failed to load sentence transformer: {e}")
         
@@ -314,17 +321,14 @@ class CreativeIntelligenceSystem:
             Return only the {creative_type}s, one per line, without numbering or labels.
             """
             
-            response = openai.ChatCompletion.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You are an expert copywriter specializing in high-converting social media advertisements."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=500,
-                temperature=0.7
+            response = openai.responses.create(
+                model=self.ai_config.get("model", "gpt-5"),
+                input=f"You are an expert copywriter specializing in high-converting social media advertisements.\n\n{prompt}",
+                reasoning={"effort": "medium"},
+                text={"verbosity": "medium"}
             )
             
-            generated_creatives = response.choices[0].message.content.strip().split('\n')
+            generated_creatives = response.output_text.strip().split('\n')
             generated_creatives = [c.strip() for c in generated_creatives if c.strip()]
             
             # Store generated creatives in Supabase
@@ -391,7 +395,8 @@ class CreativeIntelligenceSystem:
                 content_embedding = self.sentence_model.encode([creative['content']])
                 similarity = np.dot(source_embedding[0], content_embedding[0])
                 
-                if similarity >= threshold:
+                similarity_threshold = self.similarity_config.get("threshold", 0.7)
+                if similarity >= similarity_threshold:
                     similar_creatives.append((creative['creative_id'], float(similarity)))
             
             # Sort by similarity
@@ -488,6 +493,6 @@ class CreativeIntelligenceSystem:
             return False
 
 
-def create_creative_intelligence_system(supabase_client=None, openai_api_key=None) -> CreativeIntelligenceSystem:
+def create_creative_intelligence_system(supabase_client=None, openai_api_key=None, settings=None) -> CreativeIntelligenceSystem:
     """Create and initialize the creative intelligence system."""
-    return CreativeIntelligenceSystem(supabase_client, openai_api_key)
+    return CreativeIntelligenceSystem(supabase_client, openai_api_key, settings)
