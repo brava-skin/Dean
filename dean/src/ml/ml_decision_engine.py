@@ -57,7 +57,8 @@ class MLDecisionEngine:
                 purchases=performance_data.get('purchases', 0),
                 impressions=performance_data.get('impressions', 0),
                 clicks=performance_data.get('clicks', 0),
-                add_to_cart=performance_data.get('atc', 0)
+                add_to_cart=performance_data.get('atc', 0),
+                initiate_checkout=performance_data.get('ic', 0)
             )
             
             # Rule-based decision
@@ -185,7 +186,8 @@ class MLDecisionEngine:
                 purchases=performance_data.get('purchases', 0),
                 impressions=performance_data.get('impressions', 0),
                 clicks=performance_data.get('clicks', 0),
-                add_to_cart=performance_data.get('atc', 0)
+                add_to_cart=performance_data.get('atc', 0),
+                initiate_checkout=performance_data.get('ic', 0)
             )
             
             # Rule-based decision

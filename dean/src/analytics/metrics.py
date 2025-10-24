@@ -199,6 +199,7 @@ class Metrics:
     frequency: Optional[float] = None
     purchases: float = 0.0
     add_to_cart: float = 0.0
+    initiate_checkout: float = 0.0
     revenue: float = 0.0
     three_sec_views: Optional[float] = None
 
