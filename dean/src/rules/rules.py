@@ -468,6 +468,66 @@ class AdvancedRuleEngine:
             # Note: days parameter would need to be tracked separately
             return atc_ok and purchase_ok and spend_ok, f"ATC≥{rule['atc_gte']} but no purchase after {rule.get('days', 3)}d" if atc_ok and purchase_ok and spend_ok else ""
 
+        if t == "atc_gte":
+            # Promote if ATC meets threshold
+            atc_ok = (m.add_to_cart or 0) >= rule["atc_gte"]
+            spend_ok = (m.spend or 0) >= rule.get("spend_gte", 0)
+            return atc_ok and spend_ok, f"ATC≥{rule['atc_gte']} after €{rule.get('spend_gte', 0)}" if atc_ok and spend_ok else ""
+
+        if t == "cpm_lte":
+            # Promote if CPM below threshold
+            current_cpm = m.cpm or 0.0
+            spend_ok = (m.spend or 0) >= rule["spend_gte"]
+            ctr_ok = (m.ctr or 0.0) >= rule.get("ctr_gte", 0)
+            cpm_ok = current_cpm <= rule["cpm_lte"]
+            return spend_ok and ctr_ok and cpm_ok, f"CPM≤{rule['cpm_lte']} & CTR≥{rule.get('ctr_gte', 0):.1%}" if spend_ok and ctr_ok and cpm_ok else ""
+
+        if t == "atc_rate_below":
+            # Kill if ATC rate below threshold
+            atc_rate = (m.add_to_cart or 0) / max(1, m.impressions or 1)
+            spend_ok = (m.spend or 0) >= rule["spend_gte"]
+            rate_ok = atc_rate < rule["atc_rate_lt"]
+            return spend_ok and rate_ok, f"ATC rate<{rule['atc_rate_lt']:.1%}" if spend_ok and rate_ok else ""
+
+        if t == "cost_per_atc_above":
+            # Kill if cost per ATC above threshold
+            cost_per_atc = (m.spend or 0) / max(1, m.add_to_cart or 1)
+            spend_ok = (m.spend or 0) >= rule["spend_gte"]
+            cost_ok = cost_per_atc >= rule["cost_per_atc_gte"]
+            return spend_ok and cost_ok, f"Cost per ATC≥€{rule['cost_per_atc_gte']}" if spend_ok and cost_ok else ""
+
+        if t == "atc_no_ic":
+            # Kill if ATC but no IC
+            atc_ok = (m.add_to_cart or 0) >= rule["atc_gte"]
+            ic_ok = (m.initiate_checkout or 0) < rule["ic_lt"]
+            spend_ok = (m.spend or 0) >= rule["spend_gte"]
+            return atc_ok and ic_ok and spend_ok, f"ATC≥{rule['atc_gte']} but IC<{rule['ic_lt']}" if atc_ok and ic_ok and spend_ok else ""
+
+        if t == "max_runtime":
+            # Kill after maximum runtime (would need to track ad creation time)
+            # This is a placeholder - actual implementation would need ad creation timestamp
+            return False, ""
+
+        if t == "mandatory_kill_after_days":
+            # Kill after specified days (would need to track ad creation time)
+            # This is a placeholder - actual implementation would need ad creation timestamp
+            return False, ""
+
+        if t == "cpm_spike":
+            # Kill if CPM spikes (would need historical data)
+            # This is a placeholder - actual implementation would need historical CPM data
+            return False, ""
+
+        if t == "impression_drop":
+            # Kill if impressions drop (would need historical data)
+            # This is a placeholder - actual implementation would need historical impression data
+            return False, ""
+
+        if t == "atc_rate_drop":
+            # Kill if ATC rate drops (would need historical data)
+            # This is a placeholder - actual implementation would need historical ATC rate data
+            return False, ""
+
         return False, ""
 
     # ---------- Stage decisions ----------
