@@ -1364,8 +1364,27 @@ def main() -> None:
             notify("   Falling back to legacy system...")
             ml_mode_enabled = False
 
-    # Initialize Supabase client
-    supabase_client = _get_supabase()
+# Initialize Supabase client
+supabase_client = _get_supabase()
+
+    # Initialize Table Monitoring System
+table_monitor = None
+if supabase_client:
+    try:
+        from analytics.table_monitoring import create_table_monitor
+        table_monitor = create_table_monitor(supabase_client)
+        notify("📊 Table monitoring system initialized")
+        
+        # Get initial table state
+        initial_insights = table_monitor.get_all_table_insights()
+        notify("📊 Initial table state:")
+        notify(f"   • Total tables: {initial_insights.total_tables}")
+        notify(f"   • Total rows: {initial_insights.total_rows:,}")
+        notify(f"   • Healthy tables: {initial_insights.healthy_tables}")
+        if initial_insights.problematic_tables > 0:
+            notify(f"   • Problematic tables: {initial_insights.problematic_tables}")
+    except Exception as e:
+        notify(f"⚠️ Failed to initialize table monitoring: {e}")
     
     # Initialize Creative Intelligence System
     creative_system = None
@@ -1806,6 +1825,31 @@ def main() -> None:
             send_ml_learning_report(supabase_client, notify)
         except Exception as e:
             notify(f"❌ ML status error: {e}")
+
+    # Table monitoring and insights
+    if table_monitor:
+        try:
+            # Get comprehensive table insights
+            table_insights = table_monitor.get_all_table_insights()
+            
+            # Check ML data sufficiency
+            ml_status = table_monitor.check_ml_data_sufficiency(table_insights)
+            
+            # Send table monitoring report
+            table_report = table_monitor.format_insights_report(table_insights)
+            notify(table_report)
+            
+            # Alert if ML system doesn't have sufficient data
+            if not ml_status['ready_for_training']:
+                notify("🚨 ML System Data Alert:")
+                for rec in ml_status['recommendations']:
+                    notify(f"   • {rec}")
+            
+            # Update previous counts for next tick
+            table_monitor.update_previous_counts(table_insights)
+            
+        except Exception as e:
+            notify(f"⚠️ Table monitoring failed: {e}")
 
     # Console summary (logs only, not Slack)
     from datetime import datetime

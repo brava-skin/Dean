@@ -9,8 +9,10 @@ This package contains:
 
 from .performance_tracking import PerformanceTrackingSystem, create_performance_tracking_system
 from .metrics import MetricsConfig, Metrics, metrics_from_row, aggregate_rows, tripwire_threshold_account
+from .table_monitoring import TableMonitor, TableHealth, TableInsights, create_table_monitor
 
 __all__ = [
     'PerformanceTrackingSystem', 'create_performance_tracking_system',
-    'MetricsConfig', 'Metrics', 'metrics_from_row', 'aggregate_rows', 'tripwire_threshold_account'
+    'MetricsConfig', 'Metrics', 'metrics_from_row', 'aggregate_rows', 'tripwire_threshold_account',
+    'TableMonitor', 'TableHealth', 'TableInsights', 'create_table_monitor'
 ]
