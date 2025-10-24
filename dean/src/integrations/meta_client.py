@@ -14,7 +14,7 @@ import json
 
 import requests
 
-from infrastructure.utils import today_ymd, yesterday_ymd
+# Import moved to avoid circular dependency - will import locally when needed
 from .slack import notify
 
 USE_SDK = False
@@ -833,6 +833,8 @@ class MetaClient:
         if normalized_preset == "lifetime":
             normalized_preset = "maximum"
 
+        # Import locally to avoid circular dependency
+        from infrastructure.utils import today_ymd, yesterday_ymd
         tr = None if normalized_preset else (time_range or {"since": yesterday_ymd(), "until": today_ymd()})
 
         if self.dry_run or not USE_SDK:

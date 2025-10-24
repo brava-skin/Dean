@@ -14,11 +14,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import requests
 
-from ..infrastructure.utils import (
-    getenv_f, getenv_i, getenv_b, cfg, cfg_or_env_f, cfg_or_env_i, cfg_or_env_b, cfg_or_env_list,
-    safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name as utils_prettify_ad_name,
-    fmt_currency, fmt_pct, fmt_int, fmt_roas
-)
+# Import moved to avoid circular dependency - will import locally when needed
 
 # ---- Local time/currency config (AMS + EUR) ----
 try:
@@ -400,31 +396,41 @@ def format_stage_line(stage: str, counts: Dict[str, any]) -> str:
 
 def prettify_ad_name(name: str) -> str:
     """Clean up ad display names for mobile-friendly display."""
+    # Import locally to avoid circular dependency
+    from infrastructure.utils import prettify_ad_name as utils_prettify_ad_name
     return utils_prettify_ad_name(name)
 
 def fmt_eur(amount: Optional[float]) -> str:
     """Format currency with Euro symbol."""
     if amount is None:
         return "–"
+    # Import locally to avoid circular dependency
+    from infrastructure.utils import fmt_currency
     return fmt_currency(amount)
 
 def fmt_pct(value: Optional[float], decimals: int = 1) -> str:
     """Format percentage with specified decimal places."""
     if value is None:
         return "–"
-    return fmt_pct(value, decimals)
+    # Import locally to avoid circular dependency
+    from infrastructure.utils import fmt_pct as utils_fmt_pct
+    return utils_fmt_pct(value, decimals)
 
 def fmt_roas(value: Optional[float]) -> str:
     """Format ROAS with 2 decimal places."""
     if value is None:
         return "–"
-    return fmt_roas(value)
+    # Import locally to avoid circular dependency
+    from infrastructure.utils import fmt_roas as utils_fmt_roas
+    return utils_fmt_roas(value)
 
 def fmt_int(value: Optional[int]) -> str:
     """Format integer."""
     if value is None:
         return "–"
-    return fmt_int(value)
+    # Import locally to avoid circular dependency
+    from infrastructure.utils import fmt_int as utils_fmt_int
+    return utils_fmt_int(value)
 
 def post_run_header_and_get_thread_ts(
     status: str, 
@@ -1106,15 +1112,8 @@ def build_ads_snapshot(rows_today: List[Dict[str, Any]], rows_lifetime: List[Dic
     from datetime import datetime, timezone
     import re
     
-    def safe_f(v: Any, default: float = 0.0) -> float:
-        try:
-            if v is None:
-                return default
-            if isinstance(v, (int, float)):
-                return float(v)
-            return float(str(v).replace(",", "").strip())
-        except Exception:
-            return default
+    # Import locally to avoid circular dependency
+    from infrastructure.utils import safe_f
     
     def _prettify_ad_name(name: str) -> str:
         """Clean up ad display names for mobile-friendly display."""
