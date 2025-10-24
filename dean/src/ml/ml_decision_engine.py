@@ -57,15 +57,14 @@ class MLDecisionEngine:
                 purchases=performance_data.get('purchases', 0),
                 impressions=performance_data.get('impressions', 0),
                 clicks=performance_data.get('clicks', 0),
-                atc=performance_data.get('atc', 0),
-                ic=performance_data.get('ic', 0)
+                add_to_cart=performance_data.get('atc', 0)
             )
             
             # Rule-based decision
             if stage == 'testing':
-                rule_kill, rule_reason = self.rule_engine.should_kill_testing(metrics)
+                rule_kill, rule_reason = self.rule_engine.should_kill_testing(performance_data)
             elif stage == 'validation':
-                rule_kill, rule_reason = self.rule_engine.should_kill_validation(metrics)
+                rule_kill, rule_reason = self.rule_engine.should_kill_validation(performance_data)
             else:
                 rule_kill = False
                 rule_reason = "No rule check"
@@ -161,9 +160,9 @@ class MLDecisionEngine:
                     add_to_cart=performance_data.get('atc', 0)
                 )
                 if stage == 'testing':
-                    rule_kill, rule_reason = self.rule_engine.should_kill_testing(metrics)
+                    rule_kill, rule_reason = self.rule_engine.should_kill_testing(performance_data)
                 elif stage == 'validation':
-                    rule_kill, rule_reason = self.rule_engine.should_kill_validation(metrics)
+                    rule_kill, rule_reason = self.rule_engine.should_kill_validation(performance_data)
                 else:
                     rule_kill = False
                     rule_reason = "No rule check"
@@ -186,15 +185,14 @@ class MLDecisionEngine:
                 purchases=performance_data.get('purchases', 0),
                 impressions=performance_data.get('impressions', 0),
                 clicks=performance_data.get('clicks', 0),
-                atc=performance_data.get('atc', 0),
-                ic=performance_data.get('ic', 0)
+                add_to_cart=performance_data.get('atc', 0)
             )
             
             # Rule-based decision
             if stage == 'testing':
-                rule_promote, rule_reason = self.rule_engine.should_advance_from_testing(metrics)
+                rule_promote, rule_reason = self.rule_engine.should_advance_from_testing(performance_data)
             elif stage == 'validation':
-                rule_promote, rule_reason = self.rule_engine.should_advance_from_validation(metrics)
+                rule_promote, rule_reason = self.rule_engine.should_advance_from_validation(performance_data)
             else:
                 rule_promote = False
                 rule_reason = "Not applicable"
@@ -284,9 +282,9 @@ class MLDecisionEngine:
                     add_to_cart=performance_data.get('atc', 0)
                 )
                 if stage == 'testing':
-                    rule_promote, rule_reason = self.rule_engine.should_advance_from_testing(metrics)
+                    rule_promote, rule_reason = self.rule_engine.should_advance_from_testing(performance_data)
                 elif stage == 'validation':
-                    rule_promote, rule_reason = self.rule_engine.should_advance_from_validation(metrics)
+                    rule_promote, rule_reason = self.rule_engine.should_advance_from_validation(performance_data)
                 else:
                     rule_promote = False
                     rule_reason = "Not applicable"
