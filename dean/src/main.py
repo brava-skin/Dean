@@ -1437,8 +1437,10 @@ def main() -> None:
         'clicks': acct.get('clicks', 0),
         'ctr': acct.get('ctr'),
         'cpc': acct.get('cpc'),
+        'cpm': acct.get('cpm'),
         'atc': acct.get('atc', 0),
         'ic': acct.get('ic', 0),
+        'active_ads': acct.get('active_ads', 0),
     }
 
     # Idempotency (tick-level) and process lock (multi-runner safety)
