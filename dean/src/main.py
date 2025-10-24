@@ -423,6 +423,52 @@ def store_timeseries_data_in_supabase(supabase_client, ad_id: str, ad_data: Dict
         print(f"⚠️ Failed to store time-series data: {e}")
 
 
+def collect_stage_ad_data(meta_client, settings: Dict[str, Any], stage: str) -> Dict[str, Dict[str, Any]]:
+    """Collect actual ad data for a stage from Meta API."""
+    ad_data = {}
+    try:
+        # Get adset ID for the stage
+        adset_id = settings.get(stage, {}).get("adset_id")
+        if not adset_id:
+            return ad_data
+        
+        # Get ads in the adset
+        ads = meta_client.list_ads_in_adset(adset_id)
+        for ad in ads:
+            if ad.get("status") == "ACTIVE":
+                ad_id = ad.get("id")
+                if ad_id:
+                    try:
+                        # Get ad insights
+                        insights = meta_client.get_ad_insights(ad_id, days=1)
+                        if insights:
+                            ad_data[ad_id] = {
+                                "ad_id": ad_id,
+                                "lifecycle_id": f"lifecycle_{ad_id}",
+                                "stage": stage,
+                                "status": "active",
+                                "spend": insights.get("spend", 0),
+                                "impressions": insights.get("impressions", 0),
+                                "clicks": insights.get("clicks", 0),
+                                "ctr": insights.get("ctr", 0),
+                                "cpc": insights.get("cpc", 0),
+                                "cpm": insights.get("cpm", 0),
+                                "purchases": insights.get("purchases", 0),
+                                "atc": insights.get("add_to_cart", 0),
+                                "ic": insights.get("initiate_checkout", 0),
+                                "roas": insights.get("roas", 0),
+                                "cpa": insights.get("cpa", 0),
+                                "date_start": datetime.now().strftime("%Y-%m-%d"),
+                                "date_end": datetime.now().strftime("%Y-%m-%d"),
+                                "metadata": {}
+                            }
+                    except Exception as e:
+                        notify(f"⚠️ Failed to get insights for ad {ad_id}: {e}")
+    except Exception as e:
+        notify(f"⚠️ Failed to collect {stage} ad data: {e}")
+    
+    return ad_data
+
 def store_creative_data_in_supabase(supabase_client, meta_client, ad_id: str, stage: str) -> None:
     """Fetch and store creative intelligence data from Meta API (NEW)."""
     if not supabase_client or not meta_client:
@@ -1417,7 +1463,9 @@ def main() -> None:
                     supabase_client = _get_supabase()
                     if supabase_client:
                         notify(f"📊 Testing data collected: {len(overall['testing'])} items")
-                        for ad_id, ad_data in overall["testing"].items():
+                        # Collect actual ad data for Supabase storage
+                        testing_ad_data = collect_stage_ad_data(client, settings, "testing")
+                        for ad_id, ad_data in testing_ad_data.items():
                             if isinstance(ad_data, dict) and 'spend' in ad_data:
                                 store_performance_data_in_supabase(supabase_client, ad_data, "testing")
                                 
@@ -1462,8 +1510,9 @@ def main() -> None:
                 supabase_client = _get_supabase()
                 if supabase_client:
                     try:
-                        # Store testing stage performance data
-                        for ad_id, ad_data in overall["testing"].items():
+                        # Collect actual ad data for Supabase storage
+                        testing_ad_data = collect_stage_ad_data(client, settings, "testing")
+                        for ad_id, ad_data in testing_ad_data.items():
                             if isinstance(ad_data, dict) and 'spend' in ad_data:
                                 store_performance_data_in_supabase(supabase_client, ad_data, "testing")
                                 # NEW: Store time-series and creative data
@@ -1489,7 +1538,9 @@ def main() -> None:
                 supabase_client = _get_supabase()
                 if supabase_client:
                     try:
-                        for ad_id, ad_data in overall["validation"].items():
+                        # Collect actual ad data for Supabase storage
+                        validation_ad_data = collect_stage_ad_data(client, settings, "validation")
+                        for ad_id, ad_data in validation_ad_data.items():
                             if isinstance(ad_data, dict) and 'spend' in ad_data:
                                 store_performance_data_in_supabase(supabase_client, ad_data, "validation")
                                 
@@ -1528,7 +1579,9 @@ def main() -> None:
                 supabase_client = _get_supabase()
                 if supabase_client:
                     try:
-                        for ad_id, ad_data in overall["scaling"].items():
+                        # Collect actual ad data for Supabase storage
+                        scaling_ad_data = collect_stage_ad_data(client, settings, "scaling")
+                        for ad_id, ad_data in scaling_ad_data.items():
                             if isinstance(ad_data, dict) and 'spend' in ad_data:
                                 store_performance_data_in_supabase(supabase_client, ad_data, "scaling")
                                 
