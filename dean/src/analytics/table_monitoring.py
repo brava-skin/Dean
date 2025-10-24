@@ -55,26 +55,30 @@ class TableMonitor:
         self.previous_counts: Dict[str, int] = {}
         self.monitoring_enabled = supabase_client is not None
         
-        # Critical tables for ML system
+        # Critical tables for ML system (based on actual usage in codebase)
         self.critical_tables = [
-            'performance_data',
+            'performance_metrics',
             'ad_lifecycle', 
             'time_series_data',
             'ml_predictions',
             'learning_events',
-            'creative_library',
+            'creative_intelligence',
             'historical_data',
-            'ad_creation_times'
+            'ad_creation_times',
+            'ml_models'
         ]
         
         # ML training requirements
         self.ml_table_requirements = {
-            'performance_data': {'min_rows': 10, 'description': 'Ad performance metrics'},
+            'performance_metrics': {'min_rows': 10, 'description': 'Ad performance metrics'},
             'ad_lifecycle': {'min_rows': 5, 'description': 'Ad lifecycle tracking'},
             'time_series_data': {'min_rows': 20, 'description': 'Time-series performance data'},
-            'creative_library': {'min_rows': 10, 'description': 'Creative assets and performance'},
+            'creative_intelligence': {'min_rows': 10, 'description': 'Creative assets and performance'},
             'historical_data': {'min_rows': 50, 'description': 'Historical metric tracking'},
-            'ad_creation_times': {'min_rows': 5, 'description': 'Ad creation timestamps'}
+            'ad_creation_times': {'min_rows': 5, 'description': 'Ad creation timestamps'},
+            'ml_models': {'min_rows': 1, 'description': 'ML model storage'},
+            'ml_predictions': {'min_rows': 1, 'description': 'ML predictions storage'},
+            'learning_events': {'min_rows': 1, 'description': 'ML learning events'}
         }
     
     def get_table_row_count(self, table_name: str) -> int:
