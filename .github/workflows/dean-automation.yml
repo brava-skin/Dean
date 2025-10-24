@@ -40,6 +40,9 @@ jobs:
         SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         SUPABASE_TABLE: ${{ secrets.SUPABASE_TABLE }}
         
+        # Creative Intelligence System Configuration
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        
         # Business Configuration
         STORE_URL: ${{ secrets.STORE_URL }}
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
