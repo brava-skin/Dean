@@ -1,0 +1,76 @@
+# Creative Intelligence System Configuration
+# Advanced creative management with performance tracking, ML analysis, and AI generation
+
+creative_intelligence:
+  # System settings
+  enabled: true
+  auto_load_copy_bank: true
+  update_performance_scores: true
+  
+  # Performance tracking
+  performance_tracking:
+    enabled: true
+    update_frequency_hours: 24
+    retention_days: 365
+    
+  # AI Generation
+  ai_generation:
+    enabled: true
+    model: "gpt-4"
+    temperature: 0.7
+    max_tokens: 500
+    generation_count: 3
+    auto_approve: false
+    
+  # Similarity Analysis
+  similarity_analysis:
+    enabled: true
+    model: "all-MiniLM-L6-v2"
+    threshold: 0.7
+    max_similar_creatives: 10
+    
+  # Performance Analysis
+  performance_analysis:
+    enabled: true
+    analysis_frequency_hours: 168  # Weekly
+    min_sample_size: 10
+    confidence_threshold: 0.7
+    
+  # Creative Categories
+  categories:
+    - "global"
+    - "product_specific"
+    - "seasonal"
+    - "promotional"
+    - "educational"
+    - "social_proof"
+    
+  # Performance Metrics Weights
+  performance_weights:
+    roas: 0.4
+    ctr: 0.3
+    conversion_rate: 0.3
+    
+  # A/B Testing
+  ab_testing:
+    enabled: true
+    min_test_duration_days: 7
+    statistical_significance_threshold: 0.95
+    max_concurrent_tests: 5
+    
+  # Creative Rotation
+  rotation:
+    enabled: true
+    frequency_days: 7
+    rotation_percentage: 0.3
+    performance_threshold: 0.6
+    
+  # Notifications
+  notifications:
+    enabled: true
+    channels: ["slack", "email"]
+    events:
+      - "high_performing_creative"
+      - "creative_fatigue_detected"
+      - "ai_creative_generated"
+      - "ab_test_completed"

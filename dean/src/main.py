@@ -522,6 +522,30 @@ def store_creative_data_in_supabase(supabase_client, meta_client, ad_id: str, st
         print(f"⚠️ Failed to store creative data: {e}")
 
 
+def initialize_creative_intelligence_system(supabase_client) -> Optional[Any]:
+    """Initialize the creative intelligence system."""
+    try:
+        from creative.creative_intelligence import create_creative_intelligence_system
+        
+        # Get OpenAI API key from environment
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        
+        creative_system = create_creative_intelligence_system(
+            supabase_client=supabase_client,
+            openai_api_key=openai_api_key
+        )
+        
+        # Load copy bank data to Supabase
+        creative_system.load_copy_bank_to_supabase()
+        
+        notify("🎨 Creative Intelligence System initialized")
+        return creative_system
+        
+    except Exception as e:
+        notify(f"⚠️ Failed to initialize Creative Intelligence System: {e}")
+        return None
+
+
 def setup_supabase_table():
     """
     Helper function to create the required Supabase table schema.
@@ -1338,6 +1362,14 @@ def main() -> None:
             notify(f"❌ Failed to initialize ML system: {e}")
             notify("   Falling back to legacy system...")
             ml_mode_enabled = False
+
+    # Initialize Creative Intelligence System
+    creative_system = None
+    if supabase_client:
+        try:
+            creative_system = initialize_creative_intelligence_system(supabase_client)
+        except Exception as e:
+            notify(f"⚠️ Creative Intelligence System initialization error: {e}")
 
     # Preflight health check
     hc = health_check(store, client)
