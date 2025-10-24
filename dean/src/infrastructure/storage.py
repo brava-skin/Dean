@@ -271,10 +271,7 @@ class Store:
                 metric_value REAL NOT NULL,
                 ts_epoch INTEGER NOT NULL,
                 ts_iso TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                INDEX(ad_id, metric_name, ts_epoch),
-                INDEX(lifecycle_id, metric_name, ts_epoch),
-                INDEX(stage, metric_name, ts_epoch)
+                created_at INTEGER NOT NULL
               );
             """)
             
@@ -286,9 +283,7 @@ class Store:
                 stage TEXT NOT NULL,
                 created_at_epoch INTEGER NOT NULL,
                 created_at_iso TEXT NOT NULL,
-                updated_at INTEGER NOT NULL,
-                INDEX(stage, created_at_epoch),
-                INDEX(lifecycle_id, created_at_epoch)
+                updated_at INTEGER NOT NULL
               );
             """)
 
@@ -318,10 +313,7 @@ class Store:
                         metric_value REAL NOT NULL,
                         ts_epoch INTEGER NOT NULL,
                         ts_iso TEXT NOT NULL,
-                        created_at INTEGER NOT NULL,
-                        INDEX(ad_id, metric_name, ts_epoch),
-                        INDEX(lifecycle_id, metric_name, ts_epoch),
-                        INDEX(stage, metric_name, ts_epoch)
+                        created_at INTEGER NOT NULL
                       );
                     """)
                     conn.exec_driver_sql("""
@@ -331,11 +323,15 @@ class Store:
                         stage TEXT NOT NULL,
                         created_at_epoch INTEGER NOT NULL,
                         created_at_iso TEXT NOT NULL,
-                        updated_at INTEGER NOT NULL,
-                        INDEX(stage, created_at_epoch),
-                        INDEX(lifecycle_id, created_at_epoch)
+                        updated_at INTEGER NOT NULL
                       );
                     """)
+                    # Create indexes separately
+                    conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_historical_data_ad_metric ON historical_data(ad_id, metric_name, ts_epoch);")
+                    conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_historical_data_lifecycle_metric ON historical_data(lifecycle_id, metric_name, ts_epoch);")
+                    conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_historical_data_stage_metric ON historical_data(stage, metric_name, ts_epoch);")
+                    conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_ad_creation_times_stage ON ad_creation_times(stage, created_at_epoch);")
+                    conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_ad_creation_times_lifecycle ON ad_creation_times(lifecycle_id, created_at_epoch);")
                 except Exception:
                     pass
             conn.execute(text("UPDATE schema_version SET version=:v"), {"v": v})
