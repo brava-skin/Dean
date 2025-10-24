@@ -89,7 +89,7 @@ class CreativeIntelligenceSystem:
         if OPENAI_AVAILABLE and openai_api_key:
             openai.api_key = openai_api_key
     
-    def analyze_copy_bank_patterns(self, copy_bank_path: str = "dean/data/copy_bank.json") -> Dict[str, Any]:
+    def analyze_copy_bank_patterns(self, copy_bank_path: str = "data/copy_bank.json") -> Dict[str, Any]:
         """Analyze copy bank patterns for advanced prompt generation."""
         try:
             with open(copy_bank_path, 'r') as f:
@@ -150,7 +150,7 @@ class CreativeIntelligenceSystem:
             self.logger.error(f"Failed to analyze copy bank patterns: {e}")
             return {}
 
-    def load_copy_bank_to_supabase(self, copy_bank_path: str = "dean/data/copy_bank.json") -> bool:
+    def load_copy_bank_to_supabase(self, copy_bank_path: str = "data/copy_bank.json") -> bool:
         """Load copy bank data into Supabase creative library."""
         try:
             with open(copy_bank_path, 'r') as f:
