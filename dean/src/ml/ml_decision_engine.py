@@ -149,18 +149,17 @@ class MLDecisionEngine:
             # Fallback to rules
             try:
                 from analytics.metrics import Metrics
-                metrics = Metrics(
-                    cpa=performance_data.get('cpa'),
-                    roas=performance_data.get('roas'),
-                    ctr=performance_data.get('ctr'),
-                    cpm=performance_data.get('cpm'),
-                    spend=performance_data.get('spend'),
-                    impressions=performance_data.get('impressions'),
-                    clicks=performance_data.get('clicks'),
-                    purchases=performance_data.get('purchases'),
-                    atc=performance_data.get('atc', 0),
-                    ic=performance_data.get('ic', 0)
-                )
+            metrics = Metrics(
+                cpa=performance_data.get('cpa'),
+                roas=performance_data.get('roas'),
+                ctr=performance_data.get('ctr'),
+                cpm=performance_data.get('cpm'),
+                spend=performance_data.get('spend'),
+                impressions=performance_data.get('impressions'),
+                clicks=performance_data.get('clicks'),
+                purchases=performance_data.get('purchases'),
+                add_to_cart=performance_data.get('atc', 0)
+            )
                 if stage == 'testing':
                     rule_kill, rule_reason = self.rule_engine.should_kill_testing(metrics)
                 elif stage == 'validation':
@@ -273,18 +272,17 @@ class MLDecisionEngine:
             self.logger.error(f"Error in ML-enhanced promotion decision: {e}")
             try:
                 from analytics.metrics import Metrics
-                metrics = Metrics(
-                    cpa=performance_data.get('cpa'),
-                    roas=performance_data.get('roas'),
-                    ctr=performance_data.get('ctr'),
-                    cpm=performance_data.get('cpm'),
-                    spend=performance_data.get('spend'),
-                    impressions=performance_data.get('impressions'),
-                    clicks=performance_data.get('clicks'),
-                    purchases=performance_data.get('purchases'),
-                    atc=performance_data.get('atc', 0),
-                    ic=performance_data.get('ic', 0)
-                )
+            metrics = Metrics(
+                cpa=performance_data.get('cpa'),
+                roas=performance_data.get('roas'),
+                ctr=performance_data.get('ctr'),
+                cpm=performance_data.get('cpm'),
+                spend=performance_data.get('spend'),
+                impressions=performance_data.get('impressions'),
+                clicks=performance_data.get('clicks'),
+                purchases=performance_data.get('purchases'),
+                add_to_cart=performance_data.get('atc', 0)
+            )
                 if stage == 'testing':
                     rule_promote, rule_reason = self.rule_engine.should_advance_from_testing(metrics)
                 elif stage == 'validation':

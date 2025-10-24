@@ -278,8 +278,11 @@ class MLPipeline:
             
             # Step 4: Get predictions for transparency
             ml_analysis = self.ml_system.analyze_ad_intelligence(ad_id, stage)
-            predictions = ml_analysis.get('predictions', {}) if ml_analysis else {}
-            confidence = predictions.get('confidence_score', 0.5)
+            predictions = {}
+            confidence = 0.5
+            if ml_analysis and isinstance(ml_analysis, dict):
+                predictions = ml_analysis.get('predictions', {})
+                confidence = predictions.get('confidence_score', 0.5) if isinstance(predictions, dict) else 0.5
             
             # Build result
             execution_time = (datetime.now() - start_time).total_seconds() * 1000
