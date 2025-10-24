@@ -1256,11 +1256,22 @@ def main() -> None:
             # Initialize ML dashboard for monitoring (NEW)
             ml_dashboard = create_ml_dashboard(supabase_url, supabase_key)
             
-            # Initialize advanced ML features (NEW)
-            rl_agent = create_rl_agent(learning_rate=0.1, exploration_rate=0.1)
-            portfolio_optimizer = create_portfolio_optimizer()
-            seasonality_analyzer = create_seasonality_analyzer()
-            lr_scheduler = create_lr_scheduler(initial_lr=0.1, schedule_type='cosine')
+            # Initialize advanced ML features (NEW) - Optional features
+            try:
+                from ml.ml_advanced_features import (
+                    create_rl_agent, create_portfolio_optimizer, 
+                    create_seasonality_analyzer, create_lr_scheduler
+                )
+                rl_agent = create_rl_agent(learning_rate=0.1, exploration_rate=0.1)
+                portfolio_optimizer = create_portfolio_optimizer()
+                seasonality_analyzer = create_seasonality_analyzer()
+                lr_scheduler = create_lr_scheduler(initial_lr=0.1, schedule_type='cosine')
+            except ImportError:
+                # Advanced features not available, continue without them
+                rl_agent = None
+                portfolio_optimizer = None
+                seasonality_analyzer = None
+                lr_scheduler = None
             
             # Show ML readiness for each stage
             if data_progress_tracker:

@@ -1,4 +1,4 @@
-name: Dean 4-Day Testing System
+name: Dean 10-Creative Andromeda System
 
 on:
   schedule:
@@ -24,7 +24,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r dean/requirements.txt
         
-    - name: Run Dean 4-Day Testing System
+    - name: Run Dean 10-Creative Andromeda System
       env:
         # Meta Ads API Configuration
         FB_APP_ID: ${{ secrets.FB_APP_ID }}
@@ -63,8 +63,8 @@ jobs:
         TZ: Europe/Amsterdam
         
       run: |
-        echo "🚀 Starting Dean 4-Day Testing System..."
-        echo "📊 Features: 4-day testing, metric-based rules, CPM management"
+        echo "🚀 Starting Dean 10-Creative Andromeda System..."
+        echo "📊 Features: 10-creative testing, Andromeda optimization, weekly rotation"
         echo "⏰ Running every 30 minutes"
         echo ""
         
