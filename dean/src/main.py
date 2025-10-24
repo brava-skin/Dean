@@ -57,6 +57,7 @@ try:
         create_ql_agent, create_lstm_predictor, create_auto_feature_engineer,
         create_bayesian_optimizer, create_portfolio_optimizer, create_seasonality_detector, create_shap_explainer
     )
+    from ml.ml_supabase_integration import create_supabase_ml_integration
     ML_AVAILABLE = True
 except ImportError as e:
     print(f"⚠️ ML system not available: {e}")
@@ -89,6 +90,7 @@ except ImportError as e:
     def create_shap_explainer(*args, **kwargs): return None
     def create_causal_impact_analyzer(*args, **kwargs): return None
     def create_ml_decision_engine(*args, **kwargs): return None
+    def create_supabase_ml_integration(*args, **kwargs): return None
 
 # Legacy modules (updated for ML integration)
 from infrastructure import Store
@@ -1226,6 +1228,9 @@ def main() -> None:
             model_validator = create_model_validator(supabase_url, supabase_key)
             data_progress_tracker = create_data_progress_tracker(supabase_url, supabase_key)
             anomaly_detector = create_anomaly_detector(supabase_url, supabase_key)
+            
+            # Initialize enhanced ML integration with Supabase historical data
+            supabase_ml_integration = create_supabase_ml_integration(supabase_client)
             time_series_forecaster = create_time_series_forecaster(supabase_url, supabase_key)
             creative_similarity_analyzer = create_creative_similarity_analyzer(supabase_url, supabase_key)
             causal_impact_analyzer = create_causal_impact_analyzer(supabase_url, supabase_key)
@@ -1434,6 +1439,17 @@ def main() -> None:
                                     for metric in metrics_to_track:
                                         if metric in ad_data and ad_data[metric] is not None:
                                             store.store_historical_data(ad_id, lifecycle_id, "testing", metric, float(ad_data[metric]))
+                                    
+                                    # Also store in Supabase historical tables for enhanced ML analysis
+                                    if ml_mode_enabled and supabase_ml_integration:
+                                        try:
+                                            # Store historical metrics in Supabase
+                                            supabase_ml_integration.store_historical_metrics(
+                                                ad_id, lifecycle_id, "testing", 
+                                                {metric: float(ad_data[metric]) for metric in metrics_to_track if metric in ad_data and ad_data[metric] is not None}
+                                            )
+                                        except Exception as e:
+                                            notify(f"⚠️ Failed to store historical metrics in Supabase: {e}")
                         notify("📊 Performance data stored in Supabase for ML system")
                     
                     # Now run ML analysis on the stored data
