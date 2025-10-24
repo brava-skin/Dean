@@ -89,6 +89,67 @@ class CreativeIntelligenceSystem:
         if OPENAI_AVAILABLE and openai_api_key:
             openai.api_key = openai_api_key
     
+    def analyze_copy_bank_patterns(self, copy_bank_path: str = "dean/data/copy_bank.json") -> Dict[str, Any]:
+        """Analyze copy bank patterns for advanced prompt generation."""
+        try:
+            with open(copy_bank_path, 'r') as f:
+                copy_bank = json.load(f)
+            
+            patterns = {
+                "primary_texts": {
+                    "avg_length": 0,
+                    "common_words": [],
+                    "tone_indicators": [],
+                    "structure_patterns": []
+                },
+                "headlines": {
+                    "avg_length": 0,
+                    "common_words": [],
+                    "tone_indicators": [],
+                    "structure_patterns": []
+                },
+                "descriptions": {
+                    "avg_length": 0,
+                    "common_words": [],
+                    "tone_indicators": [],
+                    "structure_patterns": []
+                }
+            }
+            
+            for creative_type in ["primary_texts", "headlines", "descriptions"]:
+                creatives = copy_bank.get("global", {}).get(creative_type, [])
+                if creatives:
+                    # Calculate average length
+                    lengths = [len(creative.split()) for creative in creatives]
+                    patterns[creative_type]["avg_length"] = sum(lengths) / len(lengths)
+                    
+                    # Find common words
+                    all_words = []
+                    for creative in creatives:
+                        words = creative.lower().split()
+                        all_words.extend(words)
+                    
+                    from collections import Counter
+                    word_counts = Counter(all_words)
+                    patterns[creative_type]["common_words"] = [word for word, count in word_counts.most_common(10)]
+                    
+                    # Identify tone indicators
+                    masculine_words = ["men", "designed", "performs", "strong", "confident"]
+                    benefit_words = ["fresh", "clean", "matte", "comfortable", "smooth"]
+                    technical_words = ["dermatologically", "tested", "formula", "oil-to-milk"]
+                    
+                    patterns[creative_type]["tone_indicators"] = {
+                        "masculine": sum(1 for word in all_words if word in masculine_words),
+                        "benefit_focused": sum(1 for word in all_words if word in benefit_words),
+                        "technical": sum(1 for word in all_words if word in technical_words)
+                    }
+            
+            return patterns
+            
+        except Exception as e:
+            self.logger.error(f"Failed to analyze copy bank patterns: {e}")
+            return {}
+
     def load_copy_bank_to_supabase(self, copy_bank_path: str = "dean/data/copy_bank.json") -> bool:
         """Load copy bank data into Supabase creative library."""
         try:
@@ -306,19 +367,57 @@ class CreativeIntelligenceSystem:
             else:
                 return []
             
-            # Generate prompt for OpenAI
+            # Generate advanced prompt for OpenAI based on copy bank analysis
             prompt = f"""
-            Based on this high-performing {creative_type} for {source_category}:
+            You are an expert copywriter specializing in high-converting men's skincare advertisements. Analyze this high-performing {creative_type} and create {count} variations that maintain performance while avoiding fatigue.
+
+            SOURCE CREATIVE:
             "{source_content}"
-            
-            Generate {count} similar but distinct {creative_type}s that:
-            1. Maintain the same tone and style
-            2. Target the same audience
-            3. Include similar key benefits
-            4. Are optimized for social media advertising
-            5. Have strong call-to-action elements
-            
-            Return only the {creative_type}s, one per line, without numbering or labels.
+
+            COPY BANK ANALYSIS - EXISTING PATTERNS:
+            Primary Texts: Direct, benefit-focused, masculine tone, problem-solution format
+            Headlines: Short, punchy, benefit-driven, action-oriented
+            Descriptions: Technical credibility, specific benefits, masculine appeal
+
+            STRICT REQUIREMENTS:
+
+            ✅ DO'S:
+            - Use masculine, confident tone (not feminine skincare language)
+            - Focus on specific benefits: "fresh", "matte", "clean", "comfortable"
+            - Use problem-solution format: "Tired of X? This does Y"
+            - Include technical credibility: "dermatologically tested", "oil-to-milk"
+            - Keep primary texts 15-25 words, headlines 3-6 words, descriptions 8-15 words
+            - Use active voice and present tense
+            - Include sensory language: "fresh", "clean", "smooth", "comfortable"
+            - Address specific pain points: shine, tightness, buildup, irritation
+            - Use masculine appeal: "men who want", "designed for men", "performs"
+            - Include product specifics: "150ml", "morning and night", "daily use"
+
+            ❌ DON'TS:
+            - NO feminine language: "glowing", "radiant", "beautiful skin"
+            - NO generic claims: "amazing", "incredible", "revolutionary"
+            - NO medical claims: "cures", "treats", "heals", "fixes"
+            - NO superlatives: "best", "perfect", "ultimate", "miracle"
+            - NO emotional manipulation: "you'll love", "you need this"
+            - NO complex sentences or run-ons
+            - NO passive voice
+            - NO future tense promises
+            - NO competitor bashing
+            - NO price mentions or discounts
+
+            TONE REQUIREMENTS:
+            - Confident but not arrogant
+            - Direct and straightforward
+            - Masculine but not aggressive
+            - Professional but approachable
+            - Benefit-focused, not feature-focused
+
+            STRUCTURE REQUIREMENTS:
+            - Primary texts: Problem + Solution + Benefit
+            - Headlines: Benefit + Action
+            - Descriptions: Credibility + Specific Benefit + Usage
+
+            Return ONLY the {creative_type}s, one per line, without numbering, labels, or explanations.
             """
             
             response = openai.responses.create(
