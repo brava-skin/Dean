@@ -1015,6 +1015,12 @@ def run_testing_tick(
 
             ad = meta.create_ad(adset_id, cname, creative_id=creative["id"], status="ACTIVE")
 
+            # Record ad creation time for time-based rules
+            try:
+                store.record_ad_creation(ad["id"], "", "testing")
+            except Exception as e:
+                notify(f"⚠️ [TEST] Failed to record ad creation time for {ad['id']}: {e}")
+
             try:
                 store.incr(daily_key("TEST", "launched"), 1)
             except Exception:
@@ -1227,6 +1233,12 @@ def _launch_replacement_creative(meta, store, queue_df, adset_id, settings, inst
             creative = meta.create_video_creative(**creative_kwargs)
 
         ad = meta.create_ad(adset_id, cname, creative_id=creative["id"], status="ACTIVE")
+
+        # Record ad creation time for time-based rules
+        try:
+            store.record_ad_creation(ad["id"], "", "testing")
+        except Exception as e:
+            notify(f"⚠️ [TEST] Failed to record ad creation time for {ad['id']}: {e}")
 
         # Log the launch
         try:
