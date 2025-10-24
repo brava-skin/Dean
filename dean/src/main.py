@@ -954,7 +954,6 @@ def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dic
                 
                 if auto_charge_threshold is None:
                     # Use dynamic threshold tracking system
-                    from infrastructure import Store
                     # Use the same SQLite path as the main system
                     sqlite_path = settings.get("logging", {}).get("sqlite", {}).get("path", "dean/data/state.sqlite")
                     store = Store(sqlite_path)
