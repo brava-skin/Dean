@@ -1376,12 +1376,12 @@ class MLIntelligenceSystem:
                 prediction_df = pd.DataFrame([latest])
                 
                 # Apply the same feature engineering as training
-                df_features = self.feature_engineer.create_rolling_features(
+                df_features = self.predictor.feature_engineer.create_rolling_features(
                     prediction_df, ['ad_id'], ['ctr', 'cpa', 'roas', 'spend', 'purchases']
                 )
-                df_features = self.feature_engineer.create_interaction_features(df_features)
-                df_features = self.feature_engineer.create_temporal_features(df_features)
-                df_features = self.feature_engineer.create_advanced_features(df_features)
+                df_features = self.predictor.feature_engineer.create_interaction_features(df_features)
+                df_features = self.predictor.feature_engineer.create_temporal_features(df_features)
+                df_features = self.predictor.feature_engineer.create_advanced_features(df_features)
                 
                 # Select numeric features (same as training)
                 feature_cols = [col for col in df_features.columns 
