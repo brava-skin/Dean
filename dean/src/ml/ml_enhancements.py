@@ -235,7 +235,22 @@ class DataProgressTracker:
                 df = pd.DataFrame(response.data)
                 df['date_start'] = pd.to_datetime(df['date_start'])
                 
-                days_available = (df['date_start'].max() - df['date_start'].min()).days + 1
+                # Calculate days based on recent active campaign data
+                # Filter to recent data (last 30 days) to avoid old test data inflating the count
+                today = pd.Timestamp.now().normalize()
+                recent_cutoff = today - pd.Timedelta(days=30)
+                recent_data = df[df['date_start'] >= recent_cutoff]
+                
+                if len(recent_data) > 0:
+                    # Use recent data span
+                    days_available = (recent_data['date_start'].max() - recent_data['date_start'].min()).days + 1
+                else:
+                    # Fallback: days since most recent data point
+                    days_available = max(1, (today - df['date_start'].max()).days + 1)
+                
+                # Ensure reasonable bounds (1-365 days)
+                days_available = max(1, min(days_available, 365))
+                
                 unique_ads = df['ad_id'].nunique()
             
             # ML readiness levels
