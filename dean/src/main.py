@@ -428,43 +428,51 @@ def collect_stage_ad_data(meta_client, settings: Dict[str, Any], stage: str) -> 
     """Collect actual ad data for a stage from Meta API."""
     ad_data = {}
     try:
-        # Get adset ID for the stage
-        adset_id = settings.get(stage, {}).get("adset_id")
-        if not adset_id:
-            return ad_data
+        # Get all active ads from account insights (more reliable than stage-specific adsets)
+        insights_data = meta_client.get_ad_insights(level="ad", fields=[
+            "ad_id", "spend", "impressions", "clicks", "ctr", "cpc", "cpm", 
+            "actions", "purchases", "campaign_name", "adset_name"
+        ], days=1)
         
-        # Get ads in the adset
-        ads = meta_client.list_ads_in_adset(adset_id)
-        for ad in ads:
-            if ad.get("status") == "ACTIVE":
-                ad_id = ad.get("id")
+        if insights_data:
+            for insight in insights_data:
+                ad_id = insight.get("ad_id")
                 if ad_id:
-                    try:
-                        # Get ad insights
-                        insights = meta_client.get_ad_insights(ad_id, days=1)
-                        if insights:
-                            ad_data[ad_id] = {
-                                "ad_id": ad_id,
-                                "lifecycle_id": f"lifecycle_{ad_id}",
-                                "stage": stage,
-                                "status": "active",
-                                "spend": insights.get("spend", 0),
-                                "impressions": insights.get("impressions", 0),
-                                "clicks": insights.get("clicks", 0),
-                                "ctr": insights.get("ctr", 0),
-                                "cpc": insights.get("cpc", 0),
-                                "cpm": insights.get("cpm", 0),
-                                "purchases": insights.get("purchases", 0),
-                                "atc": insights.get("add_to_cart", 0),
-                                "ic": insights.get("initiate_checkout", 0),
-                                "roas": insights.get("roas", 0),
-                                "cpa": insights.get("cpa", 0),
-                                "date_start": datetime.now().strftime("%Y-%m-%d"),
-                                "date_end": datetime.now().strftime("%Y-%m-%d"),
-                                "metadata": {}
-                            }
-                    except Exception as e:
-                        notify(f"⚠️ Failed to get insights for ad {ad_id}: {e}")
+                    # Extract actions data
+                    actions = insight.get("actions", [])
+                    add_to_cart = 0
+                    initiate_checkout = 0
+                    
+                    for action in actions:
+                        if action.get("action_type") == "add_to_cart":
+                            add_to_cart = float(action.get("value", 0))
+                        elif action.get("action_type") == "initiate_checkout":
+                            initiate_checkout = float(action.get("value", 0))
+                    
+                    ad_data[ad_id] = {
+                        "ad_id": ad_id,
+                        "lifecycle_id": f"lifecycle_{ad_id}",
+                        "stage": stage,  # We'll determine the actual stage later if needed
+                        "status": "active",
+                        "spend": float(insight.get("spend", 0)),
+                        "impressions": int(insight.get("impressions", 0)),
+                        "clicks": int(insight.get("clicks", 0)),
+                        "ctr": float(insight.get("ctr", 0)),
+                        "cpc": float(insight.get("cpc", 0)),
+                        "cpm": float(insight.get("cpm", 0)),
+                        "purchases": float(insight.get("purchases", 0)),
+                        "add_to_cart": add_to_cart,
+                        "atc": add_to_cart,  # Alias for compatibility
+                        "ic": initiate_checkout,
+                        "initiate_checkout": initiate_checkout,
+                        "roas": float(insight.get("roas", 0)),
+                        "cpa": float(insight.get("cpa", 0)) if insight.get("cpa") else 0,
+                        "date_start": datetime.now().strftime("%Y-%m-%d"),
+                        "date_end": datetime.now().strftime("%Y-%m-%d"),
+                        "campaign_name": insight.get("campaign_name", ""),
+                        "adset_name": insight.get("adset_name", ""),
+                        "metadata": {}
+                    }
     except Exception as e:
         notify(f"⚠️ Failed to collect {stage} ad data: {e}")
     
