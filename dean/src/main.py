@@ -333,14 +333,14 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             'spend': safe_float(ad_data.get('spend', 0)),
             'impressions': int(ad_data.get('impressions', 0)),
             'clicks': int(ad_data.get('clicks', 0)),
-            'ctr': safe_float(ad_data.get('ctr', 0), 9999.9999),  # Allow up to 9999.9999%
-            'cpc': safe_float(ad_data.get('cpc', 0), 99999999.99),  # Allow up to €99M
-            'cpm': safe_float(ad_data.get('cpm', 0), 99999999.99),  # Allow up to €99M  
+            'ctr': safe_float(ad_data.get('ctr', 0), 9.9999),  # Cap at 9.9999% for precision(5,4)
+            'cpc': safe_float(ad_data.get('cpc', 0), 9.9999),  # Cap at €9.9999 for precision(5,4)
+            'cpm': safe_float(ad_data.get('cpm', 0), 9.9999),  # Cap at €9.9999 for precision(5,4)
             'purchases': int(ad_data.get('purchases', 0)),
             'add_to_cart': int(ad_data.get('atc', 0)),
             'initiate_checkout': int(ad_data.get('ic', 0)),
-            'roas': safe_float(ad_data.get('roas', 0), 9999.9999),  # Allow up to 9999x ROAS
-            'cpa': safe_float(ad_data.get('cpa', 0), 99999999.99) if ad_data.get('cpa') is not None else 0,
+            'roas': safe_float(ad_data.get('roas', 0), 9.9999),  # Cap at 9.9999x ROAS for precision(5,4)
+            'cpa': safe_float(ad_data.get('cpa', 0), 9.9999) if ad_data.get('cpa') is not None else 0,
             # Note: created_at and updated_at are handled by database defaults
             # We don't need to insert them explicitly
         }
