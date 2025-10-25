@@ -295,7 +295,7 @@ def _find_existing_scaling_adset(meta: Any, scaling_campaign_id: str, creative_l
 
 # ---------------------------------------------------------------------------
 
-def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: Any, ml_pipeline: Optional[Any] = None) -> Dict[str, int]:
+def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store: Any, ml_pipeline: Optional[Any] = None, supabase_storage: Optional[Any] = None) -> Dict[str, int]:
     """Legacy validation tick function - kept for backward compatibility."""
     summary = {"kills": 0, "promotions": 0, "soft_passes": 0}
     try:
@@ -581,7 +581,10 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
                             # Record ad creation time for time-based rules
                             if created_ad:
                                 try:
-                                    store.record_ad_creation(created_ad["id"], "", "scaling")
+                                    if supabase_storage:
+                                        supabase_storage.record_ad_creation(created_ad["id"], "", "scaling")
+                                    else:
+                                        store.record_ad_creation(created_ad["id"], "", "scaling")
                                 except Exception as e:
                                     notify(f"⚠️ [VALID] Failed to record ad creation time for {created_ad['id']}: {e}")
                         elif hasattr(meta, "create_ad"):
@@ -596,7 +599,10 @@ def run_validation_tick(meta: Any, settings: Dict[str, Any], engine: Any, store:
                             # Record ad creation time for time-based rules
                             if created_ad:
                                 try:
-                                    store.record_ad_creation(created_ad["id"], "", "scaling")
+                                    if supabase_storage:
+                                        supabase_storage.record_ad_creation(created_ad["id"], "", "scaling")
+                                    else:
+                                        store.record_ad_creation(created_ad["id"], "", "scaling")
                                 except Exception as e:
                                     notify(f"⚠️ [VALID] Failed to record ad creation time for {created_ad['id']}: {e}")
                 except Exception:

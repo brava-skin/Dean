@@ -471,6 +471,7 @@ def run_testing_tick(
     queue_df: pd.DataFrame,
     set_supabase_status: Callable[[List[str], str], None],
     *,
+    supabase_storage: Optional[Any] = None,           # Supabase storage for ad creation times
     placements: Optional[List[str]] = None,           # respected if provided
     instagram_actor_id: Optional[str] = None,         # legacy support; we now prefer instagram_user_id
     ml_pipeline: Optional[Any] = None,                # NEW: ML pipeline for intelligent decisions
@@ -1017,7 +1018,10 @@ def run_testing_tick(
 
             # Record ad creation time for time-based rules
             try:
-                store.record_ad_creation(ad["id"], "", "testing")
+                if supabase_storage:
+                    supabase_storage.record_ad_creation(ad["id"], "", "testing")
+                else:
+                    store.record_ad_creation(ad["id"], "", "testing")
             except Exception as e:
                 notify(f"⚠️ [TEST] Failed to record ad creation time for {ad['id']}: {e}")
 
@@ -1236,7 +1240,10 @@ def _launch_replacement_creative(meta, store, queue_df, adset_id, settings, inst
 
         # Record ad creation time for time-based rules
         try:
-            store.record_ad_creation(ad["id"], "", "testing")
+            if supabase_storage:
+                supabase_storage.record_ad_creation(ad["id"], "", "testing")
+            else:
+                store.record_ad_creation(ad["id"], "", "testing")
         except Exception as e:
             notify(f"⚠️ [TEST] Failed to record ad creation time for {ad['id']}: {e}")
 

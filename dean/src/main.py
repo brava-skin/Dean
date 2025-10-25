@@ -92,6 +92,7 @@ except ImportError as e:
 
 # Legacy modules (updated for ML integration)
 from infrastructure import Store
+from infrastructure.supabase_storage import create_supabase_storage
 from integrations import notify, post_run_header_and_get_thread_ts, post_thread_ads_snapshot, prettify_ad_name, fmt_eur, fmt_pct, fmt_roas, fmt_int
 from integrations import MetaClient, AccountAuth, ClientConfig
 from rules.rules import AdvancedRuleEngine as RuleEngine
@@ -1229,6 +1230,8 @@ def main() -> None:
     # Store (SQLite) - path from settings
     sqlite_path = settings.get("logging", {}).get("sqlite", {}).get("path", "dean/data/state.sqlite")
     store = Store(sqlite_path)
+    
+    # Supabase storage will be initialized after supabase_client
 
     # Timezone for account
     tz_name = (
@@ -1259,7 +1262,7 @@ def main() -> None:
         tenant_id=settings.get("branding_name", "default"),
     )
 
-    # Rule engine
+    # Rule engine (will be updated with supabase_storage later)
     engine = RuleEngine(rules_cfg, store)
     
     # ML System initialization (if ML mode enabled)
@@ -1368,6 +1371,20 @@ def main() -> None:
 
     # Initialize Supabase client
     supabase_client = _get_supabase()
+
+    # Initialize Supabase storage for ad creation times and historical data
+    supabase_storage = None
+    if supabase_client:
+        try:
+            supabase_storage = create_supabase_storage(supabase_client)
+            notify("📊 Supabase storage initialized for ad creation times and historical data")
+            
+            # Update rule engine to use Supabase storage
+            engine = RuleEngine(rules_cfg, supabase_storage)
+            notify("📊 Rule engine updated to use Supabase storage")
+        except Exception as e:
+            notify(f"⚠️ Failed to initialize Supabase storage: {e}")
+            supabase_storage = None
 
     # Initialize Table Monitoring System
     table_monitor = None
@@ -1513,6 +1530,7 @@ def main() -> None:
                 placements=["facebook", "instagram"],
                 instagram_actor_id=os.getenv("IG_ACTOR_ID"),
                 ml_pipeline=ml_pipeline if ml_mode_enabled else None,  # NEW: Pass ML pipeline
+                supabase_storage=supabase_storage,  # NEW: Pass Supabase storage
             )
             
             # After data collection, run ML analysis if enabled
@@ -1532,16 +1550,31 @@ def main() -> None:
                                     ad_id = ad_data["ad_id"]
                                     lifecycle_id = ad_data.get("lifecycle_id", "")
                                     
-                                    # Record ad creation time if not already recorded
-                                    creation_time = store.get_ad_creation_time(ad_id)
-                                    if not creation_time:
-                                        store.record_ad_creation(ad_id, lifecycle_id, "testing")
-                                    
-                                    # Store historical metrics for rule evaluation
-                                    metrics_to_track = ["cpm", "ctr", "impressions", "clicks", "spend", "add_to_cart", "purchases"]
-                                    for metric in metrics_to_track:
-                                        if metric in ad_data and ad_data[metric] is not None:
-                                            store.store_historical_data(ad_id, lifecycle_id, "testing", metric, float(ad_data[metric]))
+                                    # Record ad creation time and historical data (use Supabase)
+                                    if supabase_storage:
+                                        try:
+                                            creation_time = supabase_storage.get_ad_creation_time(ad_id)
+                                            if not creation_time:
+                                                supabase_storage.record_ad_creation(ad_id, lifecycle_id, "testing")
+                                            
+                                            # Store historical metrics for rule evaluation
+                                            metrics_to_track = ["cpm", "ctr", "impressions", "clicks", "spend", "add_to_cart", "purchases"]
+                                            for metric in metrics_to_track:
+                                                if metric in ad_data and ad_data[metric] is not None:
+                                                    supabase_storage.store_historical_data(ad_id, lifecycle_id, "testing", metric, float(ad_data[metric]))
+                                        except Exception as e:
+                                            notify(f"⚠️ Failed to store ad data in Supabase for {ad_id}: {e}")
+                                    else:
+                                        # Fallback to SQLite if Supabase not available
+                                        creation_time = store.get_ad_creation_time(ad_id)
+                                        if not creation_time:
+                                            store.record_ad_creation(ad_id, lifecycle_id, "testing")
+                                        
+                                        # Store historical metrics for rule evaluation
+                                        metrics_to_track = ["cpm", "ctr", "impressions", "clicks", "spend", "add_to_cart", "purchases"]
+                                        for metric in metrics_to_track:
+                                            if metric in ad_data and ad_data[metric] is not None:
+                                                store.store_historical_data(ad_id, lifecycle_id, "testing", metric, float(ad_data[metric]))
                                     
                                     # Enhanced ML system now has historical data capabilities integrated
                         notify("📊 Performance data stored in Supabase for ML system")
@@ -1588,7 +1621,7 @@ def main() -> None:
 
         if stage_choice in ("all", "validation"):
             overall["validation"] = run_stage(
-                run_validation_tick, "VALIDATION", client, settings, engine, store, ml_pipeline=ml_pipeline if ml_mode_enabled else None  # NEW: Pass ML pipeline
+                run_validation_tick, "VALIDATION", client, settings, engine, store, ml_pipeline=ml_pipeline if ml_mode_enabled else None, supabase_storage=supabase_storage  # NEW: Pass ML pipeline and Supabase storage
             )
             if overall["validation"]:
                 # Store validation stage performance data in Supabase
@@ -1605,16 +1638,31 @@ def main() -> None:
                                     ad_id = ad_data["ad_id"]
                                     lifecycle_id = ad_data.get("lifecycle_id", "")
                                     
-                                    # Record ad creation time if not already recorded
-                                    creation_time = store.get_ad_creation_time(ad_id)
-                                    if not creation_time:
-                                        store.record_ad_creation(ad_id, lifecycle_id, "validation")
-                                    
-                                    # Store historical metrics for rule evaluation
-                                    metrics_to_track = ["cpm", "ctr", "impressions", "clicks", "spend", "add_to_cart", "purchases"]
-                                    for metric in metrics_to_track:
-                                        if metric in ad_data and ad_data[metric] is not None:
-                                            store.store_historical_data(ad_id, lifecycle_id, "validation", metric, float(ad_data[metric]))
+                                    # Record ad creation time and historical data (use Supabase)
+                                    if supabase_storage:
+                                        try:
+                                            creation_time = supabase_storage.get_ad_creation_time(ad_id)
+                                            if not creation_time:
+                                                supabase_storage.record_ad_creation(ad_id, lifecycle_id, "validation")
+                                            
+                                            # Store historical metrics for rule evaluation
+                                            metrics_to_track = ["cpm", "ctr", "impressions", "clicks", "spend", "add_to_cart", "purchases"]
+                                            for metric in metrics_to_track:
+                                                if metric in ad_data and ad_data[metric] is not None:
+                                                    supabase_storage.store_historical_data(ad_id, lifecycle_id, "validation", metric, float(ad_data[metric]))
+                                        except Exception as e:
+                                            notify(f"⚠️ Failed to store validation ad data in Supabase for {ad_id}: {e}")
+                                    else:
+                                        # Fallback to SQLite if Supabase not available
+                                        creation_time = store.get_ad_creation_time(ad_id)
+                                        if not creation_time:
+                                            store.record_ad_creation(ad_id, lifecycle_id, "validation")
+                                        
+                                        # Store historical metrics for rule evaluation
+                                        metrics_to_track = ["cpm", "ctr", "impressions", "clicks", "spend", "add_to_cart", "purchases"]
+                                        for metric in metrics_to_track:
+                                            if metric in ad_data and ad_data[metric] is not None:
+                                                store.store_historical_data(ad_id, lifecycle_id, "validation", metric, float(ad_data[metric]))
                                 
                                 # NEW: Store time-series and creative data
                                 store_timeseries_data_in_supabase(supabase_client, ad_id, ad_data, "validation")
@@ -1645,16 +1693,31 @@ def main() -> None:
                                     ad_id = ad_data["ad_id"]
                                     lifecycle_id = ad_data.get("lifecycle_id", "")
                                     
-                                    # Record ad creation time if not already recorded
-                                    creation_time = store.get_ad_creation_time(ad_id)
-                                    if not creation_time:
-                                        store.record_ad_creation(ad_id, lifecycle_id, "scaling")
-                                    
-                                    # Store historical metrics for rule evaluation
-                                    metrics_to_track = ["cpm", "ctr", "impressions", "clicks", "spend", "add_to_cart", "purchases"]
-                                    for metric in metrics_to_track:
-                                        if metric in ad_data and ad_data[metric] is not None:
-                                            store.store_historical_data(ad_id, lifecycle_id, "scaling", metric, float(ad_data[metric]))
+                                    # Record ad creation time and historical data (use Supabase)
+                                    if supabase_storage:
+                                        try:
+                                            creation_time = supabase_storage.get_ad_creation_time(ad_id)
+                                            if not creation_time:
+                                                supabase_storage.record_ad_creation(ad_id, lifecycle_id, "scaling")
+                                            
+                                            # Store historical metrics for rule evaluation
+                                            metrics_to_track = ["cpm", "ctr", "impressions", "clicks", "spend", "add_to_cart", "purchases"]
+                                            for metric in metrics_to_track:
+                                                if metric in ad_data and ad_data[metric] is not None:
+                                                    supabase_storage.store_historical_data(ad_id, lifecycle_id, "scaling", metric, float(ad_data[metric]))
+                                        except Exception as e:
+                                            notify(f"⚠️ Failed to store scaling ad data in Supabase for {ad_id}: {e}")
+                                    else:
+                                        # Fallback to SQLite if Supabase not available
+                                        creation_time = store.get_ad_creation_time(ad_id)
+                                        if not creation_time:
+                                            store.record_ad_creation(ad_id, lifecycle_id, "scaling")
+                                        
+                                        # Store historical metrics for rule evaluation
+                                        metrics_to_track = ["cpm", "ctr", "impressions", "clicks", "spend", "add_to_cart", "purchases"]
+                                        for metric in metrics_to_track:
+                                            if metric in ad_data and ad_data[metric] is not None:
+                                                store.store_historical_data(ad_id, lifecycle_id, "scaling", metric, float(ad_data[metric]))
                                 
                                 # NEW: Store time-series and creative data
                                 store_timeseries_data_in_supabase(supabase_client, ad_id, ad_data, "scaling")
