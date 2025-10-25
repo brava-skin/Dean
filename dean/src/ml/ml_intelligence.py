@@ -850,10 +850,21 @@ class XGBoostPredictor:
             }
             
             # FIX: Use upsert instead of insert to handle duplicates
-            response = self.supabase.client.table('ml_models').upsert(
-                data, 
-                on_conflict='model_type,version,stage'
-            ).execute()
+            # First try to update existing record, then insert if not found
+            try:
+                # Try to update existing record
+                update_response = self.supabase.client.table('ml_models').update(data).eq(
+                    'model_type', model_type
+                ).eq('stage', stage).execute()
+                
+                if update_response.data:
+                    response = update_response
+                else:
+                    # Insert new record if no existing one found
+                    response = self.supabase.client.table('ml_models').insert(data).execute()
+            except Exception:
+                # If update fails, try insert
+                response = self.supabase.client.table('ml_models').insert(data).execute()
             
             if response.data:
                 self.logger.info(f"Saved {model_type} model for {stage} to Supabase")

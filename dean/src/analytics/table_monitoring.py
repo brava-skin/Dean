@@ -234,7 +234,7 @@ class TableMonitor:
         # Table details
         report.append("📋 **Table Details**")
         for table_name, health in insights.tables.items():
-            status_emoji = "✅" if health.is_healthy else "❌"
+            status_emoji = "[OK]" if health.is_healthy else "[ERROR]"
             report.append(f"   {status_emoji} **{table_name}**: {health.current_rows:,} rows")
             
             if health.new_rows > 0:
@@ -255,7 +255,7 @@ class TableMonitor:
         report.append(f"   • ML Ready Tables: {ml_ready}/{ml_total}")
         
         for table_name, is_ready in insights.ml_readiness.items():
-            status = "✅ Ready" if is_ready else "❌ Not Ready"
+            status = "[OK] Ready" if is_ready else "[ERROR] Not Ready"
             requirements = self.ml_table_requirements.get(table_name, {})
             min_rows = requirements.get('min_rows', 0)
             current_rows = insights.tables.get(table_name, TableHealth("", 0, 0, 0, 0, False, datetime.now())).current_rows

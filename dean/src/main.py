@@ -431,7 +431,7 @@ def collect_stage_ad_data(meta_client, settings: Dict[str, Any], stage: str) -> 
         insights_data = meta_client.get_ad_insights(level="ad", fields=[
             "ad_id", "spend", "impressions", "clicks", "ctr", "cpc", "cpm", 
             "actions", "purchases", "campaign_name", "adset_name"
-        ], days=1)
+        ], date_preset="today")
         
         if insights_data:
             for insight in insights_data:
