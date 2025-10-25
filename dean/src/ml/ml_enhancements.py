@@ -129,9 +129,9 @@ class ModelValidator:
             data = {
                 'model_type': result.model_type,
                 'stage': result.stage,
-                'accuracy': result.accuracy,
-                'mae': result.mae,
-                'r2_score': result.r2_score,
+                'accuracy': min(max(float(result.accuracy or 0), -999.99), 999.99),
+                'mae': min(max(float(result.mae or 0), -999999.99), 999999.99),
+                'r2_score': min(max(float(result.r2_score or 0), -999.99), 999.99),
                 'is_performing_well': result.is_performing_well,
                 'validation_date': result.validation_date.isoformat(),
                 'sample_size': len(result.prediction_vs_actual)

@@ -113,6 +113,18 @@ class SupabaseMLClient:
         self.client: Client = create_client(supabase_url, supabase_key)
         self.logger = logging.getLogger(f"{__name__}.SupabaseMLClient")
     
+    def _safe_float(self, value, max_val=999999999.99):
+        """Safely convert value to float with bounds checking."""
+        try:
+            val = float(value or 0)
+            # Handle infinity and NaN
+            if not (val == val) or val == float('inf') or val == float('-inf'):
+                return 0.0
+            # Bound the value to prevent overflow
+            return min(max(val, -max_val), max_val)
+        except (ValueError, TypeError):
+            return 0.0
+    
     def get_performance_data(self, 
                            ad_ids: Optional[List[str]] = None,
                            stages: Optional[List[str]] = None,
@@ -270,7 +282,7 @@ class SupabaseMLClient:
                 'model_id': model_id,
                 'stage': stage,
                 'prediction_type': 'performance',
-                'prediction_value': float(prediction.predicted_value),  # Changed from predicted_value
+                'prediction_value': self._safe_float(prediction.predicted_value, 999999999.99),  # Bounded prediction value
                 'created_at': prediction.created_at.isoformat()
                 # Removed fields that don't exist in actual schema
             }

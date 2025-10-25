@@ -330,7 +330,7 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             'window_type': '1d',
             'date_start': ad_data.get('date_start', ''),
             'date_end': ad_data.get('date_end', ''),
-            'spend': safe_float(ad_data.get('spend', 0)),
+            'spend': safe_float(ad_data.get('spend', 0), 99999.99),  # Cap spend at €99,999.99
             'impressions': int(ad_data.get('impressions', 0)),
             'clicks': int(ad_data.get('clicks', 0)),
             'ctr': safe_float(ad_data.get('ctr', 0), 9.9999),  # Cap at 9.9999% for precision(5,4)
@@ -418,7 +418,7 @@ def store_timeseries_data_in_supabase(supabase_client, ad_id: str, ad_data: Dict
                     'lifecycle_id': ad_data.get('lifecycle_id', ''),
                     'stage': stage,
                     'metric_name': metric_name,
-                    'metric_value': float(metric_value),
+                    'metric_value': safe_float(metric_value, 999999999.99),  # Use safe bounds for time series
                     'timestamp': datetime.now().isoformat(),
                     'metadata': {
                         'impressions': ad_data.get('impressions', 0),
