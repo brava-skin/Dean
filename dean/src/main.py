@@ -430,7 +430,7 @@ def collect_stage_ad_data(meta_client, settings: Dict[str, Any], stage: str) -> 
         # Get all active ads from account insights (more reliable than stage-specific adsets)
         insights_data = meta_client.get_ad_insights(level="ad", fields=[
             "ad_id", "spend", "impressions", "clicks", "ctr", "cpc", "cpm", 
-            "actions", "purchases", "campaign_name", "adset_name"
+            "actions", "campaign_name", "adset_name"
         ], date_preset="today")
         
         if insights_data:

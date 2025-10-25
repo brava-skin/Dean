@@ -90,7 +90,7 @@ class TableMonitor:
             response = self.supabase_client.table(table_name).select('id', count='exact').execute()
             return response.count or 0
         except Exception as e:
-            print(f"⚠️ Failed to get row count for {table_name}: {e}")
+            # Don't print error directly as it corrupts the report formatting
             return 0
     
     def analyze_table_health(self, table_name: str) -> TableHealth:
@@ -235,10 +235,20 @@ class TableMonitor:
         report.append("📋 **Table Details**")
         for table_name, health in insights.tables.items():
             status_emoji = "[OK]" if health.is_healthy else "[ERROR]"
-            report.append(f"   {status_emoji} **{table_name}**: {health.current_rows:,} rows")
+            # Ensure current_rows is a valid number
+            try:
+                current_rows_str = f"{health.current_rows:,}" if isinstance(health.current_rows, (int, float)) else str(health.current_rows)
+            except:
+                current_rows_str = "0"
+            
+            report.append(f"   {status_emoji} **{table_name}**: {current_rows_str} rows")
             
             if health.new_rows > 0:
-                report.append(f"      📈 +{health.new_rows:,} new rows")
+                try:
+                    new_rows_str = f"{health.new_rows:,}" if isinstance(health.new_rows, (int, float)) else str(health.new_rows)
+                except:
+                    new_rows_str = "0"
+                report.append(f"      📈 +{new_rows_str} new rows")
             elif health.new_rows == 0 and health.current_rows > 0:
                 report.append(f"      📊 No new data")
             

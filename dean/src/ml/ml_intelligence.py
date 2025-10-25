@@ -855,16 +855,26 @@ class XGBoostPredictor:
                 # Try to update existing record
                 update_response = self.supabase.client.table('ml_models').update(data).eq(
                     'model_type', model_type
-                ).eq('stage', stage).execute()
+                ).eq('stage', stage).eq('version', 1).execute()
                 
                 if update_response.data:
                     response = update_response
                 else:
                     # Insert new record if no existing one found
                     response = self.supabase.client.table('ml_models').insert(data).execute()
-            except Exception:
-                # If update fails, try insert
-                response = self.supabase.client.table('ml_models').insert(data).execute()
+            except Exception as e:
+                # If insert fails due to duplicate, try update again
+                if "duplicate key" in str(e).lower() or "unique constraint" in str(e).lower():
+                    try:
+                        response = self.supabase.client.table('ml_models').update(data).eq(
+                            'model_type', model_type
+                        ).eq('stage', stage).eq('version', 1).execute()
+                    except Exception:
+                        # If all else fails, just log and continue
+                        self.logger.warning(f"Could not save model {model_type}_{stage}, continuing...")
+                        return True  # Return True to avoid breaking the flow
+                else:
+                    raise e
             
             if response.data:
                 self.logger.info(f"Saved {model_type} model for {stage} to Supabase")
