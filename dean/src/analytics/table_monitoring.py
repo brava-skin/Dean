@@ -88,7 +88,12 @@ class TableMonitor:
         
         try:
             response = self.supabase_client.table(table_name).select('id', count='exact').execute()
-            return response.count or 0
+            count = response.count
+            # Ensure we return a valid integer
+            if isinstance(count, (int, float)) and count >= 0:
+                return int(count)
+            else:
+                return 0
         except Exception as e:
             # Don't print error directly as it corrupts the report formatting
             return 0
@@ -268,8 +273,16 @@ class TableMonitor:
             status = "[OK] Ready" if is_ready else "[ERROR] Not Ready"
             requirements = self.ml_table_requirements.get(table_name, {})
             min_rows = requirements.get('min_rows', 0)
-            current_rows = insights.tables.get(table_name, TableHealth("", 0, 0, 0, 0, False, datetime.now())).current_rows
-            report.append(f"   • {table_name}: {status} ({current_rows}/{min_rows} rows)")
+            table_health = insights.tables.get(table_name, TableHealth("", 0, 0, 0, 0, False, datetime.now()))
+            current_rows = table_health.current_rows
+            
+            # Ensure current_rows is a valid number for display
+            try:
+                current_rows_display = f"{current_rows:,}" if isinstance(current_rows, (int, float)) and current_rows >= 0 else "0"
+            except:
+                current_rows_display = "0"
+                
+            report.append(f"   • {table_name}: {status} ({current_rows_display}/{min_rows} rows)")
         
         report.append("")
         

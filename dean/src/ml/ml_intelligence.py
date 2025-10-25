@@ -614,12 +614,22 @@ class XGBoostPredictor:
     def train_model(self, model_type: str, stage: str, target_col: str) -> bool:
         """Train XGBoost model for specific prediction task."""
         try:
-            # Get training data
+            # Get training data - try stage-specific first, then all stages if insufficient
             df = self.supabase.get_performance_data(stages=[stage])
             
-            if df.empty:
-                self.logger.warning(f"No data available for training {model_type} model for {stage}")
-                return False
+            if df.empty or len(df) < 5:  # Need at least 5 samples for meaningful training
+                self.logger.info(f"Insufficient stage-specific data for {stage} ({len(df) if not df.empty else 0} samples), trying all stages")
+                # Fallback to all available data for training
+                df = self.supabase.get_performance_data()
+                
+                if df.empty:
+                    self.logger.warning(f"No data available for training {model_type} model for {stage}")
+                    return False
+                elif len(df) < 5:
+                    self.logger.warning(f"Insufficient data for training {model_type} model: {len(df)} samples (need at least 5)")
+                    return False
+                else:
+                    self.logger.info(f"Using cross-stage data for {stage} training: {len(df)} samples")
             
             # Prepare data
             X, y, feature_cols = self.prepare_training_data(df, target_col)
@@ -1360,20 +1370,48 @@ class MLIntelligenceSystem:
                     prev_stage, stage, ad_id
                 )
             
-            # Performance predictions (only numeric features for ML)
-            features = {
-                'ctr': float(latest.get('ctr', 0)),
-                'cpa': float(latest.get('cpa', 0)),
-                'roas': float(latest.get('roas', 0)),
-                'spend': float(latest.get('spend', 0)),
-                'purchases': float(latest.get('purchases', 0)),
-                'performance_quality_score': float(latest.get('performance_quality_score', 0)),
-                'stability_score': float(latest.get('stability_score', 0)),
-                'fatigue_index': float(latest.get('fatigue_index', 0)),
-                # Note: lifecycle_id removed as it's not a numeric feature for ML
-            }
-            
-            predictions = self.predict_performance(ad_id, stage, features)
+            # Performance predictions - apply same feature engineering as training
+            try:
+                # Create a DataFrame with the current data for feature engineering
+                prediction_df = pd.DataFrame([latest])
+                
+                # Apply the same feature engineering as training
+                df_features = self.feature_engineer.create_rolling_features(
+                    prediction_df, ['ad_id'], ['ctr', 'cpa', 'roas', 'spend', 'purchases']
+                )
+                df_features = self.feature_engineer.create_interaction_features(df_features)
+                df_features = self.feature_engineer.create_temporal_features(df_features)
+                df_features = self.feature_engineer.create_advanced_features(df_features)
+                
+                # Select numeric features (same as training)
+                feature_cols = [col for col in df_features.columns 
+                               if col not in ['ad_id', 'id', 'date_start', 'date_end', 'created_at']]
+                numeric_cols = df_features[feature_cols].select_dtypes(include=[np.number]).columns
+                feature_cols = [str(col) for col in feature_cols if col in numeric_cols]
+                
+                # Create features dictionary with all engineered features
+                features = {}
+                for col in feature_cols:
+                    if col in df_features.columns:
+                        val = df_features[col].iloc[0] if not df_features[col].empty else 0
+                        features[col] = float(val) if pd.notna(val) else 0.0
+                
+                predictions = self.predict_performance(ad_id, stage, features)
+                
+            except Exception as e:
+                self.logger.warning(f"Feature engineering failed for prediction, using basic features: {e}")
+                # Fallback to basic features
+                features = {
+                    'ctr': float(latest.get('ctr', 0)),
+                    'cpa': float(latest.get('cpa', 0)),
+                    'roas': float(latest.get('roas', 0)),
+                    'spend': float(latest.get('spend', 0)),
+                    'purchases': float(latest.get('purchases', 0)),
+                    'performance_quality_score': float(latest.get('performance_quality_score', 0)),
+                    'stability_score': float(latest.get('stability_score', 0)),
+                    'fatigue_index': float(latest.get('fatigue_index', 0)),
+                }
+                predictions = self.predict_performance(ad_id, stage, features)
             
             return {
                 'current_performance': latest.to_dict(),

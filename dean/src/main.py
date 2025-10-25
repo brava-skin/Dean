@@ -399,6 +399,18 @@ def store_ml_insights_in_supabase(supabase_client, ad_id: str, insights: Dict[st
         print(f"⚠️ Failed to store ML insights in Supabase: {e}")
 
 
+def safe_float_global(value, max_val=999999999.99):
+    """Safely convert value to float with bounds checking (global version)."""
+    try:
+        val = float(value or 0)
+        # Handle infinity and NaN
+        if not (val == val) or val == float('inf') or val == float('-inf'):
+            return 0.0
+        # Bound the value to prevent overflow
+        return min(max(val, -max_val), max_val)
+    except (ValueError, TypeError):
+        return 0.0
+
 def store_timeseries_data_in_supabase(supabase_client, ad_id: str, ad_data: Dict[str, Any], stage: str) -> None:
     """Store hourly time-series data in Supabase for temporal modeling (NEW)."""
     if not supabase_client:
@@ -418,7 +430,7 @@ def store_timeseries_data_in_supabase(supabase_client, ad_id: str, ad_data: Dict
                     'lifecycle_id': ad_data.get('lifecycle_id', ''),
                     'stage': stage,
                     'metric_name': metric_name,
-                    'metric_value': safe_float(metric_value, 999999999.99),  # Use safe bounds for time series
+                    'metric_value': safe_float_global(metric_value, 999999999.99),  # Use safe bounds for time series
                     'timestamp': datetime.now().isoformat(),
                     'metadata': {
                         'impressions': ad_data.get('impressions', 0),
