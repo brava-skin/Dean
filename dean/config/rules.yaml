@@ -3,7 +3,7 @@
 # Based on 2-week performance analysis (Oct 9-22, 2025)
 # =====================================================
 
-version: 2.2
+version: 2.3
 env: prod
 
 # ── Performance Thresholds ───────────────────────────
@@ -46,7 +46,7 @@ testing:
     - {type: "zero_performance_quick_kill", spend_gte: 20, ctr_lt: 0.001}
     
     # CPM management - based on your data showing CPM explosion
-    - {type: "cpm_above", cpm_above: 120, spend_gte: 15}          # Kill if CPM >€120 after €15
+    - {type: "cpm_above", cpm_above: 120, spend_gte: 25}          # Kill if CPM >€120 after €25 (less aggressive for cold pixel)
     - {type: "cpm_above", cpm_above: 100, spend_gte: 25}          # Kill if CPM >€100 after €25
     - {type: "cpm_increase", cpm_increase_pct: 80, spend_gte: 20}  # Kill if CPM increases 80%+
     - {type: "cpm_spike", cpm_spike_pct: 100, spend_gte: 15}       # Kill if CPM doubles
@@ -73,7 +73,7 @@ testing:
     - {type: "ctr_below", ctr_lt: 0.008, spend_gte: 20}           # Kill if CTR <0.8% after €20 spend
     
     # ATC Performance
-    - {type: "atc_rate_below", atc_rate_lt: 0.005, spend_gte: 40}  # Kill if ATC rate <0.5% after €40 spend
+    - {type: "atc_rate_below", atc_rate_lt: 0.005, spend_gte: 40, clicks_gte: 50}  # Kill if ATC rate <0.5% after €40 spend AND ≥50 clicks
     - {type: "cost_per_atc_above", cost_per_atc_gte: 15, spend_gte: 30} # Kill if cost per ATC >€15
     - {type: "atc_no_purchase", atc_gte: 1, spend_gte: 40, days: 3} # Kill if ATC but no purchase after 3 days
     - {type: "atc_rate_drop", atc_rate_drop_pct: 30, days: 2}     # Kill if ATC rate drops 30%+ for 2 days
