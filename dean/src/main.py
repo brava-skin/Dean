@@ -376,10 +376,8 @@ def store_ml_insights_in_supabase(supabase_client, ad_id: str, insights: Dict[st
             'creative_id': insights.get('creative_id', f'creative_{ad_id}'),
             'ad_id': ad_id,
             'creative_type': insights.get('creative_type', 'unknown'),
-            'performance_score': float(insights.get('performance_score', 0)),
-            'fatigue_index': float(insights.get('fatigue_index', 0)),
-            'similarity_vector': insights.get('similarity_vector', []),
-            'metadata': insights.get('metadata', {})
+            'performance_score': float(insights.get('performance_score', 0))
+            # Removed 'fatigue_index', 'similarity_vector', 'metadata' as they don't exist in actual schema
             # Note: created_at and updated_at are handled by database defaults
         }
         
@@ -414,6 +412,7 @@ def store_timeseries_data_in_supabase(supabase_client, ad_id: str, ad_data: Dict
                         'impressions': ad_data.get('impressions', 0),
                         'clicks': ad_data.get('clicks', 0)
                     }
+                    # Removed 'window_size' as it doesn't exist in the actual schema
                 }
                 
                 supabase_client.table('time_series_data').insert(timeseries_data).execute()
@@ -509,15 +508,8 @@ def store_creative_data_in_supabase(supabase_client, meta_client, ad_id: str, st
                 'creative_id': str(creative_id),
                 'ad_id': ad_id,
                 'creative_type': creative.get('object_type', 'unknown'),
-                'performance_score': 0.5,  # Will be updated by ML
-                'fatigue_index': 0.0,  # Will be calculated by ML
-                'similarity_vector': [],  # Will be calculated by sentence-transformers
-                'metadata': {
-                    'title': creative.get('title', ''),
-                    'body': creative.get('body', ''),
-                    'stage': stage,
-                    'ad_name': ad.get('name', '')
-                }
+                'performance_score': 0.5  # Will be updated by ML
+                # Removed fields that don't exist in actual schema
             }
             
             supabase_client.table('creative_intelligence').upsert(creative_data, on_conflict='creative_id').execute()

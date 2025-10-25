@@ -270,14 +270,9 @@ class SupabaseMLClient:
                 'model_id': model_id,
                 'stage': stage,
                 'prediction_type': 'performance',
-                'predicted_value': float(prediction.predicted_value),
-                'confidence_score': float(prediction.confidence_score),
-                'prediction_interval_lower': float(prediction.prediction_interval_lower),
-                'prediction_interval_upper': float(prediction.prediction_interval_upper),
-                'features': prediction.feature_importance,
-                'prediction_horizon_hours': prediction.prediction_horizon_hours,
-                'created_at': prediction.created_at.isoformat(),
-                'expires_at': (prediction.created_at + timedelta(days=7)).isoformat()
+                'prediction_value': float(prediction.predicted_value),  # Changed from predicted_value
+                'created_at': prediction.created_at.isoformat()
+                # Removed fields that don't exist in actual schema
             }
             
             response = self.client.table('ml_predictions').insert(data).execute()
@@ -301,14 +296,9 @@ class SupabaseMLClient:
             data = {
                 'id': event_id,
                 'event_type': event.event_type,
-                'ad_id': event.ad_id,
-                'lifecycle_id': event.lifecycle_id,
-                'from_stage': event.stage,
-                'to_stage': event.stage,  # Will be updated for promotions
-                'learning_data': event.learning_data,
-                'confidence_score': float(event.confidence_score),
-                'impact_score': float(event.impact_score),
+                'stage': event.stage,
                 'created_at': event.created_at.isoformat()
+                # Removed fields that don't exist in actual schema
             }
             
             response = self.client.table('learning_events').insert(data).execute()
@@ -1157,7 +1147,6 @@ class CrossStageLearner:
                 lifecycle_id=latest_performance.get('lifecycle_id', ''),
                 stage=to_stage,
                 learning_data={
-                    'from_stage': from_stage,
                     'insights': insights,
                     'transfer_confidence': 0.8
                 },
