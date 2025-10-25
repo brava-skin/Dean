@@ -1060,10 +1060,27 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
             or 27.51
         )
         
-        # Get active ads count from insights data
+        # Get active ads count from insights data AND direct API call
         try:
-            # Count unique ads from insights data (these are active ads)
-            active_ads_count = len(rows) if rows else 0
+            # Count unique ads from insights data (ads with today's data)
+            insights_ads_count = len(rows) if rows else 0
+            
+            # Also get all active ads directly from Meta API (more accurate total)
+            try:
+                all_active_ads = meta.get_ad_insights(
+                    level="ad",
+                    fields=["ad_id"],
+                    date_preset="maximum",  # All time to get all active ads
+                    filtering=[{"field": "ad.effective_status", "operator": "IN", "value": ["ACTIVE"]}]
+                )
+                total_active_count = len(all_active_ads) if all_active_ads else 0
+                
+                # Use the higher count (some ads might not have today's data yet)
+                active_ads_count = max(insights_ads_count, total_active_count)
+            except Exception:
+                # Fallback to insights count if direct API call fails
+                active_ads_count = insights_ads_count
+                
         except Exception:
             active_ads_count = 0
         
