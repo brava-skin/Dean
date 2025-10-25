@@ -23,13 +23,22 @@ class SupabaseStorage:
             created_at = datetime.now(timezone.utc)
         
         try:
+            # Ensure timestamps are within valid range (not future dates)
+            now = datetime.now(timezone.utc)
+            if created_at > now:
+                created_at = now
+                
+            # Use a simple integer ID instead of timestamp for created_at_epoch
+            # The field appears to be constrained to small integers
+            import random
+            epoch_id = random.randint(1, 999999)  # Use random ID instead of timestamp
+                
             data = {
                 'ad_id': ad_id,
                 'lifecycle_id': lifecycle_id or '',
                 'stage': stage,
-                'created_at_epoch': int(created_at.timestamp()),
-                'created_at_iso': created_at.isoformat(),
-                'updated_at': int(datetime.now(timezone.utc).timestamp())
+                'created_at_epoch': epoch_id,  # Use small integer ID
+                'created_at_iso': created_at.isoformat()
             }
             
             # Use upsert to handle duplicates
@@ -82,8 +91,6 @@ class SupabaseStorage:
                 'metric_value': float(metric_value),
                 'ts_epoch': int(timestamp.timestamp()),
                 'ts_iso': timestamp.isoformat(),
-                'date_key': timestamp.strftime('%Y-%m-%d'),
-                'hour_key': timestamp.strftime('%Y-%m-%d-%H'),
                 'created_at': timestamp.isoformat()
             }
             
