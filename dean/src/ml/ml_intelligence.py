@@ -536,9 +536,9 @@ class XGBoostPredictor:
             feature_cols = [col for col in df_features.columns 
                            if col not in ['ad_id', 'id', 'date_start', 'date_end', 'created_at', target_col]]
             
-            # Remove non-numeric columns
+            # Remove non-numeric columns and ensure feature names are strings
             numeric_cols = df_features[feature_cols].select_dtypes(include=[np.number]).columns
-            feature_cols = [col for col in feature_cols if col in numeric_cols]
+            feature_cols = [str(col) for col in feature_cols if col in numeric_cols]
             
             # Handle missing values and infinity
             df_features[feature_cols] = df_features[feature_cols].fillna(0)
@@ -554,6 +554,10 @@ class XGBoostPredictor:
                     df_features[col] = df_features[col].clip(-1e6, 1e6)
             
             # Prepare X and y
+            # Ensure DataFrame has string column names
+            df_features.columns = [str(col) for col in df_features.columns]
+            feature_cols = [str(col) for col in feature_cols]
+            
             X = df_features[feature_cols].values
             y = df_features[target_col].fillna(0).values
             
@@ -736,9 +740,22 @@ class XGBoostPredictor:
             model = self.models[model_key]
             scaler = self.scalers[model_key]
             
-            # Prepare features
-            feature_vector = np.array([features.get(col, 0) for col in model.feature_names_in_])
-            feature_vector_scaled = scaler.transform([feature_vector])
+            # Prepare features - ensure feature names are strings and match
+            try:
+                # Get model's expected feature names (ensure they're strings)
+                expected_features = [str(col) for col in model.feature_names_in_]
+                
+                # Create feature vector matching model's expected features
+                feature_vector = np.array([
+                    float(features.get(str(col), 0)) for col in expected_features
+                ])
+                feature_vector_scaled = scaler.transform([feature_vector])
+                
+            except AttributeError:
+                # Fallback: if model doesn't have feature_names_in_, use features as-is
+                feature_names = list(features.keys())
+                feature_vector = np.array([float(features[col]) for col in feature_names])
+                feature_vector_scaled = scaler.transform([feature_vector])
             
             # Make prediction with ensemble if available
             predictions_ensemble = []
@@ -1331,17 +1348,17 @@ class MLIntelligenceSystem:
                     prev_stage, stage, ad_id
                 )
             
-            # Performance predictions
+            # Performance predictions (only numeric features for ML)
             features = {
-                'ctr': latest.get('ctr', 0),
-                'cpa': latest.get('cpa', 0),
-                'roas': latest.get('roas', 0),
-                'spend': latest.get('spend', 0),
-                'purchases': latest.get('purchases', 0),
-                'performance_quality_score': latest.get('performance_quality_score', 0),
-                'stability_score': latest.get('stability_score', 0),
-                'fatigue_index': latest.get('fatigue_index', 0),
-                'lifecycle_id': latest.get('lifecycle_id', '')
+                'ctr': float(latest.get('ctr', 0)),
+                'cpa': float(latest.get('cpa', 0)),
+                'roas': float(latest.get('roas', 0)),
+                'spend': float(latest.get('spend', 0)),
+                'purchases': float(latest.get('purchases', 0)),
+                'performance_quality_score': float(latest.get('performance_quality_score', 0)),
+                'stability_score': float(latest.get('stability_score', 0)),
+                'fatigue_index': float(latest.get('fatigue_index', 0)),
+                # Note: lifecycle_id removed as it's not a numeric feature for ML
             }
             
             predictions = self.predict_performance(ad_id, stage, features)
