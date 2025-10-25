@@ -82,13 +82,25 @@ class SupabaseStorage:
         if timestamp is None:
             timestamp = datetime.now(timezone.utc)
         
+        # Helper function to safely convert and bound numeric values
+        def safe_float(value, max_val=999999999.99):
+            try:
+                val = float(value or 0)
+                # Handle infinity and NaN
+                if not (val == val) or val == float('inf') or val == float('-inf'):
+                    return 0.0
+                # Bound the value to prevent overflow
+                return min(max(val, -max_val), max_val)
+            except (ValueError, TypeError):
+                return 0.0
+        
         try:
             data = {
                 'ad_id': ad_id,
                 'lifecycle_id': lifecycle_id or '',
                 'stage': stage,
                 'metric_name': metric_name,
-                'metric_value': float(metric_value),
+                'metric_value': safe_float(metric_value),
                 'ts_epoch': int(timestamp.timestamp()),
                 'ts_iso': timestamp.isoformat(),
                 'created_at': timestamp.isoformat()

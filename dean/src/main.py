@@ -311,6 +311,18 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             return
         
         # Store in performance_metrics table
+        # Helper function to safely convert and bound numeric values
+        def safe_float(value, max_val=999999.99):
+            try:
+                val = float(value or 0)
+                # Handle infinity and NaN
+                if not (val == val) or val == float('inf') or val == float('-inf'):
+                    return 0.0
+                # Bound the value to prevent overflow
+                return min(max(val, -max_val), max_val)
+            except (ValueError, TypeError):
+                return 0.0
+        
         performance_data = {
             'ad_id': ad_data.get('ad_id', ''),
             'lifecycle_id': ad_data.get('lifecycle_id', ''),
@@ -318,17 +330,17 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             'window_type': '1d',
             'date_start': ad_data.get('date_start', ''),
             'date_end': ad_data.get('date_end', ''),
-            'spend': float(ad_data.get('spend', 0)),
+            'spend': safe_float(ad_data.get('spend', 0)),
             'impressions': int(ad_data.get('impressions', 0)),
             'clicks': int(ad_data.get('clicks', 0)),
-            'ctr': float(ad_data.get('ctr', 0)),
-            'cpc': float(ad_data.get('cpc', 0)),
-            'cpm': float(ad_data.get('cpp', 0)),
+            'ctr': safe_float(ad_data.get('ctr', 0), 9999.9999),  # Allow up to 9999.9999%
+            'cpc': safe_float(ad_data.get('cpc', 0), 99999999.99),  # Allow up to €99M
+            'cpm': safe_float(ad_data.get('cpm', 0), 99999999.99),  # Allow up to €99M  
             'purchases': int(ad_data.get('purchases', 0)),
             'add_to_cart': int(ad_data.get('atc', 0)),
             'initiate_checkout': int(ad_data.get('ic', 0)),
-            'roas': float(ad_data.get('roas', 0)),
-            'cpa': float(ad_data.get('cpa', 0)) if ad_data.get('cpa') is not None else 0,
+            'roas': safe_float(ad_data.get('roas', 0), 9999.9999),  # Allow up to 9999x ROAS
+            'cpa': safe_float(ad_data.get('cpa', 0), 99999999.99) if ad_data.get('cpa') is not None else 0,
             # Note: created_at and updated_at are handled by database defaults
             # We don't need to insert them explicitly
         }
@@ -1007,7 +1019,7 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
         
         rows = meta.get_ad_insights(
             level="ad", 
-            fields=["spend", "actions", "impressions", "clicks", "ctr", "cpc", "cpp"], 
+            fields=["spend", "actions", "impressions", "clicks", "ctr", "cpc", "cpm"], 
             time_range={
                 "since": midnight.strftime("%Y-%m-%d"),
                 "until": now.strftime("%Y-%m-%d")
