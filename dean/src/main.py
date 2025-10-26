@@ -423,10 +423,16 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         # Store in creative_intelligence table (ensure we have creative data)
         try:
             creative_id = ad_data.get('creative_id') or f'creative_{ad_data.get("ad_id", "")}'
+            # Use a valid creative_type - the schema likely has a check constraint
+            # Valid values are probably: 'image', 'video', 'carousel', 'collection', etc.
+            creative_type = ad_data.get('creative_type', 'image')  # Default to 'image'
+            if creative_type in ['unknown', 'testing', 'validation', 'scaling']:
+                creative_type = 'image'  # Map invalid stage names to 'image'
+            
             creative_data = {
                 'creative_id': creative_id,
                 'ad_id': ad_data.get('ad_id', ''),
-                'creative_type': ad_data.get('creative_type', 'unknown'),
+                'creative_type': creative_type,
                 'performance_score': 0.5  # Will be updated by ML
             }
             # Use simple insert without on_conflict since the table may not have a unique constraint
