@@ -323,18 +323,33 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             except (ValueError, TypeError):
                 return 0.0
         
-        # Calculate day_of_week and is_weekend from date_start
+        # Calculate day_of_week, is_weekend, hour_of_day from date_start
         from datetime import datetime
         date_start = ad_data.get('date_start', '')
         day_of_week = None
         is_weekend = False
+        hour_of_day = None
         if date_start:
             try:
                 date_obj = datetime.strptime(date_start, '%Y-%m-%d')
                 day_of_week = date_obj.weekday()  # 0=Monday, 6=Sunday
                 is_weekend = day_of_week >= 5  # Saturday or Sunday
+                hour_of_day = datetime.now().hour  # 0-23
             except (ValueError, TypeError):
                 pass
+        
+        # Calculate ad_age_days from creation time
+        ad_age_days = 0
+        try:
+            ad_id = ad_data.get('ad_id', '')
+            if ad_id:
+                from infrastructure.supabase_storage import SupabaseStorage
+                storage = SupabaseStorage(supabase_client)
+                age = storage.get_ad_age_days(ad_id)
+                if age is not None:
+                    ad_age_days = max(0, age)  # Ensure non-negative
+        except Exception:
+            pass  # Fallback to 0 if calculation fails
         
         performance_data = {
             'ad_id': ad_data.get('ad_id', ''),
@@ -356,6 +371,8 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             'cpa': safe_float(ad_data.get('cpa', 0), 9.9999) if ad_data.get('cpa') is not None else 0,
             'day_of_week': day_of_week,
             'is_weekend': is_weekend,
+            'hour_of_day': hour_of_day,
+            'ad_age_days': int(ad_age_days) if ad_age_days else 0,
             # Note: created_at and updated_at are handled by database defaults
             # We don't need to insert them explicitly
         }
