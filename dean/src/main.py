@@ -434,9 +434,10 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                 creative_id = ad_data.get('creative_id') or f'creative_{ad_data.get("ad_id", "")}'
                 # Use a valid creative_type - the schema likely has a check constraint
                 # Valid values are: 'image', 'video', 'carousel', 'collection', 'story', 'reels'
-                creative_type = ad_data.get('creative_type', 'image')  # Default to 'image'
+                # Default to 'video' since this is a UGC video campaign
+                creative_type = ad_data.get('creative_type', 'video')  # Default to 'video' for UGC videos
                 if creative_type not in ['image', 'video', 'carousel', 'collection', 'story', 'reels']:
-                    creative_type = 'image'  # Map invalid values to 'image'
+                    creative_type = 'video'  # Map invalid values to 'video' for UGC campaigns
                 
                 creative_data = {
                     'creative_id': creative_id,
@@ -467,10 +468,15 @@ def store_ml_insights_in_supabase(supabase_client, ad_id: str, insights: Dict[st
     
     try:
         # Store creative intelligence data
+        # Get creative_type from insights, default to 'video' for UGC campaigns
+        creative_type = insights.get('creative_type', 'video')
+        if creative_type not in ['image', 'video', 'carousel', 'collection', 'story', 'reels']:
+            creative_type = 'video'  # Default to video for UGC campaigns
+        
         creative_data = {
             'creative_id': insights.get('creative_id', f'creative_{ad_id}'),
             'ad_id': ad_id,
-            'creative_type': insights.get('creative_type', 'unknown'),
+            'creative_type': creative_type,
             'performance_score': float(insights.get('performance_score', 0))
             # Removed 'fatigue_index', 'similarity_vector', 'metadata' as they don't exist in actual schema
             # Note: created_at and updated_at are handled by database defaults
