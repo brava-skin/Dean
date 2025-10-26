@@ -429,13 +429,11 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                 'creative_type': ad_data.get('creative_type', 'unknown'),
                 'performance_score': 0.5  # Will be updated by ML
             }
-            result = supabase_client.table('creative_intelligence').upsert(
-                creative_data, 
-                on_conflict='creative_id'
-            ).execute()
+            # Use simple insert without on_conflict since the table may not have a unique constraint
+            result = supabase_client.table('creative_intelligence').insert(creative_data).execute()
             # Log successful insert
             if result.data:
-                print(f"✅ Creative intelligence updated: {creative_id} for ad {ad_data.get('ad_id')}")
+                print(f"✅ Creative intelligence inserted: {creative_id} for ad {ad_data.get('ad_id')}")
         except Exception as e:
             # Log the error instead of silently failing
             print(f"⚠️ Failed to store creative intelligence for {ad_data.get('ad_id')}: {e}")
