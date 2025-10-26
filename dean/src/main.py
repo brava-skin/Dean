@@ -346,8 +346,8 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                 from infrastructure.supabase_storage import SupabaseStorage
                 storage = SupabaseStorage(supabase_client)
                 age = storage.get_ad_age_days(ad_id)
-                if age is not None:
-                    ad_age_days = max(0, age)  # Ensure non-negative
+                if age is not None and age > 0:
+                    ad_age_days = min(max(0, age), 365)  # Cap at 365 days (1 year max)
         except Exception:
             pass  # Fallback to 0 if calculation fails
         

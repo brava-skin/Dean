@@ -954,10 +954,22 @@ class XGBoostPredictor:
                     return False
             
             # Deserialize and load the model
-            model_bytes = bytes.fromhex(model_data['model_data'])
-            model = pickle.loads(model_bytes)
-            model_key = f"{model_type}_{stage}"
-            self.models[model_key] = model
+            model_data_hex = model_data.get('model_data', '')
+            if not model_data_hex:
+                logger.error(f"No model data found for {model_type}_{stage}")
+                return False
+            
+            try:
+                model_bytes = bytes.fromhex(model_data_hex)
+                model = pickle.loads(model_bytes)
+                model_key = f"{model_type}_{stage}"
+                self.models[model_key] = model
+            except ValueError as e:
+                logger.error(f"Invalid hex data for {model_type}_{stage}: {e}")
+                return False
+            except Exception as e:
+                logger.error(f"Failed to deserialize model {model_type}_{stage}: {e}")
+                return False
             
             # Load scaler if available
             scaler_data = model_data.get('scaler_data')
