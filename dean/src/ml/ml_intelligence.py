@@ -760,36 +760,65 @@ class XGBoostPredictor:
                     return None
             
             model = self.models[model_key]
-            scaler = self.scalers[model_key]
+            scaler = self.scalers.get(model_key)
             
             # Prepare features - ensure feature names are strings and match
             try:
                 # Get model's expected feature names (ensure they're strings)
-                expected_features = [str(col) for col in model.feature_names_in_]
+                if hasattr(model, 'feature_names_in_'):
+                    expected_features = [str(col) for col in model.feature_names_in_]
+                else:
+                    # Fallback: use all provided features
+                    expected_features = [str(k) for k in features.keys()]
                 
-                # Create feature vector matching model's expected features
+                # Create feature vector matching model's expected features EXACTLY
                 feature_vector = np.array([
                     float(features.get(str(col), 0)) for col in expected_features
                 ])
-                feature_vector_scaled = scaler.transform([feature_vector])
                 
-            except AttributeError:
-                # Fallback: if model doesn't have feature_names_in_, use features as-is
-                feature_names = list(features.keys())
-                feature_vector = np.array([float(features[col]) for col in feature_names])
-                feature_vector_scaled = scaler.transform([feature_vector])
+                # FIX: Ensure we have the exact number of features the scaler expects
+                if scaler is not None:
+                    # Check if feature vector matches scaler's expected size
+                    if len(feature_vector) != scaler.n_features_in_:
+                        self.logger.error(f"Feature mismatch: have {len(feature_vector)} features, scaler expects {scaler.n_features_in_}")
+                        # Try to use only the features the scaler expects
+                        if len(expected_features) > scaler.n_features_in_:
+                            expected_features = expected_features[:scaler.n_features_in_]
+                            feature_vector = np.array([
+                                float(features.get(str(col), 0)) for col in expected_features
+                            ])
+                        elif len(expected_features) < scaler.n_features_in_:
+                            # Pad with zeros
+                            feature_vector = np.pad(feature_vector, (0, scaler.n_features_in_ - len(feature_vector)), 'constant')
+                    
+                    feature_vector_scaled = scaler.transform([feature_vector])
+                else:
+                    # No scaler available, use features as-is
+                    feature_vector_scaled = [feature_vector]
+                
+            except (AttributeError, KeyError) as e:
+                self.logger.error(f"Feature preparation error: {e}")
+                return None
             
             # Make prediction with ensemble if available
             predictions_ensemble = []
-            predictions_ensemble.append(model.predict(feature_vector_scaled)[0])
+            try:
+                predictions_ensemble.append(model.predict(feature_vector_scaled)[0])
+            except Exception as e:
+                self.logger.error(f"Prediction error: {e}")
+                return None
             
             # If we have multiple models, use ensemble
             model_key_base = f"{model_type}_{stage}"
             for ensemble_suffix in ['_rf', '_gb', '_lr']:
                 ensemble_key = model_key_base + ensemble_suffix
                 if ensemble_key in self.models:
-                    ensemble_pred = self.models[ensemble_key].predict(feature_vector_scaled)[0]
-                    predictions_ensemble.append(ensemble_pred)
+                    try:
+                        ensemble_pred = self.models[ensemble_key].predict(feature_vector_scaled)[0]
+                        predictions_ensemble.append(ensemble_pred)
+                    except Exception as e:
+                        self.logger.warning(f"Ensemble model {ensemble_key} prediction failed: {e}")
+                        continue
             
             # Final prediction (mean of ensemble)
             prediction = np.mean(predictions_ensemble)
