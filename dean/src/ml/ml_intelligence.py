@@ -988,6 +988,36 @@ class XGBoostPredictor:
                 logger.error(f"No model data found for {model_type}_{stage}")
                 return False
             
+            # Validate hex data before attempting to decode
+            if not isinstance(model_data_hex, str) or len(model_data_hex) == 0:
+                logger.error(f"Invalid model_data type for {model_type}_{stage}: expected non-empty string")
+                # Clear corrupted model from database
+                try:
+                    self.supabase.client.table('ml_models').update({'is_active': False}).eq(
+                        'model_type', model_type
+                    ).eq('stage', stage).execute()
+                    logger.info(f"Disabled corrupted model {model_type}_{stage} for retraining")
+                except:
+                    pass
+                return False
+            
+            # Check if the hex string is valid
+            try:
+                # Try to convert first byte to validate hex
+                if len(model_data_hex) < 2 or not all(c in '0123456789abcdefABCDEF' for c in model_data_hex[:2]):
+                    raise ValueError("Invalid hex characters")
+            except ValueError:
+                logger.error(f"Invalid hex data format for {model_type}_{stage}: expected hexadecimal string")
+                # Clear corrupted model from database
+                try:
+                    self.supabase.client.table('ml_models').update({'is_active': False}).eq(
+                        'model_type', model_type
+                    ).eq('stage', stage).execute()
+                    logger.info(f"Disabled corrupted model {model_type}_{stage} for retraining")
+                except:
+                    pass
+                return False
+            
             try:
                 model_bytes = bytes.fromhex(model_data_hex)
                 model = pickle.loads(model_bytes)
@@ -995,17 +1025,38 @@ class XGBoostPredictor:
                 self.models[model_key] = model
             except ValueError as e:
                 logger.error(f"Invalid hex data for {model_type}_{stage}: {e}")
+                # Clear corrupted model from database
+                try:
+                    self.supabase.client.table('ml_models').update({'is_active': False}).eq(
+                        'model_type', model_type
+                    ).eq('stage', stage).execute()
+                    logger.info(f"Disabled corrupted model {model_type}_{stage} for retraining")
+                except Exception as cleanup_error:
+                    logger.error(f"Failed to clean up corrupted model: {cleanup_error}")
                 return False
             except Exception as e:
                 logger.error(f"Failed to deserialize model {model_type}_{stage}: {e}")
+                # Clear corrupted model from database
+                try:
+                    self.supabase.client.table('ml_models').update({'is_active': False}).eq(
+                        'model_type', model_type
+                    ).eq('stage', stage).execute()
+                    logger.info(f"Disabled corrupted model {model_type}_{stage} for retraining")
+                except Exception as cleanup_error:
+                    logger.error(f"Failed to clean up corrupted model: {cleanup_error}")
                 return False
             
             # Load scaler if available
             scaler_data = model_data.get('scaler_data')
             if scaler_data:
-                scaler_bytes = bytes.fromhex(scaler_data)
-                scaler = pickle.loads(scaler_bytes)
-                self.scalers[model_key] = scaler
+                try:
+                    scaler_bytes = bytes.fromhex(scaler_data)
+                    scaler = pickle.loads(scaler_bytes)
+                    self.scalers[model_key] = scaler
+                except Exception as e:
+                    logger.warning(f"Failed to load scaler for {model_type}_{stage}: {e}, using default")
+                    from sklearn.preprocessing import StandardScaler
+                    self.scalers[model_key] = StandardScaler()
             else:
                 # Create a default scaler
                 from sklearn.preprocessing import StandardScaler
