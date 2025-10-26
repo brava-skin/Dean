@@ -420,6 +420,23 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         ).execute()
         notify(f"✅ Lifecycle data inserted: {result}")
         
+        # Store in creative_intelligence table (ensure we have creative data)
+        try:
+            creative_id = ad_data.get('creative_id') or f'creative_{ad_data.get("ad_id", "")}'
+            creative_data = {
+                'creative_id': creative_id,
+                'ad_id': ad_data.get('ad_id', ''),
+                'creative_type': ad_data.get('creative_type', 'unknown'),
+                'performance_score': 0.5  # Will be updated by ML
+            }
+            supabase_client.table('creative_intelligence').upsert(
+                creative_data, 
+                on_conflict='creative_id'
+            ).execute()
+        except Exception as e:
+            # Silently fail - creative data is optional
+            pass
+        
     except Exception as e:
         notify(f"❌ Failed to store performance data in Supabase: {e}")
         import traceback
