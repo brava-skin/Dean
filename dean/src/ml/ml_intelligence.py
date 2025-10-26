@@ -781,17 +781,18 @@ class XGBoostPredictor:
                     # Check if feature vector matches scaler's expected size
                     if len(feature_vector) != scaler.n_features_in_:
                         self.logger.error(f"Feature mismatch: have {len(feature_vector)} features, scaler expects {scaler.n_features_in_}")
-                        # Try to use only the features the scaler expects
-                        if len(expected_features) > scaler.n_features_in_:
-                            expected_features = expected_features[:scaler.n_features_in_]
-                            feature_vector = np.array([
-                                float(features.get(str(col), 0)) for col in expected_features
-                            ])
-                        elif len(expected_features) < scaler.n_features_in_:
+                        # Use only the first N features that the scaler expects
+                        if len(feature_vector) > scaler.n_features_in_:
+                            feature_vector = feature_vector[:scaler.n_features_in_]
+                        elif len(feature_vector) < scaler.n_features_in_:
                             # Pad with zeros
                             feature_vector = np.pad(feature_vector, (0, scaler.n_features_in_ - len(feature_vector)), 'constant')
                     
-                    feature_vector_scaled = scaler.transform([feature_vector])
+                    try:
+                        feature_vector_scaled = scaler.transform([feature_vector])
+                    except ValueError as e:
+                        self.logger.error(f"Scaler transform failed: {e}, using unscaled features")
+                        feature_vector_scaled = [feature_vector]
                 else:
                     # No scaler available, use features as-is
                     feature_vector_scaled = [feature_vector]
