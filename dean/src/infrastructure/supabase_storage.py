@@ -28,16 +28,14 @@ class SupabaseStorage:
             if created_at > now:
                 created_at = now
                 
-            # Use a simple integer ID instead of timestamp for created_at_epoch
-            # The field appears to be constrained to small integers
-            import random
-            epoch_id = random.randint(1, 999999)  # Use random ID instead of timestamp
+            # Use actual timestamp for created_at_epoch
+            epoch_id = int(created_at.timestamp())
                 
             data = {
                 'ad_id': ad_id,
                 'lifecycle_id': lifecycle_id or '',
                 'stage': stage,
-                'created_at_epoch': epoch_id,  # Use small integer ID
+                'created_at_epoch': epoch_id,  # Use actual timestamp
                 'created_at_iso': created_at.isoformat()
             }
             

@@ -953,9 +953,28 @@ class XGBoostPredictor:
                 except:
                     return False
             
+            # Deserialize and load the model
+            model_bytes = bytes.fromhex(model_data['model_data'])
+            model = pickle.loads(model_bytes)
+            model_key = f"{model_type}_{stage}"
+            self.models[model_key] = model
+            
+            # Load scaler if available
+            scaler_data = model_data.get('scaler_data')
+            if scaler_data:
+                scaler_bytes = bytes.fromhex(scaler_data)
+                scaler = pickle.loads(scaler_bytes)
+                self.scalers[model_key] = scaler
+            else:
+                # Create a default scaler
+                from sklearn.preprocessing import StandardScaler
+                self.scalers[model_key] = StandardScaler()
+            
+            self.logger.info(f"Successfully loaded {model_type} model for {stage} from Supabase")
             return True
             
         except Exception as e:
+            self.logger.error(f"Failed to load model from Supabase: {e}")
             return False
 
 class TemporalAnalyzer:

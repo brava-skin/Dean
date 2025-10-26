@@ -323,12 +323,25 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             except (ValueError, TypeError):
                 return 0.0
         
+        # Calculate day_of_week and is_weekend from date_start
+        from datetime import datetime
+        date_start = ad_data.get('date_start', '')
+        day_of_week = None
+        is_weekend = False
+        if date_start:
+            try:
+                date_obj = datetime.strptime(date_start, '%Y-%m-%d')
+                day_of_week = date_obj.weekday()  # 0=Monday, 6=Sunday
+                is_weekend = day_of_week >= 5  # Saturday or Sunday
+            except (ValueError, TypeError):
+                pass
+        
         performance_data = {
             'ad_id': ad_data.get('ad_id', ''),
             'lifecycle_id': ad_data.get('lifecycle_id', ''),
             'stage': stage,
             'window_type': '1d',
-            'date_start': ad_data.get('date_start', ''),
+            'date_start': date_start,
             'date_end': ad_data.get('date_end', ''),
             'spend': safe_float(ad_data.get('spend', 0), 99999.99),  # Cap spend at €99,999.99
             'impressions': int(ad_data.get('impressions', 0)),
@@ -341,6 +354,8 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             'initiate_checkout': int(ad_data.get('ic', 0)),
             'roas': safe_float(ad_data.get('roas', 0), 9.9999),  # Cap at 9.9999x ROAS for precision(5,4)
             'cpa': safe_float(ad_data.get('cpa', 0), 9.9999) if ad_data.get('cpa') is not None else 0,
+            'day_of_week': day_of_week,
+            'is_weekend': is_weekend,
             # Note: created_at and updated_at are handled by database defaults
             # We don't need to insert them explicitly
         }
