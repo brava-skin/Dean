@@ -44,7 +44,7 @@ class SupabaseStorage:
                 from infrastructure.validated_supabase import get_validated_supabase_client
                 validated_client = get_validated_supabase_client(enable_validation=True)
                 if validated_client:
-                    validated_client.upsert('ad_creation_times', data)
+                    validated_client.upsert('ad_creation_times', data, on_conflict='ad_id')
                 else:
                     self.client.table('ad_creation_times').upsert(data, on_conflict='ad_id').execute()
             except ImportError:

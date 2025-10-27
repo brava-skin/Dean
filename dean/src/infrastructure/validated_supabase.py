@@ -85,10 +85,10 @@ class ValidatedSupabaseClient:
             else:
                 return self._upsert_single_validated(table, data, on_conflict)
         else:
-            query = self.client.table(table).upsert(data)
             if on_conflict:
-                # Note: Supabase doesn't have on_conflict method, so we ignore it
-                logger.warning(f"on_conflict parameter '{on_conflict}' ignored - Supabase upsert handles conflicts automatically")
+                query = self.client.table(table).upsert(data, on_conflict=on_conflict)
+            else:
+                query = self.client.table(table).upsert(data)
             return query.execute()
     
     def update(self, table: str, data: Dict[str, Any], 

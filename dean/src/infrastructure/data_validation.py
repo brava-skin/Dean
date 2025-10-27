@@ -610,7 +610,8 @@ class SupabaseDataValidator:
         # Check if it's a list of floats
         if isinstance(value, list):
             if len(value) == 0:
-                errors.append("Similarity vector cannot be empty")
+                # Allow empty lists - they will be populated later by ML
+                return errors
             elif not all(isinstance(x, (int, float)) for x in value):
                 errors.append("Similarity vector must contain only numbers")
             elif len(value) != 384:  # Standard embedding size

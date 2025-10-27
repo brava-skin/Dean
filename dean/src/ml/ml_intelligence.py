@@ -1052,7 +1052,7 @@ class XGBoostPredictor:
                 'model_name': f"{model_type}_{stage}_v1",
                 'model_data': model_data.hex(),  # Convert to hex for storage
                 'scaler_data': scaler_data_hex,  # Store scaler data
-                'accuracy': sanitize_float(confidence_data.get('cv_score', 0)),  # Use cv_score as accuracy
+                'accuracy': max(0, sanitize_float(confidence_data.get('cv_score', 0))),  # Ensure accuracy >= 0
                 'precision': sanitize_float(confidence_data.get('precision', 0)),
                 'recall': sanitize_float(confidence_data.get('recall', 0)),
                 'f1_score': sanitize_float(confidence_data.get('f1_score', 0)),
