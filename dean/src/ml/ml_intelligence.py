@@ -1079,6 +1079,17 @@ class XGBoostPredictor:
                 'trained_at': now_utc().isoformat()
             }
             
+            # Create minimal data structure (ultimate fallback)
+            data_minimal = {
+                'model_type': model_type,
+                'stage': stage,
+                'version': 1,
+                'model_name': f"{model_type}_{stage}_v1",
+                'model_data': model_data.hex(),
+                'is_active': True,
+                'trained_at': now_utc().isoformat()
+            }
+            
             # Get validated client for automatic validation
             validated_client = self._get_validated_client()
             
@@ -1098,8 +1109,14 @@ class XGBoostPredictor:
                         if "accuracy" in str(e) and "schema cache" in str(e):
                             # Schema doesn't support accuracy column, try without it
                             self.logger.warning(f"Schema doesn't support accuracy column, retrying without accuracy metrics")
-                            response = validated_client.upsert('ml_models', data_without_accuracy, on_conflict='model_type,stage,version')
-                            self.logger.info(f"✅ Model {model_type}_{stage} saved without accuracy metrics")
+                            try:
+                                response = validated_client.upsert('ml_models', data_without_accuracy, on_conflict='model_type,stage,version')
+                                self.logger.info(f"✅ Model {model_type}_{stage} saved without accuracy metrics")
+                            except Exception as e2:
+                                # If still failing, try minimal data structure
+                                self.logger.warning(f"Schema has limited support, using minimal data structure")
+                                response = validated_client.upsert('ml_models', data_minimal, on_conflict='model_type,stage,version')
+                                self.logger.info(f"✅ Model {model_type}_{stage} saved with minimal data")
                         else:
                             raise e
                 except Exception as e:
@@ -1117,8 +1134,14 @@ class XGBoostPredictor:
                         if "accuracy" in str(e) and "schema cache" in str(e):
                             # Schema doesn't support accuracy column, try without it
                             self.logger.warning(f"Schema doesn't support accuracy column, retrying without accuracy metrics (fallback)")
-                            response = self.supabase.client.table('ml_models').upsert(data_without_accuracy, on_conflict='model_type,stage,version').execute()
-                            self.logger.info(f"✅ Model {model_type}_{stage} saved without accuracy metrics (fallback)")
+                            try:
+                                response = self.supabase.client.table('ml_models').upsert(data_without_accuracy, on_conflict='model_type,stage,version').execute()
+                                self.logger.info(f"✅ Model {model_type}_{stage} saved without accuracy metrics (fallback)")
+                            except Exception as e2:
+                                # If still failing, try minimal data structure
+                                self.logger.warning(f"Schema has limited support, using minimal data structure (fallback)")
+                                response = self.supabase.client.table('ml_models').upsert(data_minimal, on_conflict='model_type,stage,version').execute()
+                                self.logger.info(f"✅ Model {model_type}_{stage} saved with minimal data (fallback)")
                         else:
                             raise e
                 except Exception as e:

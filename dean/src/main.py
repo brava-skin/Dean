@@ -337,7 +337,9 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                 if not (val == val) or val == float('inf') or val == float('-inf'):
                     return 0.0
                 # Bound the value to prevent overflow
-                return min(max(val, -max_val), max_val)
+                bounded_val = min(max(val, -max_val), max_val)
+                # Round to 4 decimal places to prevent precision issues
+                return round(bounded_val, 4)
             except (ValueError, TypeError):
                 return 0.0
         
@@ -390,18 +392,18 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             'purchases': int(ad_data.get('purchases', 0)),
             'add_to_cart': int(ad_data.get('atc', 0)),
             'initiate_checkout': int(ad_data.get('ic', 0)),
-            'ctr': safe_float(ad_data.get('ctr', 0), 100),
-            'cpc': safe_float(ad_data.get('cpc', 0), 999.99),
-            'cpm': safe_float(ad_data.get('cpm', 0), 9999.99),
-            'roas': safe_float(ad_data.get('roas', 0), 999.99),
-            'cpa': safe_float(ad_data.get('cpa', 0), 999.99) if ad_data.get('cpa') is not None else None,
+            'ctr': safe_float(ad_data.get('ctr', 0), 99.9999),  # Cap at 99.9999% CTR
+            'cpc': safe_float(ad_data.get('cpc', 0), 99.9999),  # Cap at 99.9999 CPC
+            'cpm': safe_float(ad_data.get('cpm', 0), 99.9999),  # Cap at 99.9999 CPM
+            'roas': safe_float(ad_data.get('roas', 0), 99.9999),  # Cap at 99.9999 ROAS
+            'cpa': safe_float(ad_data.get('cpa', 0), 99.9999) if ad_data.get('cpa') is not None else None,  # Cap at 99.9999 CPA
             'dwell_time': safe_float(ad_data.get('dwell_time', 0), 999999.99),
             'frequency': safe_float(ad_data.get('frequency', 0), 999.99),
-            'atc_rate': safe_float(ad_data.get('atc_rate', 0), 9.9999),
-            'ic_rate': safe_float(ad_data.get('ic_rate', 0), 9.9999),
-            'purchase_rate': safe_float(ad_data.get('purchase_rate', 0), 9.9999),
-            'atc_to_ic_rate': safe_float(ad_data.get('atc_to_ic_rate', 0), 9.9999),
-            'ic_to_purchase_rate': safe_float(ad_data.get('ic_to_purchase_rate', 0), 9.9999),
+            'atc_rate': safe_float(ad_data.get('atc_rate', 0), 99.9999),  # Cap at 99.9999%
+            'ic_rate': safe_float(ad_data.get('ic_rate', 0), 99.9999),  # Cap at 99.9999%
+            'purchase_rate': safe_float(ad_data.get('purchase_rate', 0), 99.9999),  # Cap at 99.9999%
+            'atc_to_ic_rate': safe_float(ad_data.get('atc_to_ic_rate', 0), 99.9999),  # Cap at 99.9999%
+            'ic_to_purchase_rate': safe_float(ad_data.get('ic_to_purchase_rate', 0), 99.9999),  # Cap at 99.9999%
             'performance_quality_score': int(ad_data.get('performance_quality_score', 0)),
             'stability_score': safe_float(ad_data.get('stability_score', 0), 9.9999),
             'momentum_score': safe_float(ad_data.get('momentum_score', 0), 9.9999),
@@ -470,7 +472,7 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                     'creative_type': creative_type,
                     'performance_score': 0.5,  # Will be updated by ML
                     'fatigue_index': 0.0,
-                    'similarity_vector': [],
+                    'similarity_vector': None,  # Will be populated by ML later
                     'metadata': {}
                 }
                 
@@ -508,7 +510,7 @@ def store_ml_insights_in_supabase(supabase_client, ad_id: str, insights: Dict[st
             'creative_type': creative_type,
             'performance_score': float(insights.get('performance_score', 0)),
             'fatigue_index': float(insights.get('fatigue_index', 0)),
-            'similarity_vector': insights.get('similarity_vector', []),
+            'similarity_vector': insights.get('similarity_vector', None),  # Use None instead of empty list
             'metadata': insights.get('metadata', {})
         }
         
@@ -659,7 +661,7 @@ def store_creative_data_in_supabase(supabase_client, meta_client, ad_id: str, st
                 'creative_type': creative.get('object_type', 'video'),
                 'performance_score': 0.5,  # Will be updated by ML
                 'fatigue_index': 0.0,
-                'similarity_vector': [],
+                'similarity_vector': None,  # Will be populated by ML later
                 'metadata': {}
             }
             
