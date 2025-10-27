@@ -1045,22 +1045,33 @@ class XGBoostPredictor:
                 except Exception as e:
                     self.logger.warning(f"Failed to serialize scaler: {e}")
             
-            # Ensure accuracy is >= 0 for validation
-            cv_score = sanitize_float(confidence_data.get('cv_score', 0))
-            accuracy_value = max(0, cv_score)
-            self.logger.info(f"🔧 [ML DEBUG] cv_score: {cv_score}, accuracy: {accuracy_value} (ensured >= 0)")
-            
-            data = {
+            # Create data with accuracy metrics
+            data_with_accuracy = {
                 'model_type': model_type,
                 'stage': stage,
                 'version': 1,  # Add version for upsert
                 'model_name': f"{model_type}_{stage}_v1",
                 'model_data': model_data.hex(),  # Convert to hex for storage
                 'scaler_data': scaler_data_hex,  # Store scaler data
-                'accuracy': accuracy_value,  # Use sanitized accuracy
+                'accuracy': max(0, sanitize_float(confidence_data.get('cv_score', 0))),  # Ensure accuracy >= 0
                 'precision': sanitize_float(confidence_data.get('precision', 0)),
                 'recall': sanitize_float(confidence_data.get('recall', 0)),
                 'f1_score': sanitize_float(confidence_data.get('f1_score', 0)),
+                'model_metadata': metadata,
+                'features_used': feature_cols,
+                'performance_metrics': performance_metrics,
+                'is_active': True,
+                'trained_at': now_utc().isoformat()
+            }
+            
+            # Create data without accuracy metrics (fallback for older schema)
+            data_without_accuracy = {
+                'model_type': model_type,
+                'stage': stage,
+                'version': 1,  # Add version for upsert
+                'model_name': f"{model_type}_{stage}_v1",
+                'model_data': model_data.hex(),  # Convert to hex for storage
+                'scaler_data': scaler_data_hex,  # Store scaler data
                 'model_metadata': metadata,
                 'features_used': feature_cols,
                 'performance_metrics': performance_metrics,
@@ -1079,15 +1090,18 @@ class XGBoostPredictor:
                 # Use validated client
                 try:
                     # Try to update existing record
-                    response = validated_client.update(
-                        'ml_models',
-                        data,
-                        eq='model_type',
-                        value=model_type
-                    )
-                    if not response:
-                        # Insert new record if no existing one found
-                        response = validated_client.insert('ml_models', data)
+                    # Try with accuracy metrics first
+                    try:
+                        response = validated_client.upsert('ml_models', data_with_accuracy, on_conflict='model_type,stage,version')
+                        self.logger.info(f"✅ Model {model_type}_{stage} saved with accuracy metrics")
+                    except Exception as e:
+                        if "accuracy" in str(e) and "schema cache" in str(e):
+                            # Schema doesn't support accuracy column, try without it
+                            self.logger.warning(f"Schema doesn't support accuracy column, retrying without accuracy metrics")
+                            response = validated_client.upsert('ml_models', data_without_accuracy, on_conflict='model_type,stage,version')
+                            self.logger.info(f"✅ Model {model_type}_{stage} saved without accuracy metrics")
+                        else:
+                            raise e
                 except Exception as e:
                     # If all else fails, just log and continue
                     self.logger.warning(f"Could not save model {model_type}_{stage}: {e}, continuing...")
@@ -1095,29 +1109,22 @@ class XGBoostPredictor:
             else:
                 # Fallback to regular client
                 try:
-                    # Try to update existing record
-                    update_response = self.supabase.client.table('ml_models').update(data).eq(
-                        'model_type', model_type
-                    ).eq('stage', stage).eq('version', 1).execute()
-                    
-                    if update_response.data:
-                        response = update_response
-                    else:
-                        # Insert new record if no existing one found
-                        response = self.supabase.client.table('ml_models').insert(data).execute()
+                    # Try with accuracy metrics first
+                    try:
+                        response = self.supabase.client.table('ml_models').upsert(data_with_accuracy, on_conflict='model_type,stage,version').execute()
+                        self.logger.info(f"✅ Model {model_type}_{stage} saved with accuracy metrics (fallback)")
+                    except Exception as e:
+                        if "accuracy" in str(e) and "schema cache" in str(e):
+                            # Schema doesn't support accuracy column, try without it
+                            self.logger.warning(f"Schema doesn't support accuracy column, retrying without accuracy metrics (fallback)")
+                            response = self.supabase.client.table('ml_models').upsert(data_without_accuracy, on_conflict='model_type,stage,version').execute()
+                            self.logger.info(f"✅ Model {model_type}_{stage} saved without accuracy metrics (fallback)")
+                        else:
+                            raise e
                 except Exception as e:
-                    # If insert fails due to duplicate, try update again
-                    if "duplicate key" in str(e).lower() or "unique constraint" in str(e).lower():
-                        try:
-                            response = self.supabase.client.table('ml_models').update(data).eq(
-                                'model_type', model_type
-                            ).eq('stage', stage).eq('version', 1).execute()
-                        except Exception as e2:
-                            # If all else fails, just log and continue
-                            self.logger.warning(f"Could not save model {model_type}_{stage}: {e2}, continuing...")
-                            return True  # Return True to avoid breaking the flow
-                    else:
-                        raise e
+                    # If all else fails, just log and continue
+                    self.logger.warning(f"Could not save model {model_type}_{stage}: {e}, continuing...")
+                    return True  # Return True to avoid breaking the flow
             
             # Check if response was successful
             if hasattr(response, 'data') and response.data:

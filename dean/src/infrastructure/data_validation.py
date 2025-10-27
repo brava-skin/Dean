@@ -604,29 +604,20 @@ class SupabaseDataValidator:
         """Validate similarity vector field."""
         errors = []
         
-        print(f"🔧 [DEBUG] Validating similarity_vector: {type(value)}, length: {len(value) if isinstance(value, list) else 'N/A'}")
-        
         if value is None or value == '':
-            print(f"🔧 [DEBUG] similarity_vector is None or empty string - OK")
             return errors
         
         # Check if it's a list of floats
         if isinstance(value, list):
             if len(value) == 0:
                 # Allow empty lists - they will be populated later by ML
-                print(f"🔧 [DEBUG] similarity_vector is empty list - OK (will be populated by ML)")
                 return errors
             elif not all(isinstance(x, (int, float)) for x in value):
                 errors.append("Similarity vector must contain only numbers")
-                print(f"🔧 [DEBUG] similarity_vector contains non-numeric values - ERROR")
             elif len(value) != 384:  # Standard embedding size
                 errors.append(f"Similarity vector must have exactly 384 dimensions, got {len(value)}")
-                print(f"🔧 [DEBUG] similarity_vector has {len(value)} dimensions, expected 384 - ERROR")
-            else:
-                print(f"🔧 [DEBUG] similarity_vector validation passed - OK")
         else:
             errors.append("Similarity vector must be a list of numbers")
-            print(f"🔧 [DEBUG] similarity_vector is not a list - ERROR")
         
         return errors
     

@@ -86,10 +86,8 @@ class ValidatedSupabaseClient:
                 return self._upsert_single_validated(table, data, on_conflict)
         else:
             if on_conflict:
-                print(f"🔧 [DEBUG] Using on_conflict='{on_conflict}' for table '{table}'")
                 query = self.client.table(table).upsert(data, on_conflict=on_conflict)
             else:
-                print(f"🔧 [DEBUG] No on_conflict specified for table '{table}'")
                 query = self.client.table(table).upsert(data)
             return query.execute()
     
@@ -197,10 +195,12 @@ class ValidatedSupabaseClient:
             sanitized_data = validate_and_sanitize_data(table, data)
             logger.debug(f"✅ Data validated for {table} upsert")
             
-            query = self.client.table(table).upsert(sanitized_data)
             if on_conflict:
-                # Note: Supabase doesn't have on_conflict method, so we ignore it
-                logger.warning(f"on_conflict parameter '{on_conflict}' ignored - Supabase upsert handles conflicts automatically")
+                query = self.client.table(table).upsert(sanitized_data, on_conflict=on_conflict)
+                logger.debug(f"🔧 Using on_conflict='{on_conflict}' for {table}")
+            else:
+                query = self.client.table(table).upsert(sanitized_data)
+                logger.debug(f"🔧 No on_conflict specified for {table}")
             
             return query.execute()
         except ValidationError as e:
@@ -232,10 +232,12 @@ class ValidatedSupabaseClient:
         if validated_records:
             logger.info(f"✅ Upserting {len(validated_records)} validated records into {table}")
             
-            query = self.client.table(table).upsert(validated_records)
             if on_conflict:
-                # Note: Supabase doesn't have on_conflict method, so we ignore it
-                logger.warning(f"on_conflict parameter '{on_conflict}' ignored - Supabase upsert handles conflicts automatically")
+                query = self.client.table(table).upsert(validated_records, on_conflict=on_conflict)
+                logger.debug(f"🔧 Using on_conflict='{on_conflict}' for {table} batch")
+            else:
+                query = self.client.table(table).upsert(validated_records)
+                logger.debug(f"🔧 No on_conflict specified for {table} batch")
             
             return query.execute()
         else:
