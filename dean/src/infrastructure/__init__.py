@@ -4,17 +4,17 @@ Core infrastructure and utilities
 
 This package contains:
 - storage: Data storage and persistence
-- continuous_rate_limiter: API rate limiting
 - scheduler: Background task scheduling
 - utils: Utility functions
+- data_validation: Data validation system
+- validated_supabase: Validated Supabase client
 """
 
 from .storage import Store
-from .continuous_rate_limiter import ContinuousRateLimiter, RateLimitState
 from .scheduler import BackgroundScheduler, start_background_scheduler, stop_background_scheduler, get_scheduler
 from .utils import *
 
 __all__ = [
-    'Store', 'ContinuousRateLimiter', 'RateLimitState', 'BackgroundScheduler',
+    'Store', 'BackgroundScheduler',
     'start_background_scheduler', 'stop_background_scheduler', 'get_scheduler'
 ]

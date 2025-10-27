@@ -39,8 +39,16 @@ class SupabaseStorage:
                 'created_at_iso': created_at.isoformat()
             }
             
-            # Use upsert to handle duplicates
-            self.client.table('ad_creation_times').upsert(data, on_conflict='ad_id').execute()
+            # Use upsert to handle duplicates with validation
+            try:
+                from infrastructure.validated_supabase import get_validated_supabase_client
+                validated_client = get_validated_supabase_client(enable_validation=True)
+                if validated_client:
+                    validated_client.upsert('ad_creation_times', data, on_conflict='ad_id')
+                else:
+                    self.client.table('ad_creation_times').upsert(data, on_conflict='ad_id').execute()
+            except ImportError:
+                self.client.table('ad_creation_times').upsert(data, on_conflict='ad_id').execute()
             logger.debug(f"Recorded ad creation time for {ad_id} in Supabase")
             
         except Exception as e:
@@ -104,7 +112,16 @@ class SupabaseStorage:
                 'created_at': timestamp.isoformat()
             }
             
-            self.client.table('historical_data').insert(data).execute()
+            # Insert with validation
+            try:
+                from infrastructure.validated_supabase import get_validated_supabase_client
+                validated_client = get_validated_supabase_client(enable_validation=True)
+                if validated_client:
+                    validated_client.insert('historical_data', data)
+                else:
+                    self.client.table('historical_data').insert(data).execute()
+            except ImportError:
+                self.client.table('historical_data').insert(data).execute()
             logger.debug(f"Stored historical data for {ad_id}: {metric_name}={metric_value}")
             
         except Exception as e:

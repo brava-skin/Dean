@@ -32,6 +32,13 @@ try:
 except ImportError:
     SUPABASE_AVAILABLE = False
 
+# Import validated Supabase client
+try:
+    from infrastructure.validated_supabase import get_validated_supabase_client
+    VALIDATED_SUPABASE_AVAILABLE = True
+except ImportError:
+    VALIDATED_SUPABASE_AVAILABLE = False
+
 
 @dataclass
 class CreativePerformance:
@@ -88,6 +95,15 @@ class CreativeIntelligenceSystem:
         # Initialize OpenAI
         if OPENAI_AVAILABLE and openai_api_key:
             openai.api_key = openai_api_key
+    
+    def _get_validated_client(self):
+        """Get validated Supabase client for automatic data validation."""
+        if VALIDATED_SUPABASE_AVAILABLE:
+            try:
+                return get_validated_supabase_client(enable_validation=True)
+            except Exception as e:
+                self.logger.warning(f"Failed to get validated client: {e}")
+        return self.supabase_client
     
     def analyze_copy_bank_patterns(self, copy_bank_path: str = "data/copy_bank.json") -> Dict[str, Any]:
         """Analyze copy bank patterns for advanced prompt generation."""
@@ -213,10 +229,22 @@ class CreativeIntelligenceSystem:
                 "metadata": {}
             }
             
-            result = self.supabase_client.table('creative_library').upsert(
-                creative_data,
-                on_conflict='creative_id'
-            ).execute()
+            # Get validated client for automatic validation
+            validated_client = self._get_validated_client()
+            
+            if validated_client and hasattr(validated_client, 'upsert'):
+                # Use validated client
+                result = validated_client.upsert(
+                    'creative_library',
+                    creative_data,
+                    on_conflict='creative_id'
+                )
+            else:
+                # Fallback to regular client
+                result = self.supabase_client.table('creative_library').upsert(
+                    creative_data,
+                    on_conflict='creative_id'
+                ).execute()
             
             return True
             
@@ -257,10 +285,22 @@ class CreativeIntelligenceSystem:
                     "conversion_rate": float(performance_data.get("conversion_rate", 0))
                 }
                 
-                self.supabase_client.table('creative_performance').upsert(
-                    performance_record,
-                    on_conflict='creative_id,ad_id,date_start'
-                ).execute()
+                # Get validated client for automatic validation
+                validated_client = self._get_validated_client()
+                
+                if validated_client and hasattr(validated_client, 'upsert'):
+                    # Use validated client
+                    validated_client.upsert(
+                        'creative_performance',
+                        performance_record,
+                        on_conflict='creative_id,ad_id,date_start'
+                    )
+                else:
+                    # Fallback to regular client
+                    self.supabase_client.table('creative_performance').upsert(
+                        performance_record,
+                        on_conflict='creative_id,ad_id,date_start'
+                    ).execute()
             
             return True
             
@@ -441,7 +481,7 @@ class CreativeIntelligenceSystem:
                     created_by="ai_generated"
                 )
                 
-                # Store in AI generated creatives table
+                # Store in AI generated creatives table with validation
                 ai_creative_data = {
                     "creative_id": ai_creative_id,
                     "source_creative_id": source_creative_id,
@@ -453,7 +493,15 @@ class CreativeIntelligenceSystem:
                     "generation_parameters": {"temperature": 0.7, "max_tokens": 500}
                 }
                 
-                self.supabase_client.table('ai_generated_creatives').insert(ai_creative_data).execute()
+                # Get validated client for automatic validation
+                validated_client = self._get_validated_client()
+                
+                if validated_client and hasattr(validated_client, 'insert'):
+                    # Use validated client
+                    validated_client.insert('ai_generated_creatives', ai_creative_data)
+                else:
+                    # Fallback to regular client
+                    self.supabase_client.table('ai_generated_creatives').insert(ai_creative_data).execute()
             
             return generated_creatives
             
@@ -578,12 +626,26 @@ class CreativeIntelligenceSystem:
                 (creative_scores['purchases'] / creative_scores['clicks'].replace(0, 1)) * 0.3
             )
             
-            # Update scores in database
+            # Update scores in database with validation
+            validated_client = self._get_validated_client()
+            
             for _, row in creative_scores.iterrows():
-                self.supabase_client.table('creative_library').update({
+                update_data = {
                     'performance_score': float(row['performance_score']),
                     'updated_at': datetime.now().isoformat()
-                }).eq('creative_id', row['creative_id']).execute()
+                }
+                
+                if validated_client and hasattr(validated_client, 'update'):
+                    # Use validated client
+                    validated_client.update(
+                        'creative_library',
+                        update_data,
+                        eq='creative_id',
+                        value=row['creative_id']
+                    )
+                else:
+                    # Fallback to regular client
+                    self.supabase_client.table('creative_library').update(update_data).eq('creative_id', row['creative_id']).execute()
             
             return True
             

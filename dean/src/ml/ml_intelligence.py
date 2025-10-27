@@ -38,6 +38,13 @@ except ImportError:
 from supabase import create_client, Client
 import joblib
 
+# Import validated Supabase client
+try:
+    from infrastructure.validated_supabase import get_validated_supabase_client
+    VALIDATED_SUPABASE_AVAILABLE = True
+except ImportError:
+    VALIDATED_SUPABASE_AVAILABLE = False
+
 from infrastructure.utils import now_utc, today_ymd_account, yesterday_ymd_account
 
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -112,6 +119,15 @@ class SupabaseMLClient:
     def __init__(self, supabase_url: str, supabase_key: str):
         self.client: Client = create_client(supabase_url, supabase_key)
         self.logger = logging.getLogger(f"{__name__}.SupabaseMLClient")
+    
+    def _get_validated_client(self):
+        """Get validated Supabase client for automatic data validation."""
+        if VALIDATED_SUPABASE_AVAILABLE:
+            try:
+                return get_validated_supabase_client(enable_validation=True)
+            except Exception as e:
+                self.logger.warning(f"Failed to get validated client: {e}")
+        return self.client
     
     def _safe_float(self, value, max_val=999999999.99):
         """Safely convert value to float with bounds checking."""
@@ -287,9 +303,17 @@ class SupabaseMLClient:
                 # Removed fields that don't exist in actual schema
             }
             
-            response = self.client.table('ml_predictions').insert(data).execute()
+            # Get validated client for automatic validation
+            validated_client = self._get_validated_client()
             
-            if response.data:
+            if validated_client and hasattr(validated_client, 'insert'):
+                # Use validated client
+                response = validated_client.insert('ml_predictions', data)
+            else:
+                # Fallback to regular client
+                response = self.client.table('ml_predictions').insert(data).execute()
+            
+            if response and (not hasattr(response, 'data') or response.data):
                 self.logger.info(f"Saved prediction {prediction_id} for ad {ad_id}")
                 return prediction_id
             else:
@@ -313,9 +337,17 @@ class SupabaseMLClient:
                 # Removed fields that don't exist in actual schema
             }
             
-            response = self.client.table('learning_events').insert(data).execute()
+            # Get validated client for automatic validation
+            validated_client = self._get_validated_client()
             
-            if response.data:
+            if validated_client and hasattr(validated_client, 'insert'):
+                # Use validated client
+                response = validated_client.insert('learning_events', data)
+            else:
+                # Fallback to regular client
+                response = self.client.table('learning_events').insert(data).execute()
+            
+            if response and (not hasattr(response, 'data') or response.data):
                 self.logger.info(f"Saved learning event {event_id}")
                 return event_id
             else:
@@ -532,7 +564,16 @@ class XGBoostPredictor:
         self.models: Dict[str, any] = {}
         self.scalers: Dict[str, StandardScaler] = {}
         self.feature_importance: Dict[str, Dict[str, float]] = {}
-        
+    
+    def _get_validated_client(self):
+        """Get validated Supabase client for automatic data validation."""
+        if VALIDATED_SUPABASE_AVAILABLE:
+            try:
+                return get_validated_supabase_client(enable_validation=True)
+            except Exception as e:
+                self.logger.warning(f"Failed to get validated client: {e}")
+        return self.supabase.client
+    
     def prepare_training_data(self, df: pd.DataFrame, target_col: str) -> Tuple[np.ndarray, np.ndarray, List[str]]:
         """Prepare training data for ML models with feature selection."""
         try:
@@ -961,34 +1002,66 @@ class XGBoostPredictor:
                 'trained_at': now_utc().isoformat()
             }
             
+            # Get validated client for automatic validation
+            validated_client = self._get_validated_client()
+            
+            response = None  # Initialize response
+            
             # FIX: Use upsert instead of insert to handle duplicates
             # First try to update existing record, then insert if not found
-            try:
-                # Try to update existing record
-                update_response = self.supabase.client.table('ml_models').update(data).eq(
-                    'model_type', model_type
-                ).eq('stage', stage).eq('version', 1).execute()
-                
-                if update_response.data:
-                    response = update_response
-                else:
-                    # Insert new record if no existing one found
-                    response = self.supabase.client.table('ml_models').insert(data).execute()
-            except Exception as e:
-                # If insert fails due to duplicate, try update again
-                if "duplicate key" in str(e).lower() or "unique constraint" in str(e).lower():
-                    try:
-                        response = self.supabase.client.table('ml_models').update(data).eq(
-                            'model_type', model_type
-                        ).eq('stage', stage).eq('version', 1).execute()
-                    except Exception:
-                        # If all else fails, just log and continue
-                        self.logger.warning(f"Could not save model {model_type}_{stage}, continuing...")
-                        return True  # Return True to avoid breaking the flow
-                else:
-                    raise e
+            if validated_client and hasattr(validated_client, 'update') and hasattr(validated_client, 'insert'):
+                # Use validated client
+                try:
+                    # Try to update existing record
+                    response = validated_client.update(
+                        'ml_models',
+                        data,
+                        eq='model_type',
+                        value=model_type,
+                        eq2='stage',
+                        value2=stage,
+                        eq3='version',
+                        value3=1
+                    )
+                    if not response:
+                        # Insert new record if no existing one found
+                        response = validated_client.insert('ml_models', data)
+                except Exception:
+                    # If all else fails, just log and continue
+                    self.logger.warning(f"Could not save model {model_type}_{stage}, continuing...")
+                    return True  # Return True to avoid breaking the flow
+            else:
+                # Fallback to regular client
+                try:
+                    # Try to update existing record
+                    update_response = self.supabase.client.table('ml_models').update(data).eq(
+                        'model_type', model_type
+                    ).eq('stage', stage).eq('version', 1).execute()
+                    
+                    if update_response.data:
+                        response = update_response
+                    else:
+                        # Insert new record if no existing one found
+                        response = self.supabase.client.table('ml_models').insert(data).execute()
+                except Exception as e:
+                    # If insert fails due to duplicate, try update again
+                    if "duplicate key" in str(e).lower() or "unique constraint" in str(e).lower():
+                        try:
+                            response = self.supabase.client.table('ml_models').update(data).eq(
+                                'model_type', model_type
+                            ).eq('stage', stage).eq('version', 1).execute()
+                        except Exception:
+                            # If all else fails, just log and continue
+                            self.logger.warning(f"Could not save model {model_type}_{stage}, continuing...")
+                            return True  # Return True to avoid breaking the flow
+                    else:
+                        raise e
             
-            if response.data:
+            # Check if response was successful
+            if hasattr(response, 'data') and response.data:
+                self.logger.info(f"Saved {model_type} model for {stage} to Supabase")
+                return True
+            elif response:  # For validated client responses
                 self.logger.info(f"Saved {model_type} model for {stage} to Supabase")
                 return True
             else:
@@ -1037,9 +1110,20 @@ class XGBoostPredictor:
                 logger.error(f"Invalid model_data type for {model_type}_{stage}: expected non-empty string")
                 # Clear corrupted model from database
                 try:
-                    self.supabase.client.table('ml_models').update({'is_active': False}).eq(
-                        'model_type', model_type
-                    ).eq('stage', stage).execute()
+                    validated_client = self._get_validated_client()
+                    if validated_client and hasattr(validated_client, 'update'):
+                        validated_client.update(
+                            'ml_models',
+                            {'is_active': False},
+                            eq='model_type',
+                            value=model_type,
+                            eq2='stage',
+                            value2=stage
+                        )
+                    else:
+                        self.supabase.client.table('ml_models').update({'is_active': False}).eq(
+                            'model_type', model_type
+                        ).eq('stage', stage).execute()
                     logger.info(f"Disabled corrupted model {model_type}_{stage} for retraining")
                 except:
                     pass
@@ -1073,9 +1157,20 @@ class XGBoostPredictor:
                 logger.error(f"Invalid hex data for {model_type}_{stage}: {e}")
                 # Clear corrupted model from database
                 try:
-                    self.supabase.client.table('ml_models').update({'is_active': False}).eq(
-                        'model_type', model_type
-                    ).eq('stage', stage).execute()
+                    validated_client = self._get_validated_client()
+                    if validated_client and hasattr(validated_client, 'update'):
+                        validated_client.update(
+                            'ml_models',
+                            {'is_active': False},
+                            eq='model_type',
+                            value=model_type,
+                            eq2='stage',
+                            value2=stage
+                        )
+                    else:
+                        self.supabase.client.table('ml_models').update({'is_active': False}).eq(
+                            'model_type', model_type
+                        ).eq('stage', stage).execute()
                     logger.info(f"Disabled corrupted model {model_type}_{stage} for retraining")
                 except Exception as cleanup_error:
                     logger.error(f"Failed to clean up corrupted model: {cleanup_error}")
@@ -1084,9 +1179,20 @@ class XGBoostPredictor:
                 logger.error(f"Failed to deserialize model {model_type}_{stage}: {e}")
                 # Clear corrupted model from database
                 try:
-                    self.supabase.client.table('ml_models').update({'is_active': False}).eq(
-                        'model_type', model_type
-                    ).eq('stage', stage).execute()
+                    validated_client = self._get_validated_client()
+                    if validated_client and hasattr(validated_client, 'update'):
+                        validated_client.update(
+                            'ml_models',
+                            {'is_active': False},
+                            eq='model_type',
+                            value=model_type,
+                            eq2='stage',
+                            value2=stage
+                        )
+                    else:
+                        self.supabase.client.table('ml_models').update({'is_active': False}).eq(
+                            'model_type', model_type
+                        ).eq('stage', stage).execute()
                     logger.info(f"Disabled corrupted model {model_type}_{stage} for retraining")
                 except Exception as cleanup_error:
                     logger.error(f"Failed to clean up corrupted model: {cleanup_error}")
@@ -1392,6 +1498,15 @@ class MLIntelligenceSystem:
         self.cross_stage_learner = CrossStageLearner(self.supabase)
         self.logger = logging.getLogger(f"{__name__}.MLIntelligenceSystem")
     
+    def _get_validated_client(self):
+        """Get validated Supabase client for automatic data validation."""
+        if VALIDATED_SUPABASE_AVAILABLE:
+            try:
+                return get_validated_supabase_client(enable_validation=True)
+            except Exception as e:
+                self.logger.warning(f"Failed to get validated client: {e}")
+        return self.supabase.client
+    
     def initialize_models(self, force_retrain: bool = False) -> bool:
         """Initialize all ML models with intelligent caching."""
         try:
@@ -1445,7 +1560,6 @@ class MLIntelligenceSystem:
 
         except Exception as e:
             self.logger.error(f"Error initializing models: {e}")
-            return False
             return False
     
     def _should_use_cached_model(self, model_type: str, stage: str) -> bool:

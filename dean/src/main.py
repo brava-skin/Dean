@@ -295,22 +295,40 @@ def _get_supabase():
     except Exception:
         return None
 
+def _get_validated_supabase():
+    """
+    Build a validated Supabase client from env. Degrades cleanly if missing.
+    This client automatically validates all data before insertion.
+    """
+    try:
+        from infrastructure.validated_supabase import get_validated_supabase_client
+        return get_validated_supabase_client(enable_validation=True)
+    except ImportError:
+        # Fallback to regular client if validation system not available
+        return _get_supabase()
+    except Exception:
+        return None
+
 def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any], stage: str) -> None:
-    """Store performance data in Supabase for ML system."""
+    """Store performance data in Supabase for ML system with automatic validation."""
     if not supabase_client:
         print("⚠️ No Supabase client available")
         return
     
     try:
+        # Get validated Supabase client for automatic validation
+        validated_client = _get_validated_supabase()
+        if not validated_client:
+            print("⚠️ No validated Supabase client available, falling back to regular client")
+            validated_client = supabase_client
         
         # Test Supabase connection first
         try:
-            test_result = supabase_client.table('performance_metrics').select('*').limit(1).execute()
+            test_result = validated_client.select('performance_metrics').limit(1).execute()
         except Exception as e:
             notify(f"❌ Supabase connection failed: {e}")
             return
         
-        # Store in performance_metrics table
         # Helper function to safely convert and bound numeric values
         def safe_float(value, max_val=999999.99):
             try:
@@ -344,36 +362,32 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             ad_id = ad_data.get('ad_id', '')
             if ad_id:
                 from infrastructure.supabase_storage import SupabaseStorage
-                storage = SupabaseStorage(supabase_client)
+                storage = SupabaseStorage(validated_client)
                 age = storage.get_ad_age_days(ad_id)
                 if age is not None and age > 0:
                     ad_age_days = min(max(0, age), 365)  # Cap at 365 days (1 year max)
         except Exception:
             pass  # Fallback to 0 if calculation fails
         
+        # Prepare performance data - validation will happen automatically
         performance_data = {
             'ad_id': ad_data.get('ad_id', ''),
-            'lifecycle_id': ad_data.get('lifecycle_id', ''),
-            'stage': stage,
             'window_type': '1d',
             'date_start': date_start,
             'date_end': ad_data.get('date_end', ''),
-            'spend': safe_float(ad_data.get('spend', 0), 99999.99),  # Cap spend at €99,999.99
             'impressions': int(ad_data.get('impressions', 0)),
             'clicks': int(ad_data.get('clicks', 0)),
-            'ctr': safe_float(ad_data.get('ctr', 0), 9.9999),  # Cap at 9.9999% for precision(5,4)
-            'cpc': safe_float(ad_data.get('cpc', 0), 9.9999),  # Cap at €9.9999 for precision(5,4)
-            'cpm': safe_float(ad_data.get('cpm', 0), 9.9999),  # Cap at €9.9999 for precision(5,4)
+            'spend': safe_float(ad_data.get('spend', 0), 999999.99),
             'purchases': int(ad_data.get('purchases', 0)),
             'add_to_cart': int(ad_data.get('atc', 0)),
             'initiate_checkout': int(ad_data.get('ic', 0)),
-            'roas': safe_float(ad_data.get('roas', 0), 9.9999),  # Cap at 9.9999x ROAS for precision(5,4)
-            'cpa': safe_float(ad_data.get('cpa', 0), 9.9999) if ad_data.get('cpa') is not None else 0,
-            'revenue': safe_float(ad_data.get('revenue', 0), 99999.99),
-            'aov': safe_float(ad_data.get('aov', 0), 99999.99),
-            'three_sec_views': int(ad_data.get('three_sec_views', 0)),
-            'video_views': int(ad_data.get('video_views', 0)),
-            'watch_time': safe_float(ad_data.get('watch_time', 0), 999999.99),
+            'ctr': safe_float(ad_data.get('ctr', 0), 100),
+            'cpc': safe_float(ad_data.get('cpc', 0), 999.99),
+            'cpm': safe_float(ad_data.get('cpm', 0), 9999.99),
+            'roas': safe_float(ad_data.get('roas', 0), 999.99),
+            'cpa': safe_float(ad_data.get('cpa', 0), 999.99) if ad_data.get('cpa') is not None else None,
+            'engagement_rate': safe_float(ad_data.get('engagement_rate', 0), 100),
+            'conversion_rate': safe_float(ad_data.get('conversion_rate', 0), 100),
             'dwell_time': safe_float(ad_data.get('dwell_time', 0), 999999.99),
             'frequency': safe_float(ad_data.get('frequency', 0), 999.99),
             'atc_rate': safe_float(ad_data.get('atc_rate', 0), 9.9999),
@@ -389,18 +403,21 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             'day_of_week': day_of_week,
             'is_weekend': is_weekend,
             'ad_age_days': int(ad_age_days) if ad_age_days else 0,
-            # Note: created_at and updated_at are handled by database defaults
-            # We don't need to insert them explicitly
         }
         
-        # Insert performance data (use upsert to handle duplicates)
-        result = supabase_client.table('performance_metrics').upsert(
-            performance_data,
-            on_conflict='ad_id,window_type,date_start'
-        ).execute()
-        notify(f"✅ Performance data inserted: {result}")
+        # Insert performance data with automatic validation
+        try:
+            result = validated_client.upsert(
+                'performance_metrics',
+                performance_data,
+                on_conflict='ad_id,window_type,date_start'
+            )
+            notify(f"✅ Performance data validated and inserted: {result}")
+        except Exception as e:
+            notify(f"❌ Performance data validation/insertion failed: {e}")
+            return
         
-        # Store in ad_lifecycle table
+        # Prepare lifecycle data - validation will happen automatically
         lifecycle_data = {
             'ad_id': ad_data.get('ad_id', ''),
             'creative_id': ad_data.get('creative_id', ''),
@@ -410,32 +427,30 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             'status': ad_data.get('status', 'active'),
             'lifecycle_id': ad_data.get('lifecycle_id', ''),
             'metadata': ad_data.get('metadata', {})
-            # Note: created_at and updated_at are handled by database defaults
         }
         
-        # Insert lifecycle data (upsert to avoid duplicates)
-        result = supabase_client.table('ad_lifecycle').upsert(
-            lifecycle_data,
-            on_conflict='ad_id,stage'
-        ).execute()
-        notify(f"✅ Lifecycle data inserted: {result}")
+        # Insert lifecycle data with automatic validation
+        try:
+            result = validated_client.upsert(
+                'ad_lifecycle',
+                lifecycle_data,
+                on_conflict='ad_id,stage'
+            )
+            notify(f"✅ Lifecycle data validated and inserted: {result}")
+        except Exception as e:
+            notify(f"❌ Lifecycle data validation/insertion failed: {e}")
+            return
         
-        # Store in creative_intelligence table (ensure we have creative data)
+        # Prepare creative intelligence data - validation will happen automatically
         try:
             # Skip if creative_intelligence already exists for this ad
-            existing_check = supabase_client.table('creative_intelligence').select('*').eq(
+            existing_check = validated_client.select('creative_intelligence').eq(
                 'ad_id', ad_data.get('ad_id', '')
             ).execute()
             
-            if existing_check.data:
-                # Already exists, skip insertion
-                pass
-            else:
+            if not existing_check.data:
                 creative_id = ad_data.get('creative_id') or f'creative_{ad_data.get("ad_id", "")}'
-                # Use a valid creative_type - the schema likely has a check constraint
-                # Valid values are: 'image', 'video', 'carousel', 'collection', 'story', 'reels'
-                # Default to 'video' since this is a UGC video campaign
-                creative_type = ad_data.get('creative_type', 'video')  # Default to 'video' for UGC videos
+                creative_type = ad_data.get('creative_type', 'video')
                 if creative_type not in ['image', 'video', 'carousel', 'collection', 'story', 'reels']:
                     creative_type = 'video'  # Map invalid values to 'video' for UGC campaigns
                 
@@ -443,18 +458,18 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                     'creative_id': creative_id,
                     'ad_id': ad_data.get('ad_id', ''),
                     'creative_type': creative_type,
-                    'performance_score': 0.5  # Will be updated by ML
+                    'performance_score': 0.5,  # Will be updated by ML
+                    'fatigue_index': 0.0,
+                    'similarity_vector': [],
+                    'metadata': {}
                 }
-                # Use simple insert without on_conflict since the table may not have a unique constraint
-                result = supabase_client.table('creative_intelligence').insert(creative_data).execute()
-                # Log successful insert
-                if result.data:
-                    print(f"✅ Creative intelligence inserted: {creative_id} for ad {ad_data.get('ad_id')}")
+                
+                # Insert creative intelligence data with automatic validation
+                result = validated_client.insert('creative_intelligence', creative_data)
+                if result:
+                    print(f"✅ Creative intelligence validated and inserted: {creative_id} for ad {ad_data.get('ad_id')}")
         except Exception as e:
-            # Log the error instead of silently failing
             print(f"⚠️ Failed to store creative intelligence for {ad_data.get('ad_id')}: {e}")
-            import traceback
-            traceback.print_exc()
         
     except Exception as e:
         notify(f"❌ Failed to store performance data in Supabase: {e}")
@@ -462,13 +477,17 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         traceback.print_exc()
 
 def store_ml_insights_in_supabase(supabase_client, ad_id: str, insights: Dict[str, Any]) -> None:
-    """Store ML insights in Supabase."""
+    """Store ML insights in Supabase with automatic validation."""
     if not supabase_client:
         return
     
     try:
-        # Store creative intelligence data
-        # Get creative_type from insights, default to 'video' for UGC campaigns
+        # Get validated Supabase client for automatic validation
+        validated_client = _get_validated_supabase()
+        if not validated_client:
+            validated_client = supabase_client
+        
+        # Store creative intelligence data with validation
         creative_type = insights.get('creative_type', 'video')
         if creative_type not in ['image', 'video', 'carousel', 'collection', 'story', 'reels']:
             creative_type = 'video'  # Default to video for UGC campaigns
@@ -477,12 +496,14 @@ def store_ml_insights_in_supabase(supabase_client, ad_id: str, insights: Dict[st
             'creative_id': insights.get('creative_id', f'creative_{ad_id}'),
             'ad_id': ad_id,
             'creative_type': creative_type,
-            'performance_score': float(insights.get('performance_score', 0))
-            # Removed 'fatigue_index', 'similarity_vector', 'metadata' as they don't exist in actual schema
-            # Note: created_at and updated_at are handled by database defaults
+            'performance_score': float(insights.get('performance_score', 0)),
+            'fatigue_index': float(insights.get('fatigue_index', 0)),
+            'similarity_vector': insights.get('similarity_vector', []),
+            'metadata': insights.get('metadata', {})
         }
         
-        supabase_client.table('creative_intelligence').upsert(creative_data).execute()
+        # Upsert with automatic validation
+        validated_client.upsert('creative_intelligence', creative_data, on_conflict='creative_id,ad_id')
         
     except Exception as e:
         print(f"⚠️ Failed to store ML insights in Supabase: {e}")
@@ -528,7 +549,12 @@ def store_timeseries_data_in_supabase(supabase_client, ad_id: str, ad_data: Dict
                     # Removed 'window_size' as it doesn't exist in the actual schema
                 }
                 
-                supabase_client.table('time_series_data').insert(timeseries_data).execute()
+                # Get validated client for automatic validation
+                validated_client = _get_validated_supabase()
+                if validated_client:
+                    validated_client.insert('time_series_data', timeseries_data)
+                else:
+                    supabase_client.table('time_series_data').insert(timeseries_data).execute()
         
         notify(f"📊 Time-series data stored for {ad_id}: {len(metrics_to_track)} metrics")
         
@@ -616,17 +642,24 @@ def store_creative_data_in_supabase(supabase_client, meta_client, ad_id: str, st
                 params={'fields': 'title,body,image_url,video_id,object_type'}
             )
             
-            # Store in creative_intelligence
+            # Store in creative_intelligence with validation
             creative_data = {
                 'creative_id': str(creative_id),
                 'ad_id': ad_id,
-                'creative_type': creative.get('object_type', 'unknown'),
-                'performance_score': 0.5  # Will be updated by ML
-                # Removed fields that don't exist in actual schema
+                'creative_type': creative.get('object_type', 'video'),
+                'performance_score': 0.5,  # Will be updated by ML
+                'fatigue_index': 0.0,
+                'similarity_vector': [],
+                'metadata': {}
             }
             
-            supabase_client.table('creative_intelligence').upsert(creative_data, on_conflict='creative_id').execute()
-            notify(f"🎨 Creative data stored for {ad_id}")
+            # Get validated client for automatic validation
+            validated_client = _get_validated_supabase()
+            if validated_client:
+                validated_client.upsert('creative_intelligence', creative_data, on_conflict='creative_id')
+            else:
+                supabase_client.table('creative_intelligence').upsert(creative_data, on_conflict='creative_id').execute()
+            notify(f"🎨 Creative data validated and stored for {ad_id}")
             
         except Exception as e:
             # Silently fail - creative data is optional
