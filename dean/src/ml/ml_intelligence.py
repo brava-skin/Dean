@@ -656,18 +656,32 @@ class XGBoostPredictor:
             # Train ensemble of models for better predictions
             models_ensemble = {}
             
-            # Primary model: XGBoost or GradientBoosting
-            if XGBOOST_AVAILABLE:
-                primary_model = xgb.XGBRegressor(**self.config.xgb_params)
-            else:
-                primary_model = GradientBoostingRegressor(
-                    n_estimators=self.config.xgb_params.get('n_estimators', 100),
-                    max_depth=self.config.xgb_params.get('max_depth', 6),
-                    learning_rate=self.config.xgb_params.get('learning_rate', 0.1),
-                    random_state=42
-                )
-            primary_model.fit(X_train_scaled, y_train)
-            models_ensemble['primary'] = primary_model
+            # Primary model: XGBoost or GradientBoosting with compatibility fixes
+            try:
+                if XGBOOST_AVAILABLE:
+                    primary_model = xgb.XGBRegressor(**self.config.xgb_params)
+                else:
+                    primary_model = GradientBoostingRegressor(
+                        n_estimators=self.config.xgb_params.get('n_estimators', 100),
+                        max_depth=self.config.xgb_params.get('max_depth', 6),
+                        learning_rate=self.config.xgb_params.get('learning_rate', 0.1),
+                        random_state=42
+                    )
+                primary_model.fit(X_train_scaled, y_train)
+                models_ensemble['primary'] = primary_model
+                self.logger.info(f"✅ Successfully trained primary model for {model_type}_{stage}")
+            except Exception as e:
+                self.logger.error(f"Failed to train primary model for {model_type}_{stage}: {e}")
+                # Try fallback model
+                try:
+                    from sklearn.linear_model import LinearRegression
+                    primary_model = LinearRegression()
+                    primary_model.fit(X_train_scaled, y_train)
+                    models_ensemble['primary'] = primary_model
+                    self.logger.warning(f"Using LinearRegression fallback for {model_type}_{stage}")
+                except Exception as e2:
+                    self.logger.error(f"Fallback model also failed: {e2}")
+                    return False
             
             # Ensemble model 1: Random Forest
             try:
@@ -679,8 +693,9 @@ class XGBoostPredictor:
                 )
                 rf_model.fit(X_train_scaled, y_train)
                 models_ensemble['rf'] = rf_model
+                self.logger.info(f"✅ Successfully trained RandomForest for {model_type}_{stage}")
             except Exception as e:
-                pass
+                self.logger.warning(f"RandomForest failed for {model_type}_{stage}: {e}")
             
             # Ensemble model 2: Gradient Boosting (if not primary)
             if XGBOOST_AVAILABLE:
@@ -780,22 +795,40 @@ class XGBoostPredictor:
                 if scaler is not None:
                     # Check if feature vector matches scaler's expected size
                     if len(feature_vector) != scaler.n_features_in_:
-                        self.logger.error(f"Feature mismatch: have {len(feature_vector)} features, scaler expects {scaler.n_features_in_}")
-                        # Use only the first N features that the scaler expects
-                        if len(feature_vector) > scaler.n_features_in_:
-                            feature_vector = feature_vector[:scaler.n_features_in_]
-                        elif len(feature_vector) < scaler.n_features_in_:
-                            # Pad with zeros
-                            feature_vector = np.pad(feature_vector, (0, scaler.n_features_in_ - len(feature_vector)), 'constant')
+                        self.logger.warning(f"Feature mismatch: have {len(feature_vector)} features, scaler expects {scaler.n_features_in_}")
+                        
+                        # Try to match features by name if possible
+                        if hasattr(scaler, 'feature_names_in_'):
+                            expected_features = scaler.feature_names_in_
+                            # Create feature vector in the same order as scaler expects
+                            ordered_features = []
+                            for feat_name in expected_features:
+                                if feat_name in features:
+                                    ordered_features.append(float(features[feat_name]))
+                                else:
+                                    ordered_features.append(0.0)
+                            feature_vector = np.array(ordered_features)
+                            self.logger.info(f"🔧 [ML DEBUG] Reordered features to match scaler: {len(feature_vector)} features")
+                        else:
+                            # Fallback: pad or truncate to match scaler size
+                            if len(feature_vector) > scaler.n_features_in_:
+                                feature_vector = feature_vector[:scaler.n_features_in_]
+                                self.logger.info(f"🔧 [ML DEBUG] Truncated features to {len(feature_vector)}")
+                            elif len(feature_vector) < scaler.n_features_in_:
+                                # Pad with zeros
+                                feature_vector = np.pad(feature_vector, (0, scaler.n_features_in_ - len(feature_vector)), 'constant')
+                                self.logger.info(f"🔧 [ML DEBUG] Padded features to {len(feature_vector)}")
                     
                     try:
                         feature_vector_scaled = scaler.transform([feature_vector])
+                        self.logger.info(f"🔧 [ML DEBUG] Successfully scaled features")
                     except ValueError as e:
                         self.logger.error(f"Scaler transform failed: {e}, using unscaled features")
                         feature_vector_scaled = [feature_vector]
                 else:
                     # No scaler available, use features as-is
                     feature_vector_scaled = [feature_vector]
+                    self.logger.info(f"🔧 [ML DEBUG] Using unscaled features (no scaler)")
                 
             except (AttributeError, KeyError) as e:
                 self.logger.error(f"Feature preparation error: {e}")
@@ -905,12 +938,22 @@ class XGBoostPredictor:
                 'ensemble_size': int(confidence_data.get('ensemble_size', 1))
             }
             
+            # Serialize scaler data
+            scaler_data_hex = None
+            if scaler:
+                try:
+                    scaler_bytes = pickle.dumps(scaler)
+                    scaler_data_hex = scaler_bytes.hex()
+                except Exception as e:
+                    self.logger.warning(f"Failed to serialize scaler: {e}")
+            
             data = {
                 'model_type': model_type,
                 'stage': stage,
                 'version': 1,  # Add version for upsert
                 'model_name': f"{model_type}_{stage}_v1",
                 'model_data': model_data.hex(),  # Convert to hex for storage
+                'scaler_data': scaler_data_hex,  # Store scaler data
                 'model_metadata': metadata,
                 'features_used': feature_cols,
                 'performance_metrics': performance_metrics,
@@ -1002,28 +1045,30 @@ class XGBoostPredictor:
                     pass
                 return False
             
-            # Check if the hex string is valid
-            try:
-                # Try to convert first byte to validate hex
-                if len(model_data_hex) < 2 or not all(c in '0123456789abcdefABCDEF' for c in model_data_hex[:2]):
-                    raise ValueError("Invalid hex characters")
-            except ValueError:
-                logger.error(f"Invalid hex data format for {model_type}_{stage}: expected hexadecimal string")
-                # Clear corrupted model from database
-                try:
-                    self.supabase.client.table('ml_models').update({'is_active': False}).eq(
-                        'model_type', model_type
-                    ).eq('stage', stage).execute()
-                    logger.info(f"Disabled corrupted model {model_type}_{stage} for retraining")
-                except:
-                    pass
-                return False
+            # Skip hex validation entirely - let pickle handle it
+            # The hex validation was too strict and rejecting valid models
+            logger.info(f"🔧 [ML DEBUG] Attempting to load model {model_type}_{stage} ({len(model_data_hex)} hex chars)")
             
             try:
+                # Decode hex data
                 model_bytes = bytes.fromhex(model_data_hex)
+                
+                # Validate model size (should be reasonable for a trained model)
+                if len(model_bytes) < 1000:  # Minimum reasonable model size
+                    raise ValueError(f"Model too small: {len(model_bytes)} bytes")
+                
+                # Deserialize model with better error handling
                 model = pickle.loads(model_bytes)
+                
+                # Validate model has required methods
+                if not hasattr(model, 'predict'):
+                    raise ValueError("Model missing predict method")
+                
                 model_key = f"{model_type}_{stage}"
                 self.models[model_key] = model
+                
+                logger.info(f"✅ Successfully loaded {model_type} model for {stage} ({len(model_bytes)} bytes)")
+                
             except ValueError as e:
                 logger.error(f"Invalid hex data for {model_type}_{stage}: {e}")
                 # Clear corrupted model from database
@@ -1484,18 +1529,43 @@ class MLIntelligenceSystem:
                     prev_stage, stage, ad_id
                 )
             
-            # Performance predictions - use basic features to avoid feature mismatch
-            # The model expects the same features it was trained with
-            features = {
-                'ctr': float(latest.get('ctr', 0)),
-                'cpa': float(latest.get('cpa', 0)),
-                'roas': float(latest.get('roas', 0)),
-                'spend': float(latest.get('spend', 0)),
-                'purchases': float(latest.get('purchases', 0)),
-                'performance_quality_score': float(latest.get('performance_quality_score', 0)),
-                'stability_score': float(latest.get('stability_score', 0)),
-                'fatigue_index': float(latest.get('fatigue_index', 0)),
-            }
+            # Performance predictions - generate full feature set to match training
+            # Get historical data for proper feature engineering
+            historical_df = self.supabase.get_performance_data(ad_ids=[ad_id], stages=[stage], days_back=30)
+            
+            if not historical_df.empty and len(historical_df) >= 1:
+                # Apply full feature engineering pipeline (same as training)
+                df_features = self.predictor.feature_engineer.create_rolling_features(
+                    historical_df, ['ad_id'], ['ctr', 'cpa', 'roas', 'spend', 'purchases']
+                )
+                df_features = self.predictor.feature_engineer.create_interaction_features(df_features)
+                df_features = self.predictor.feature_engineer.create_temporal_features(df_features)
+                df_features = self.predictor.feature_engineer.create_advanced_features(df_features)
+                
+                # Get the latest row with all engineered features
+                latest_features = df_features.iloc[-1].to_dict()
+                
+                # Remove non-feature columns
+                exclude_cols = ['ad_id', 'id', 'date_start', 'date_end', 'created_at', 'lifecycle_id']
+                features = {k: float(v) if isinstance(v, (int, float)) and not (pd.isna(v) if hasattr(pd, 'isna') else False) else 0.0 
+                           for k, v in latest_features.items() 
+                           if k not in exclude_cols and isinstance(v, (int, float, np.number))}
+                
+                self.logger.info(f"🔧 [ML DEBUG] Generated {len(features)} features for prediction")
+            else:
+                # Fallback to basic features if no historical data
+                self.logger.warning(f"🔧 [ML DEBUG] No historical data for {ad_id}, using basic features")
+                features = {
+                    'ctr': float(latest.get('ctr', 0)),
+                    'cpa': float(latest.get('cpa', 0)),
+                    'roas': float(latest.get('roas', 0)),
+                    'spend': float(latest.get('spend', 0)),
+                    'purchases': float(latest.get('purchases', 0)),
+                    'performance_quality_score': float(latest.get('performance_quality_score', 0)),
+                    'stability_score': float(latest.get('stability_score', 0)),
+                    'fatigue_index': float(latest.get('fatigue_index', 0)),
+                }
+            
             predictions = self.predict_performance(ad_id, stage, features)
             
             return {

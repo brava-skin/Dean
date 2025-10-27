@@ -229,7 +229,7 @@ class MLPipeline:
                     # Use creative similarity for cold start
                     if self.config.use_similarity_for_cold_start and self.similarity_analyzer:
                         try:
-                            similar_ads = self.similarity_analyzer.find_similar_creatives(ad_id, limit=5)
+                            similar_ads = self.similarity_analyzer.find_similar_creatives(ad_id, top_k=5)
                             if similar_ads and len(similar_ads) > 0:
                                 # Use performance of similar ads to inform decision (SAFE AVERAGING)
                                 cpa_values = [ad.get('avg_cpa', 50) for ad in similar_ads if isinstance(ad, dict)]
