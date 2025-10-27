@@ -1450,6 +1450,7 @@ class MLIntelligenceSystem:
                 #     cpa_prediction, ad_id, features.get('lifecycle_id', ''), stage,
                 #     f"performance_predictor_{stage}"
                 # )
+                pass
             
             return cpa_prediction
             
