@@ -233,53 +233,62 @@ class CreativeIntelligenceSystem:
             validated_client = self._get_validated_client()
             
             if validated_client and hasattr(validated_client, 'upsert'):
-                # Use validated client - try update first, then insert
+                # Use validated client with proper upsert handling
                 try:
-                    # Try to update existing record first
-                    result = validated_client.update(
-                        'creative_library',
-                        creative_data,
-                        eq='creative_id',
-                        value=creative_id
-                    )
-                    if not result or (hasattr(result, 'data') and not result.data):
-                        # No existing record, try insert
-                        result = validated_client.insert('creative_library', creative_data)
-                except Exception as e:
-                    # If update fails, try insert
-                    try:
-                        result = validated_client.insert('creative_library', creative_data)
-                    except Exception as insert_error:
-                        # If insert also fails due to duplicate, that's OK - record exists
-                        if "duplicate key" in str(insert_error).lower() or "unique constraint" in str(insert_error).lower():
-                            self.logger.debug(f"Creative {creative_id} already exists, skipping")
-                            return True
-                        raise insert_error
-            else:
-                # Fallback to regular client - try update first, then insert
-                try:
-                    # Try to update existing record first
-                    result = self.supabase_client.table('creative_library').update(
-                        creative_data
-                    ).eq('creative_id', creative_id).execute()
+                    # First try to check if record exists
+                    existing = validated_client.select('creative_library', 'creative_id').eq('creative_id', creative_id).execute()
                     
-                    if not result.data:
-                        # No existing record, try insert
-                        result = self.supabase_client.table('creative_library').insert(
-                            creative_data
-                        ).execute()
+                    if existing and existing.data:
+                        # Record exists, update it
+                        result = validated_client.update(
+                            'creative_library',
+                            creative_data,
+                            eq='creative_id',
+                            value=creative_id
+                        )
+                    else:
+                        # Record doesn't exist, insert it
+                        result = validated_client.insert('creative_library', creative_data)
+                        
                 except Exception as e:
-                    # If update fails, try insert
+                    # If anything fails, try a direct upsert as fallback
                     try:
-                        result = self.supabase_client.table('creative_library').insert(
-                            creative_data
-                        ).execute()
-                    except Exception as insert_error:
-                        # If insert also fails due to duplicate, that's OK - record exists
-                        if "duplicate key" in str(insert_error).lower() or "unique constraint" in str(insert_error).lower():
+                        result = validated_client.upsert('creative_library', creative_data)
+                    except Exception as upsert_error:
+                        # If upsert also fails due to duplicate, that's OK - record exists
+                        if "duplicate key" in str(upsert_error).lower() or "unique constraint" in str(upsert_error).lower():
                             self.logger.debug(f"Creative {creative_id} already exists, skipping")
                             return True
-                        raise insert_error
+                        raise upsert_error
+            else:
+                # Fallback to regular client with proper upsert handling
+                try:
+                    # First try to check if record exists
+                    existing = self.supabase_client.table('creative_library').select('creative_id').eq('creative_id', creative_id).execute()
+                    
+                    if existing and existing.data:
+                        # Record exists, update it
+                        result = self.supabase_client.table('creative_library').update(
+                            creative_data
+                        ).eq('creative_id', creative_id).execute()
+                    else:
+                        # Record doesn't exist, insert it
+                        result = self.supabase_client.table('creative_library').insert(
+                            creative_data
+                        ).execute()
+                        
+                except Exception as e:
+                    # If anything fails, try a direct upsert as fallback
+                    try:
+                        result = self.supabase_client.table('creative_library').upsert(
+                            creative_data
+                        ).execute()
+                    except Exception as upsert_error:
+                        # If upsert also fails due to duplicate, that's OK - record exists
+                        if "duplicate key" in str(upsert_error).lower() or "unique constraint" in str(upsert_error).lower():
+                            self.logger.debug(f"Creative {creative_id} already exists, skipping")
+                            return True
+                        raise upsert_error
             
             return True
             

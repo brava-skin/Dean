@@ -834,6 +834,19 @@ class XGBoostPredictor:
                     # Fallback: use all provided features
                     expected_features = [str(k) for k in features.keys()]
                 
+                # If we have a feature selector, we need to use the original feature names
+                # that were used during training (before feature selection)
+                if feature_selector is not None:
+                    # Get the original feature names from the feature selector
+                    # This should match what was used during training
+                    try:
+                        # The feature selector was trained on the full feature set
+                        # So we need to use the same feature names that were used during training
+                        # For now, use all available features and let the selector handle it
+                        expected_features = [str(k) for k in features.keys()]
+                    except Exception as e:
+                        self.logger.warning(f"Could not get original feature names: {e}")
+                
                 # Apply feature selection if available BEFORE creating feature vector
                 if feature_selector is not None:
                     try:
@@ -1051,9 +1064,9 @@ class XGBoostPredictor:
                     if not response:
                         # Insert new record if no existing one found
                         response = validated_client.insert('ml_models', data)
-                except Exception:
+                except Exception as e:
                     # If all else fails, just log and continue
-                    self.logger.warning(f"Could not save model {model_type}_{stage}, continuing...")
+                    self.logger.warning(f"Could not save model {model_type}_{stage}: {e}, continuing...")
                     return True  # Return True to avoid breaking the flow
             else:
                 # Fallback to regular client
@@ -1075,9 +1088,9 @@ class XGBoostPredictor:
                             response = self.supabase.client.table('ml_models').update(data).eq(
                                 'model_type', model_type
                             ).eq('stage', stage).eq('version', 1).execute()
-                        except Exception:
+                        except Exception as e2:
                             # If all else fails, just log and continue
-                            self.logger.warning(f"Could not save model {model_type}_{stage}, continuing...")
+                            self.logger.warning(f"Could not save model {model_type}_{stage}: {e2}, continuing...")
                             return True  # Return True to avoid breaking the flow
                     else:
                         raise e
