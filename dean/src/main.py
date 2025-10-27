@@ -414,6 +414,8 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         
         # Insert performance data with automatic validation
         try:
+            print(f"🔧 [DEBUG] Upserting performance_metrics with on_conflict='ad_id,window_type,date_start'")
+            print(f"🔧 [DEBUG] Data keys: {list(performance_data.keys())}")
             result = validated_client.upsert(
                 'performance_metrics',
                 performance_data,

@@ -1045,6 +1045,11 @@ class XGBoostPredictor:
                 except Exception as e:
                     self.logger.warning(f"Failed to serialize scaler: {e}")
             
+            # Ensure accuracy is >= 0 for validation
+            cv_score = sanitize_float(confidence_data.get('cv_score', 0))
+            accuracy_value = max(0, cv_score)
+            self.logger.info(f"🔧 [ML DEBUG] cv_score: {cv_score}, accuracy: {accuracy_value} (ensured >= 0)")
+            
             data = {
                 'model_type': model_type,
                 'stage': stage,
@@ -1052,7 +1057,7 @@ class XGBoostPredictor:
                 'model_name': f"{model_type}_{stage}_v1",
                 'model_data': model_data.hex(),  # Convert to hex for storage
                 'scaler_data': scaler_data_hex,  # Store scaler data
-                'accuracy': max(0, sanitize_float(confidence_data.get('cv_score', 0))),  # Ensure accuracy >= 0
+                'accuracy': accuracy_value,  # Use sanitized accuracy
                 'precision': sanitize_float(confidence_data.get('precision', 0)),
                 'recall': sanitize_float(confidence_data.get('recall', 0)),
                 'f1_score': sanitize_float(confidence_data.get('f1_score', 0)),

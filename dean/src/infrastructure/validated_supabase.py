@@ -86,8 +86,10 @@ class ValidatedSupabaseClient:
                 return self._upsert_single_validated(table, data, on_conflict)
         else:
             if on_conflict:
+                print(f"🔧 [DEBUG] Using on_conflict='{on_conflict}' for table '{table}'")
                 query = self.client.table(table).upsert(data, on_conflict=on_conflict)
             else:
+                print(f"🔧 [DEBUG] No on_conflict specified for table '{table}'")
                 query = self.client.table(table).upsert(data)
             return query.execute()
     
