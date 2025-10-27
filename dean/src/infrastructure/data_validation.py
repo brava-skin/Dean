@@ -410,6 +410,9 @@ class SupabaseDataValidator:
         return {
             'performance_metrics': TableValidator('performance_metrics', {
                 'ad_id': StringValidator('ad_id', required=True, max_length=100),
+                'lifecycle_id': StringValidator('lifecycle_id', max_length=100),
+                'stage': StringValidator('stage', required=True,
+                                       allowed_values=['testing', 'validation', 'scaling']),
                 'window_type': StringValidator('window_type', required=True, 
                                              allowed_values=['1d', '7d', '30d']),
                 'date_start': DateValidator('date_start', required=True),
@@ -540,6 +543,7 @@ class SupabaseDataValidator:
                 'model_data': CustomValidator('model_data', 
                                              self._validate_model_data,
                                              self._sanitize_model_data),
+                'accuracy': FloatValidator('accuracy', min_value=0, max_value=1),
                 'precision': FloatValidator('precision', min_value=0, max_value=1),
                 'recall': FloatValidator('recall', min_value=0, max_value=1),
                 'f1_score': FloatValidator('f1_score', min_value=0, max_value=1),

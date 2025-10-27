@@ -334,16 +334,14 @@ class CreativeIntelligenceSystem:
                 
                 if validated_client and hasattr(validated_client, 'upsert'):
                     # Use validated client
-                    validated_client.upsert(
-                        'creative_performance',
-                        performance_record,
-                        on_conflict='creative_id,ad_id,date_start'
-                    )
+                        validated_client.upsert(
+                            'creative_performance',
+                            performance_record
+                        )
                 else:
                     # Fallback to regular client
                     self.supabase_client.table('creative_performance').upsert(
-                        performance_record,
-                        on_conflict='creative_id,ad_id,date_start'
+                        performance_record
                     ).execute()
             
             return True

@@ -416,8 +416,7 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         try:
             result = validated_client.upsert(
                 'performance_metrics',
-                performance_data,
-                on_conflict='ad_id,window_type,date_start'
+                performance_data
             )
             notify(f"✅ Performance data validated and inserted: {result}")
         except Exception as e:
@@ -440,8 +439,7 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         try:
             result = validated_client.upsert(
                 'ad_lifecycle',
-                lifecycle_data,
-                on_conflict='ad_id,stage'
+                lifecycle_data
             )
             notify(f"✅ Lifecycle data validated and inserted: {result}")
         except Exception as e:
@@ -510,7 +508,7 @@ def store_ml_insights_in_supabase(supabase_client, ad_id: str, insights: Dict[st
         }
         
         # Upsert with automatic validation
-        validated_client.upsert('creative_intelligence', creative_data, on_conflict='creative_id,ad_id')
+        validated_client.upsert('creative_intelligence', creative_data)
         
     except Exception as e:
         print(f"⚠️ Failed to store ML insights in Supabase: {e}")
@@ -663,7 +661,7 @@ def store_creative_data_in_supabase(supabase_client, meta_client, ad_id: str, st
             # Get validated client for automatic validation
             validated_client = _get_validated_supabase()
             if validated_client:
-                validated_client.upsert('creative_intelligence', creative_data, on_conflict='creative_id')
+                validated_client.upsert('creative_intelligence', creative_data)
             else:
                 supabase_client.table('creative_intelligence').upsert(creative_data, on_conflict='creative_id').execute()
             notify(f"🎨 Creative data validated and stored for {ad_id}")
