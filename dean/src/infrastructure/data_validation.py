@@ -230,20 +230,42 @@ class BooleanValidator(FieldValidator):
         return None
 
 class DateValidator(FieldValidator):
-    """Validator for date fields."""
+    """Validator for date fields with flexible format support."""
     
     def __init__(self, field_name: str, date_format: str = "%Y-%m-%d", **kwargs):
         super().__init__(field_name, **kwargs)
         self.date_format = date_format
+        # Common date formats to try
+        self.common_formats = [
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S.%f",
+            "%Y-%m-%dT%H:%M:%SZ",
+            "%Y-%m-%dT%H:%M:%S.%fZ",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d",
+            "%Y-%m-%dT%H:%M:%S.%f",
+        ]
     
     def _validate_field(self, value: Any, data: Dict[str, Any]) -> List[str]:
         errors = []
         
         if isinstance(value, str) and value:
+            # Try the specified format first
             try:
                 datetime.strptime(value, self.date_format)
+                return errors
             except ValueError:
-                errors.append(f"Field '{self.field_name}' must be a valid date in format {self.date_format}")
+                pass
+            
+            # Try common formats
+            for fmt in self.common_formats:
+                try:
+                    datetime.strptime(value, fmt)
+                    return errors
+                except ValueError:
+                    continue
+            
+            errors.append(f"Field '{self.field_name}' must be a valid date in format {self.date_format}")
         
         return errors
     
@@ -253,12 +275,22 @@ class DateValidator(FieldValidator):
             return None
         
         if isinstance(value, str):
+            # Try the specified format first
             try:
-                # Validate and return in correct format
                 datetime.strptime(value, self.date_format)
                 return value
             except ValueError:
-                return None
+                pass
+            
+            # Try common formats and convert to the specified format
+            for fmt in self.common_formats:
+                try:
+                    dt = datetime.strptime(value, fmt)
+                    return dt.strftime(self.date_format)
+                except ValueError:
+                    continue
+            
+            return None
         
         return None
 
@@ -392,7 +424,6 @@ class SupabaseDataValidator:
                 'roas': FloatValidator('roas', min_value=0, max_value=999.99),
                 'cpa': FloatValidator('cpa', min_value=0, max_value=999.99),
                 'engagement_rate': FloatValidator('engagement_rate', min_value=0, max_value=100),
-                'conversion_rate': FloatValidator('conversion_rate', min_value=0, max_value=100),
                 'dwell_time': FloatValidator('dwell_time', min_value=0, max_value=999999.99),
                 'frequency': FloatValidator('frequency', min_value=0, max_value=999.99),
                 'atc_rate': FloatValidator('atc_rate', min_value=0, max_value=9.9999),

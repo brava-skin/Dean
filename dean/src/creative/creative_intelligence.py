@@ -233,17 +233,15 @@ class CreativeIntelligenceSystem:
             validated_client = self._get_validated_client()
             
             if validated_client and hasattr(validated_client, 'upsert'):
-                # Use validated client
+                # Use validated client - Supabase handles conflicts automatically
                 result = validated_client.upsert(
                     'creative_library',
-                    creative_data,
-                    on_conflict='creative_id'
+                    creative_data
                 )
             else:
-                # Fallback to regular client
+                # Fallback to regular client - Supabase handles conflicts automatically
                 result = self.supabase_client.table('creative_library').upsert(
-                    creative_data,
-                    on_conflict='creative_id'
+                    creative_data
                 ).execute()
             
             return True

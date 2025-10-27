@@ -629,27 +629,6 @@ class XGBoostPredictor:
                 self.logger.warning("No features available for training")
                 return np.array([]), np.array([]), []
             
-            # Feature selection (if too many features)
-            if len(feature_cols) > self.config.max_features:
-                try:
-                    from sklearn.feature_selection import SelectKBest, f_regression, mutual_info_regression
-                    
-                    # Use mutual information for feature selection
-                    selector = SelectKBest(mutual_info_regression, k=min(self.config.max_features, len(feature_cols)))
-                    X_selected = selector.fit_transform(X, y)
-                    
-                    # Get selected feature names
-                    selected_indices = selector.get_support(indices=True)
-                    feature_cols = [feature_cols[i] for i in selected_indices]
-                    X = X_selected
-                    
-                    # Store the selector for later use during prediction
-                    self.feature_selectors[model_key] = selector
-                    
-                    self.logger.info(f"Feature selection: {len(selected_indices)}/{len(numeric_cols)} features selected")
-                except Exception as e:
-                    self.logger.warning(f"Feature selection failed: {e}, using all features")
-            
             return X, y, feature_cols
             
         except Exception as e:
@@ -687,6 +666,29 @@ class XGBoostPredictor:
             if len(X) < 2:
                 self.logger.warning(f"Insufficient data for training: {len(X)} samples (need at least 2)")
                 return False
+            
+            # Apply feature selection if needed
+            feature_selector = None
+            if len(feature_cols) > self.config.max_features:
+                try:
+                    from sklearn.feature_selection import SelectKBest, mutual_info_regression
+                    
+                    # Use mutual information for feature selection
+                    feature_selector = SelectKBest(mutual_info_regression, k=min(self.config.max_features, len(feature_cols)))
+                    X = feature_selector.fit_transform(X, y)
+                    
+                    # Get selected feature names
+                    selected_indices = feature_selector.get_support(indices=True)
+                    feature_cols = [feature_cols[i] for i in selected_indices]
+                    
+                    self.logger.info(f"Feature selection: {len(selected_indices)}/{len(feature_cols)} features selected")
+                except Exception as e:
+                    self.logger.warning(f"Feature selection failed: {e}, using all features")
+            
+            # Store feature selector for later use
+            model_key = f"{model_type}_{stage}"
+            if feature_selector is not None:
+                self.feature_selectors[model_key] = feature_selector
             
             # Split data
             X_train, X_test, y_train, y_test = train_test_split(
