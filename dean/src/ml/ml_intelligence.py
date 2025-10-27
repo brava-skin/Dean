@@ -1090,6 +1090,13 @@ class XGBoostPredictor:
                 'trained_at': now_utc().isoformat()
             }
             
+            # Create ultra-minimal data structure (last resort)
+            data_ultra_minimal = {
+                'model_type': model_type,
+                'stage': stage,
+                'model_data': model_data.hex()
+            }
+            
             # Get validated client for automatic validation
             validated_client = self._get_validated_client()
             
@@ -1115,8 +1122,14 @@ class XGBoostPredictor:
                             except Exception as e2:
                                 # If still failing, try minimal data structure
                                 self.logger.warning(f"Schema has limited support, using minimal data structure")
-                                response = validated_client.upsert('ml_models', data_minimal, on_conflict='model_type,stage,version')
-                                self.logger.info(f"✅ Model {model_type}_{stage} saved with minimal data")
+                                try:
+                                    response = validated_client.upsert('ml_models', data_minimal, on_conflict='model_type,stage,version')
+                                    self.logger.info(f"✅ Model {model_type}_{stage} saved with minimal data")
+                                except Exception as e3:
+                                    # If still failing, try ultra-minimal data structure
+                                    self.logger.warning(f"Schema has very limited support, using ultra-minimal data structure")
+                                    response = validated_client.upsert('ml_models', data_ultra_minimal, on_conflict='model_type,stage')
+                                    self.logger.info(f"✅ Model {model_type}_{stage} saved with ultra-minimal data")
                         else:
                             raise e
                 except Exception as e:
@@ -1140,8 +1153,14 @@ class XGBoostPredictor:
                             except Exception as e2:
                                 # If still failing, try minimal data structure
                                 self.logger.warning(f"Schema has limited support, using minimal data structure (fallback)")
-                                response = self.supabase.client.table('ml_models').upsert(data_minimal, on_conflict='model_type,stage,version').execute()
-                                self.logger.info(f"✅ Model {model_type}_{stage} saved with minimal data (fallback)")
+                                try:
+                                    response = self.supabase.client.table('ml_models').upsert(data_minimal, on_conflict='model_type,stage,version').execute()
+                                    self.logger.info(f"✅ Model {model_type}_{stage} saved with minimal data (fallback)")
+                                except Exception as e3:
+                                    # If still failing, try ultra-minimal data structure
+                                    self.logger.warning(f"Schema has very limited support, using ultra-minimal data structure (fallback)")
+                                    response = self.supabase.client.table('ml_models').upsert(data_ultra_minimal, on_conflict='model_type,stage').execute()
+                                    self.logger.info(f"✅ Model {model_type}_{stage} saved with ultra-minimal data (fallback)")
                         else:
                             raise e
                 except Exception as e:
