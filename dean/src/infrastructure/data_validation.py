@@ -513,8 +513,55 @@ class SupabaseDataValidator:
                 'recall': FloatValidator('recall', min_value=0, max_value=1),
                 'f1_score': FloatValidator('f1_score', min_value=0, max_value=1),
                 'is_active': BooleanValidator('is_active'),
-                'trained_at': DateValidator('trained_at', date_format="%Y-%m-%dT%H:%M:%S.%fZ"),
+                'trained_at': DateValidator('trained_at', date_format="%Y-%m-%dT%H:%M:%S"),
                 'metadata': JSONValidator('metadata'),
+            }),
+            
+            'historical_data': TableValidator('historical_data', {
+                'ad_id': StringValidator('ad_id', required=True, max_length=100),
+                'lifecycle_id': StringValidator('lifecycle_id', max_length=100),
+                'stage': StringValidator('stage', required=True,
+                                       allowed_values=['testing', 'validation', 'scaling']),
+                'metric_name': StringValidator('metric_name', required=True, max_length=100),
+                'metric_value': FloatValidator('metric_value', required=True),
+                'ts_iso': DateValidator('ts_iso', date_format="%Y-%m-%dT%H:%M:%S"),
+                'ts_epoch': IntegerValidator('ts_epoch', min_value=0),
+            }),
+            
+            'time_series_data': TableValidator('time_series_data', {
+                'ad_id': StringValidator('ad_id', required=True, max_length=100),
+                'lifecycle_id': StringValidator('lifecycle_id', max_length=100),
+                'stage': StringValidator('stage', required=True,
+                                       allowed_values=['testing', 'validation', 'scaling']),
+                'metric_name': StringValidator('metric_name', required=True, max_length=100),
+                'metric_value': FloatValidator('metric_value', required=True),
+                'timestamp': DateValidator('timestamp', date_format="%Y-%m-%dT%H:%M:%S"),
+            }),
+            
+            'ad_creation_times': TableValidator('ad_creation_times', {
+                'ad_id': StringValidator('ad_id', required=True, max_length=100),
+                'stage': StringValidator('stage', required=True,
+                                       allowed_values=['testing', 'validation', 'scaling']),
+                'created_at_iso': DateValidator('created_at_iso', date_format="%Y-%m-%dT%H:%M:%S"),
+                'created_at_epoch': IntegerValidator('created_at_epoch', min_value=0),
+            }),
+            
+            'ml_predictions': TableValidator('ml_predictions', {
+                'ad_id': StringValidator('ad_id', required=True, max_length=100),
+                'lifecycle_id': StringValidator('lifecycle_id', max_length=100),
+                'model_id': StringValidator('model_id', max_length=100),
+                'stage': StringValidator('stage', required=True,
+                                       allowed_values=['testing', 'validation', 'scaling']),
+                'prediction_type': StringValidator('prediction_type', max_length=100),
+                'prediction_value': FloatValidator('prediction_value'),
+                'created_at': DateValidator('created_at', date_format="%Y-%m-%dT%H:%M:%S"),
+            }),
+            
+            'learning_events': TableValidator('learning_events', {
+                'event_type': StringValidator('event_type', required=True, max_length=100),
+                'stage': StringValidator('stage', required=True,
+                                       allowed_values=['testing', 'validation', 'scaling']),
+                'created_at': DateValidator('created_at', date_format="%Y-%m-%dT%H:%M:%S"),
             }),
         }
     

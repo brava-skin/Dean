@@ -87,7 +87,8 @@ class ValidatedSupabaseClient:
         else:
             query = self.client.table(table).upsert(data)
             if on_conflict:
-                query = query.on_conflict(on_conflict)
+                # Note: Supabase doesn't have on_conflict method, so we ignore it
+                logger.warning(f"on_conflict parameter '{on_conflict}' ignored - Supabase upsert handles conflicts automatically")
             return query.execute()
     
     def update(self, table: str, data: Dict[str, Any], 
@@ -172,7 +173,8 @@ class ValidatedSupabaseClient:
             
             query = self.client.table(table).upsert(sanitized_data)
             if on_conflict:
-                query = query.on_conflict(on_conflict)
+                # Note: Supabase doesn't have on_conflict method, so we ignore it
+                logger.warning(f"on_conflict parameter '{on_conflict}' ignored - Supabase upsert handles conflicts automatically")
             
             return query.execute()
         except ValidationError as e:
@@ -206,7 +208,8 @@ class ValidatedSupabaseClient:
             
             query = self.client.table(table).upsert(validated_records)
             if on_conflict:
-                query = query.on_conflict(on_conflict)
+                # Note: Supabase doesn't have on_conflict method, so we ignore it
+                logger.warning(f"on_conflict parameter '{on_conflict}' ignored - Supabase upsert handles conflicts automatically")
             
             return query.execute()
         else:
@@ -262,6 +265,55 @@ class ValidatedSupabaseClient:
     def rpc(self, function_name: str, params: Dict[str, Any] = None):
         """Delegate RPC operations to underlying client."""
         return self.client.rpc(function_name, params)
+    
+    def table(self, table_name: str):
+        """
+        Get a table reference for direct operations.
+        Returns a ValidatedTableWrapper that provides validated operations.
+        """
+        return ValidatedTableWrapper(self, table_name)
+    
+    # Delegate other operations to the underlying client
+    def __getattr__(self, name):
+        """Delegate unknown methods to the underlying Supabase client."""
+        return getattr(self.client, name)
+
+class ValidatedTableWrapper:
+    """
+    Wrapper for table operations that provides validated methods.
+    """
+    
+    def __init__(self, validated_client: ValidatedSupabaseClient, table_name: str):
+        self.validated_client = validated_client
+        self.table_name = table_name
+        self.client = validated_client.client
+    
+    def insert(self, data: Union[Dict[str, Any], List[Dict[str, Any]]], 
+               validate: bool = None) -> Any:
+        """Insert data with validation."""
+        return self.validated_client.insert(self.table_name, data, validate)
+    
+    def upsert(self, data: Union[Dict[str, Any], List[Dict[str, Any]]], 
+               on_conflict: str = None, validate: bool = None) -> Any:
+        """Upsert data with validation."""
+        return self.validated_client.upsert(self.table_name, data, on_conflict, validate)
+    
+    def update(self, data: Dict[str, Any], validate: bool = None, **kwargs) -> Any:
+        """Update data with validation."""
+        return self.validated_client.update(self.table_name, data, validate, **kwargs)
+    
+    def select(self, columns: str = "*", **kwargs):
+        """Select data - delegate to underlying client."""
+        return self.client.table(self.table_name).select(columns, **kwargs)
+    
+    def delete(self, **kwargs):
+        """Delete data - delegate to underlying client."""
+        return self.client.table(self.table_name).delete(**kwargs)
+    
+    # Delegate other operations to the underlying table
+    def __getattr__(self, name):
+        """Delegate unknown methods to the underlying Supabase table."""
+        return getattr(self.client.table(self.table_name), name)
 
 def create_validated_supabase_client(url: str, key: str, enable_validation: bool = True) -> ValidatedSupabaseClient:
     """

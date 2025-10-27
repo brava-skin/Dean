@@ -563,6 +563,7 @@ class XGBoostPredictor:
         # Model storage
         self.models: Dict[str, any] = {}
         self.scalers: Dict[str, StandardScaler] = {}
+        self.feature_selectors: Dict[str, any] = {}
         self.feature_importance: Dict[str, Dict[str, float]] = {}
     
     def _get_validated_client(self):
@@ -641,6 +642,9 @@ class XGBoostPredictor:
                     selected_indices = selector.get_support(indices=True)
                     feature_cols = [feature_cols[i] for i in selected_indices]
                     X = X_selected
+                    
+                    # Store the selector for later use during prediction
+                    self.feature_selectors[model_key] = selector
                     
                     self.logger.info(f"Feature selection: {len(selected_indices)}/{len(numeric_cols)} features selected")
                 except Exception as e:
@@ -817,6 +821,7 @@ class XGBoostPredictor:
             
             model = self.models[model_key]
             scaler = self.scalers.get(model_key)
+            feature_selector = self.feature_selectors.get(model_key)
             
             # Prepare features - ensure feature names are strings and match
             try:
@@ -831,6 +836,14 @@ class XGBoostPredictor:
                 feature_vector = np.array([
                     float(features.get(str(col), 0)) for col in expected_features
                 ])
+                
+                # Apply feature selection if available
+                if feature_selector is not None:
+                    try:
+                        feature_vector = feature_selector.transform([feature_vector])[0]
+                        self.logger.info(f"🔧 [ML DEBUG] Applied feature selection: {len(feature_vector)} features")
+                    except Exception as e:
+                        self.logger.warning(f"Feature selection failed during prediction: {e}")
                 
                 # FIX: Ensure we have the exact number of features the scaler expects
                 if scaler is not None:
