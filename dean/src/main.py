@@ -370,9 +370,12 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             pass  # Fallback to 0 if calculation fails
         
         # Prepare performance data - validation will happen automatically
+        ad_id = ad_data.get('ad_id', '')
+        lifecycle_id = ad_data.get('lifecycle_id', f"lifecycle_{ad_id}")
+        
         performance_data = {
-            'ad_id': ad_data.get('ad_id', ''),
-            'lifecycle_id': ad_data.get('lifecycle_id', f"lifecycle_{ad_data.get('ad_id', '')}"),
+            'ad_id': ad_id,
+            'lifecycle_id': lifecycle_id,
             'window_type': '1d',
             'date_start': date_start,
             'date_end': ad_data.get('date_end', ''),

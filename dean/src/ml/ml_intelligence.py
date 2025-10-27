@@ -855,6 +855,9 @@ class XGBoostPredictor:
                             float(features.get(str(col), 0)) for col in expected_features
                         ])
                         
+                        self.logger.info(f"🔧 [ML DEBUG] Full feature vector: {len(full_feature_vector)} features")
+                        self.logger.info(f"🔧 [ML DEBUG] Feature selector expects: {feature_selector.n_features_in_} features")
+                        
                         # Apply feature selection
                         feature_vector = feature_selector.transform([full_feature_vector])[0]
                         self.logger.info(f"🔧 [ML DEBUG] Applied feature selection: {len(feature_vector)} features")
@@ -1055,11 +1058,7 @@ class XGBoostPredictor:
                         'ml_models',
                         data,
                         eq='model_type',
-                        value=model_type,
-                        eq2='stage',
-                        value2=stage,
-                        eq3='version',
-                        value3=1
+                        value=model_type
                     )
                     if not response:
                         # Insert new record if no existing one found
