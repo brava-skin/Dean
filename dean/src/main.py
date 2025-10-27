@@ -380,7 +380,7 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         performance_data = {
             'ad_id': ad_id,
             'lifecycle_id': lifecycle_id,
-            'stage': ad_data.get('stage', 'testing'),  # Add stage field with default
+            'stage': stage,  # Use the stage parameter passed to the function
             'window_type': '1d',
             'date_start': date_start,
             'date_end': ad_data.get('date_end', ''),

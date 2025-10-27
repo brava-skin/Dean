@@ -845,6 +845,19 @@ class XGBoostPredictor:
                         # Use all available features and let the selector handle it
                         expected_features = [str(k) for k in features.keys()]
                         self.logger.info(f"🔧 [ML DEBUG] Using {len(expected_features)} features for feature selection")
+                        
+                        # Ensure we have the exact number of features the selector expects
+                        if len(expected_features) != feature_selector.n_features_in_:
+                            self.logger.warning(f"Feature count mismatch: have {len(expected_features)}, selector expects {feature_selector.n_features_in_}")
+                            # Try to match the expected number by padding or truncating
+                            if len(expected_features) > feature_selector.n_features_in_:
+                                expected_features = expected_features[:feature_selector.n_features_in_]
+                                self.logger.info(f"Truncated to {len(expected_features)} features")
+                            else:
+                                # Pad with zeros
+                                while len(expected_features) < feature_selector.n_features_in_:
+                                    expected_features.append(f"padding_{len(expected_features)}")
+                                self.logger.info(f"Padded to {len(expected_features)} features")
                     except Exception as e:
                         self.logger.warning(f"Could not get original feature names: {e}")
                         expected_features = [str(k) for k in features.keys()]
