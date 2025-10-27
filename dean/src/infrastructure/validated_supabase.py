@@ -111,9 +111,8 @@ class ValidatedSupabaseClient:
             sanitized_data = self._validate_and_sanitize(table, data)
             query = self.client.table(table).update(sanitized_data)
             
-        # Apply query filters from kwargs
-        for key, value in kwargs.items():
-            if hasattr(query, key):
+            # Apply query filters
+            for key, value in kwargs.items():
                 if key == 'eq' and 'value' in kwargs:
                     # Handle eq with value parameter
                     query = query.eq(kwargs['value'])
@@ -126,16 +125,15 @@ class ValidatedSupabaseClient:
                 elif key.startswith('value'):
                     # Skip value parameters, they're handled above
                     continue
-                else:
+                elif hasattr(query, key):
                     query = getattr(query, key)(value)
             
             return query.execute()
         else:
             query = self.client.table(table).update(data)
             
-        # Apply query filters from kwargs
-        for key, value in kwargs.items():
-            if hasattr(query, key):
+            # Apply query filters
+            for key, value in kwargs.items():
                 if key == 'eq' and 'value' in kwargs:
                     # Handle eq with value parameter
                     query = query.eq(kwargs['value'])
@@ -148,7 +146,7 @@ class ValidatedSupabaseClient:
                 elif key.startswith('value'):
                     # Skip value parameters, they're handled above
                     continue
-                else:
+                elif hasattr(query, key):
                     query = getattr(query, key)(value)
             
             return query.execute()

@@ -857,6 +857,7 @@ class XGBoostPredictor:
                         
                         self.logger.info(f"🔧 [ML DEBUG] Full feature vector: {len(full_feature_vector)} features")
                         self.logger.info(f"🔧 [ML DEBUG] Feature selector expects: {feature_selector.n_features_in_} features")
+                        self.logger.info(f"🔧 [ML DEBUG] Expected features: {len(expected_features)}")
                         
                         # Apply feature selection
                         feature_vector = feature_selector.transform([full_feature_vector])[0]

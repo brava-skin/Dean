@@ -373,6 +373,10 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         ad_id = ad_data.get('ad_id', '')
         lifecycle_id = ad_data.get('lifecycle_id', f"lifecycle_{ad_id}")
         
+        # Debug logging
+        if not lifecycle_id or lifecycle_id == f"lifecycle_":
+            print(f"⚠️ DEBUG: ad_id='{ad_id}', lifecycle_id='{lifecycle_id}', ad_data keys: {list(ad_data.keys())}")
+        
         performance_data = {
             'ad_id': ad_id,
             'lifecycle_id': lifecycle_id,
