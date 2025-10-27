@@ -157,7 +157,7 @@ class SupabasePerformanceClient:
                 return pd.DataFrame()
             
             df = pd.DataFrame(response.data)
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], format='ISO8601')
             df['metric_value'] = pd.to_numeric(df['metric_value'], errors='coerce')
             
             return df.sort_values('timestamp')

@@ -275,7 +275,7 @@ class SupabaseMLClient:
                 return pd.DataFrame()
             
             df = pd.DataFrame(response.data)
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], format='ISO8601')
             df['metric_value'] = pd.to_numeric(df['metric_value'], errors='coerce')
             
             return df.sort_values('timestamp')
@@ -834,18 +834,28 @@ class XGBoostPredictor:
                     # Fallback: use all provided features
                     expected_features = [str(k) for k in features.keys()]
                 
-                # Create feature vector matching model's expected features EXACTLY
-                feature_vector = np.array([
-                    float(features.get(str(col), 0)) for col in expected_features
-                ])
-                
-                # Apply feature selection if available
+                # Apply feature selection if available BEFORE creating feature vector
                 if feature_selector is not None:
                     try:
-                        feature_vector = feature_selector.transform([feature_vector])[0]
+                        # Create full feature vector first
+                        full_feature_vector = np.array([
+                            float(features.get(str(col), 0)) for col in expected_features
+                        ])
+                        
+                        # Apply feature selection
+                        feature_vector = feature_selector.transform([full_feature_vector])[0]
                         self.logger.info(f"🔧 [ML DEBUG] Applied feature selection: {len(feature_vector)} features")
                     except Exception as e:
                         self.logger.warning(f"Feature selection failed during prediction: {e}")
+                        # Fallback to original approach
+                        feature_vector = np.array([
+                            float(features.get(str(col), 0)) for col in expected_features
+                        ])
+                else:
+                    # Create feature vector matching model's expected features EXACTLY
+                    feature_vector = np.array([
+                        float(features.get(str(col), 0)) for col in expected_features
+                    ])
                 
                 # FIX: Ensure we have the exact number of features the scaler expects
                 if scaler is not None:
