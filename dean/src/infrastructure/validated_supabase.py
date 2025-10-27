@@ -114,14 +114,14 @@ class ValidatedSupabaseClient:
             # Apply query filters
             for key, value in kwargs.items():
                 if key == 'eq' and 'value' in kwargs:
-                    # Handle eq with value parameter
-                    query = query.eq(kwargs['value'])
+                    # Handle eq with value parameter: eq='model_type', value=model_type
+                    query = query.eq(value, kwargs['value'])
                 elif key == 'eq2' and 'value2' in kwargs:
                     # Handle eq2 with value2 parameter
-                    query = query.eq(kwargs['value2'])
+                    query = query.eq(value, kwargs['value2'])
                 elif key == 'eq3' and 'value3' in kwargs:
                     # Handle eq3 with value3 parameter
-                    query = query.eq(kwargs['value3'])
+                    query = query.eq(value, kwargs['value3'])
                 elif key.startswith('value'):
                     # Skip value parameters, they're handled above
                     continue
@@ -135,14 +135,14 @@ class ValidatedSupabaseClient:
             # Apply query filters
             for key, value in kwargs.items():
                 if key == 'eq' and 'value' in kwargs:
-                    # Handle eq with value parameter
-                    query = query.eq(kwargs['value'])
+                    # Handle eq with value parameter: eq='model_type', value=model_type
+                    query = query.eq(value, kwargs['value'])
                 elif key == 'eq2' and 'value2' in kwargs:
                     # Handle eq2 with value2 parameter
-                    query = query.eq(kwargs['value2'])
+                    query = query.eq(value, kwargs['value2'])
                 elif key == 'eq3' and 'value3' in kwargs:
                     # Handle eq3 with value3 parameter
-                    query = query.eq(kwargs['value3'])
+                    query = query.eq(value, kwargs['value3'])
                 elif key.startswith('value'):
                     # Skip value parameters, they're handled above
                     continue

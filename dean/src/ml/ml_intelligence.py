@@ -842,10 +842,12 @@ class XGBoostPredictor:
                     try:
                         # The feature selector was trained on the full feature set
                         # So we need to use the same feature names that were used during training
-                        # For now, use all available features and let the selector handle it
+                        # Use all available features and let the selector handle it
                         expected_features = [str(k) for k in features.keys()]
+                        self.logger.info(f"🔧 [ML DEBUG] Using {len(expected_features)} features for feature selection")
                     except Exception as e:
                         self.logger.warning(f"Could not get original feature names: {e}")
+                        expected_features = [str(k) for k in features.keys()]
                 
                 # Apply feature selection if available BEFORE creating feature vector
                 if feature_selector is not None:

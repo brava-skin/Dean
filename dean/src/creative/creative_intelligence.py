@@ -235,11 +235,11 @@ class CreativeIntelligenceSystem:
             if validated_client and hasattr(validated_client, 'upsert'):
                 # Use validated client with check-then-upsert approach
                 try:
-                    # First check if record exists
-                    existing = validated_client.select('creative_library', 'creative_id').eq('creative_id', creative_id).execute()
+                    # First check if record exists using regular client
+                    existing = self.supabase_client.table('creative_library').select('creative_id').eq('creative_id', creative_id).execute()
                     
                     if existing and existing.data:
-                        # Record exists, update it
+                        # Record exists, update it using validated client
                         result = validated_client.update(
                             'creative_library',
                             creative_data,
@@ -247,7 +247,7 @@ class CreativeIntelligenceSystem:
                             value=creative_id
                         )
                     else:
-                        # Record doesn't exist, insert it
+                        # Record doesn't exist, insert it using validated client
                         result = validated_client.insert('creative_library', creative_data)
                         
                 except Exception as e:
