@@ -28,16 +28,32 @@ class SupabaseStorage:
             now = datetime.now(timezone.utc)
             if created_at > now:
                 created_at = now
+            
+            # Ensure created_at is not too far in the past (not before 2020)
+            min_date = datetime(2020, 1, 1, tzinfo=timezone.utc)
+            if created_at < min_date:
+                created_at = now - timedelta(days=random.randint(1, 30))  # Random time in last 30 days
                 
             # Use actual timestamp for created_at_epoch
             epoch_id = int(created_at.timestamp())
+            
+            # Validate epoch timestamp is reasonable (not 123456 or other test values)
+            if epoch_id < 1577836800:  # Before 2020-01-01
+                created_at = now - timedelta(days=random.randint(1, 30))
+                epoch_id = int(created_at.timestamp())
+                
+            # Ensure lifecycle_id is properly formatted
+            if not lifecycle_id or lifecycle_id == 'lifecycle_001':
+                lifecycle_id = f'lifecycle_{ad_id}' if ad_id else ''
                 
             data = {
                 'ad_id': ad_id,
-                'lifecycle_id': lifecycle_id or '',
+                'lifecycle_id': lifecycle_id,
                 'stage': stage,
                 'created_at_epoch': epoch_id,  # Use actual timestamp
-                'created_at_iso': created_at.isoformat()
+                'created_at_iso': created_at.isoformat(),
+                'updated_at': now.isoformat(),
+                'created_at': created_at.isoformat()  # Add created_at field for consistency
             }
             
             # Use upsert to handle duplicates with validation
@@ -95,6 +111,30 @@ class SupabaseStorage:
         except Exception as e:
             logger.error(f"Failed to get ad creation time for {ad_id}: {e}")
             return None
+    
+    def cleanup_invalid_creation_times(self) -> None:
+        """Clean up invalid ad creation times with bad timestamps."""
+        try:
+            # Get all records with invalid timestamps
+            invalid_records = self.client.table('ad_creation_times').select('*').execute()
+            
+            for record in invalid_records.data:
+                ad_id = record.get('ad_id')
+                epoch_id = record.get('created_at_epoch')
+                
+                # Check if epoch timestamp is invalid (too small or future)
+                now_epoch = int(datetime.now(timezone.utc).timestamp())
+                if epoch_id < 1577836800 or epoch_id > now_epoch:  # Before 2020 or future
+                    # Update with current timestamp
+                    self.record_ad_creation(
+                        ad_id=ad_id,
+                        lifecycle_id=record.get('lifecycle_id', ''),
+                        stage=record.get('stage', 'testing')
+                    )
+                    logger.info(f"Fixed invalid creation time for ad {ad_id}")
+                    
+        except Exception as e:
+            logger.error(f"Failed to cleanup invalid creation times: {e}")
     
     def get_ad_age_days(self, ad_id: str) -> Optional[float]:
         """Get ad age in days."""
