@@ -393,10 +393,10 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             'add_to_cart': int(ad_data.get('atc', 0)),
             'initiate_checkout': int(ad_data.get('ic', 0)),
             'ctr': safe_float(ad_data.get('ctr', 0), 99.9999),  # Cap at 99.9999% CTR
-            'cpc': safe_float(ad_data.get('cpc', 0), 99.9999),  # Cap at 99.9999 CPC
-            'cpm': safe_float(ad_data.get('cpm', 0), 99.9999),  # Cap at 99.9999 CPM
-            'roas': safe_float(ad_data.get('roas', 0), 99.9999),  # Cap at 99.9999 ROAS
-            'cpa': safe_float(ad_data.get('cpa', 0), 99.9999) if ad_data.get('cpa') is not None else None,  # Cap at 99.9999 CPA
+            'cpc': safe_float(ad_data.get('cpc', 0), 9999.9999),  # Cap at 9999.9999 CPC
+            'cpm': safe_float(ad_data.get('cpm', 0), 9999.9999),  # Cap at 9999.9999 CPM
+            'roas': safe_float(ad_data.get('roas', 0), 9999.9999),  # Cap at 9999.9999 ROAS
+            'cpa': safe_float(ad_data.get('cpa', 0), 9999.9999) if ad_data.get('cpa') is not None else None,  # Cap at 9999.9999 CPA
             'dwell_time': safe_float(ad_data.get('dwell_time', 0), 999999.99),
             'frequency': safe_float(ad_data.get('frequency', 0), 999.99),
             'atc_rate': safe_float(ad_data.get('atc_rate', 0), 99.9999),  # Cap at 99.9999%

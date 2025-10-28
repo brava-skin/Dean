@@ -413,7 +413,44 @@ class HyperparameterTuner:
                 
                 try:
                     import xgboost as xgb
-                    model = xgb.XGBRegressor(**params)
+                    
+                    # Create XGBoost model with sklearn compatibility wrapper
+                    class XGBoostWrapper:
+                        def __init__(self, **params):
+                            self.model = xgb.XGBRegressor(**params)
+                            self.__sklearn_tags__ = {
+                                'requires_y': True,
+                                'requires_fit': True,
+                                'requires_X': True,
+                                'no_validation': False,
+                                'stateless': False,
+                                'multilabel': False,
+                                'multioutput': False,
+                                'multioutput_only': False,
+                                'allow_nan': False,
+                                'requires_positive_X': False,
+                                'requires_positive_y': False,
+                                'X_types': ['2darray'],
+                                'y_types': ['1dlabels'],
+                                'poor_score': False
+                            }
+                            self.feature_importances_ = None
+                        
+                        def fit(self, X, y):
+                            result = self.model.fit(X, y)
+                            self.feature_importances_ = self.model.feature_importances_
+                            return result
+                        
+                        def predict(self, X):
+                            return self.model.predict(X)
+                        
+                        def get_params(self, deep=True):
+                            return self.model.get_params(deep)
+                        
+                        def set_params(self, **params):
+                            return self.model.set_params(**params)
+                    
+                    model = XGBoostWrapper(**params)
                 except ImportError:
                     from sklearn.ensemble import GradientBoostingRegressor
                     model = GradientBoostingRegressor(

@@ -52,6 +52,50 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 logger = logging.getLogger(__name__)
 
 # =====================================================
+# XGBOOST WRAPPER CLASS
+# =====================================================
+
+class XGBoostWrapper:
+    """XGBoost wrapper with sklearn compatibility for pickling."""
+    
+    def __init__(self, **params):
+        if not XGBOOST_AVAILABLE:
+            raise ImportError("XGBoost not available")
+        
+        self.model = xgb.XGBRegressor(**params)
+        self.__sklearn_tags__ = {
+            'requires_y': True,
+            'requires_fit': True,
+            'requires_X': True,
+            'no_validation': False,
+            'stateless': False,
+            'multilabel': False,
+            'multioutput': False,
+            'multioutput_only': False,
+            'allow_nan': False,
+            'requires_positive_X': False,
+            'requires_positive_y': False,
+            'X_types': ['2darray'],
+            'y_types': ['1dlabels'],
+            'poor_score': False
+        }
+        self.feature_importances_ = None
+    
+    def fit(self, X, y):
+        result = self.model.fit(X, y)
+        self.feature_importances_ = self.model.feature_importances_
+        return result
+    
+    def predict(self, X):
+        return self.model.predict(X)
+    
+    def get_params(self, deep=True):
+        return self.model.get_params(deep)
+    
+    def set_params(self, **params):
+        return self.model.set_params(**params)
+
+# =====================================================
 # CORE ML INTELLIGENCE CLASSES
 # =====================================================
 
@@ -554,9 +598,10 @@ class FeatureEngineer:
 class XGBoostPredictor:
     """XGBoost-based prediction engine for performance forecasting."""
     
-    def __init__(self, config: MLConfig, supabase_client: SupabaseMLClient):
+    def __init__(self, config: MLConfig, supabase_client: SupabaseMLClient, parent_system=None):
         self.config = config
         self.supabase = supabase_client
+        self.parent_system = parent_system
         self.feature_engineer = FeatureEngineer(config)
         self.logger = logging.getLogger(f"{__name__}.XGBoostPredictor")
         
@@ -706,7 +751,11 @@ class XGBoostPredictor:
             # Primary model: XGBoost or GradientBoosting with compatibility fixes
             try:
                 if XGBOOST_AVAILABLE:
-                    primary_model = xgb.XGBRegressor(**self.config.xgb_params)
+                    if self.parent_system:
+                        primary_model = self.parent_system._create_xgboost_wrapper(**self.config.xgb_params)
+                    else:
+                        # Fallback if no parent system
+                        primary_model = xgb.XGBRegressor(**self.config.xgb_params)
                 else:
                     primary_model = GradientBoostingRegressor(
                         n_estimators=self.config.xgb_params.get('n_estimators', 100),
@@ -1604,10 +1653,17 @@ class MLIntelligenceSystem:
     def __init__(self, supabase_url: str, supabase_key: str, config: Optional[MLConfig] = None):
         self.config = config or MLConfig()
         self.supabase = SupabaseMLClient(supabase_url, supabase_key)
-        self.predictor = XGBoostPredictor(self.config, self.supabase)
+        self.predictor = XGBoostPredictor(self.config, self.supabase, parent_system=self)
         self.temporal_analyzer = TemporalAnalyzer(self.supabase)
         self.cross_stage_learner = CrossStageLearner(self.supabase)
         self.logger = logging.getLogger(f"{__name__}.MLIntelligenceSystem")
+    
+    def _create_xgboost_wrapper(self, **params):
+        """Create XGBoost wrapper with sklearn compatibility."""
+        if not XGBOOST_AVAILABLE:
+            raise ImportError("XGBoost not available")
+        
+        return XGBoostWrapper(**params)
     
     def _get_validated_client(self):
         """Get validated Supabase client for automatic data validation."""

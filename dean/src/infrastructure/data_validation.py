@@ -540,6 +540,7 @@ class SupabaseDataValidator:
                 'stage': StringValidator('stage', required=True,
                                        allowed_values=['testing', 'validation', 'scaling']),
                 'version': IntegerValidator('version', required=True, min_value=1),
+                'model_name': StringValidator('model_name', required=True, max_length=255),
                 'model_data': CustomValidator('model_data', 
                                              self._validate_model_data,
                                              self._sanitize_model_data),
