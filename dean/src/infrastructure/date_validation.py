@@ -49,7 +49,10 @@ class DateValidator:
         if isinstance(date_value, str):
             try:
                 # Check for malformed dates with asterisks or other invalid characters
-                if '*' in date_value or '***' in date_value or len(date_value) < 10:
+                if ('*' in date_value or '***' in date_value or 
+                    len(date_value) < 10 or 
+                    date_value.count('-') < 2 or
+                    not any(c.isdigit() for c in date_value)):
                     self.logger.warning(f"Malformed date {field_name} '{date_value}', using current timestamp")
                     return now
                     
@@ -83,13 +86,21 @@ class DateValidator:
             self.logger.warning(f"Unsupported date type {field_name} '{type(date_value)}', using current timestamp")
             return now
         
-        # Ensure both dates are timezone-aware for comparison
+        # Ensure all dates are timezone-aware for comparison
         if parsed_date.tzinfo is None:
             parsed_date = parsed_date.replace(tzinfo=timezone.utc)
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
         if self.min_valid_date.tzinfo is None:
             self.min_valid_date = self.min_valid_date.replace(tzinfo=timezone.utc)
+        
+        # Additional safety check for timezone comparison
+        try:
+            # Test comparison to catch any remaining timezone issues
+            _ = parsed_date < now
+        except TypeError as tz_error:
+            self.logger.warning(f"Timezone comparison error for {field_name}: {tz_error}, using current timestamp")
+            return now
             
         # Validate date range
         if parsed_date < self.min_valid_date:
