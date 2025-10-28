@@ -589,8 +589,17 @@ class SupabaseDataValidator:
                 'stage': StringValidator('stage', required=True,
                                        allowed_values=['testing', 'validation', 'scaling']),
                 'prediction_type': StringValidator('prediction_type', max_length=100),
+                'predicted_value': FloatValidator('predicted_value'),
                 'prediction_value': FloatValidator('prediction_value'),
+                'confidence_score': FloatValidator('confidence_score'),
+                'prediction_interval_lower': FloatValidator('prediction_interval_lower'),
+                'prediction_interval_upper': FloatValidator('prediction_interval_upper'),
+                'features': JSONValidator('features'),
+                'feature_importance': JSONValidator('feature_importance'),
+                'prediction_horizon_hours': IntegerValidator('prediction_horizon_hours'),
                 'created_at': DateValidator('created_at', date_format="%Y-%m-%dT%H:%M:%S"),
+                'expires_at': DateValidator('expires_at', date_format="%Y-%m-%dT%H:%M:%S"),
+                'model_name': StringValidator('model_name', max_length=100)
             }),
             
             'learning_events': TableValidator('learning_events', {
