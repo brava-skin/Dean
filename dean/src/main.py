@@ -354,44 +354,58 @@ def _calculate_performance_quality_score(ad_data: Dict[str, Any]) -> int:
         elif ctr >= 0.1:
             quality_score += 10
         
-        # CPA scoring (0-50 points)
-        if cpa <= 20:
-            quality_score += 50
-        elif cpa <= 30:
-            quality_score += 40
-        elif cpa <= 40:
-            quality_score += 30
-        elif cpa <= 60:
-            quality_score += 20
-        elif cpa <= 100:
-            quality_score += 10
+        # CPA scoring (0-50 points) - only if we have purchases
+        if purchases > 0:
+            if cpa <= 20:
+                quality_score += 50
+            elif cpa <= 30:
+                quality_score += 40
+            elif cpa <= 40:
+                quality_score += 30
+            elif cpa <= 60:
+                quality_score += 20
+            elif cpa <= 100:
+                quality_score += 10
+        else:
+            # If no purchases, give some points for CTR only
+            quality_score = min(quality_score, 50)
         
         return min(max(int(quality_score), 0), 100)
         
-    except Exception:
+    except Exception as e:
+        print(f"Error calculating performance quality score: {e}")
         return 0
 
 
 def _calculate_stability_score(ad_data: Dict[str, Any]) -> float:
     """Calculate stability score based on performance consistency."""
     try:
-        # For now, return a basic stability score based on spend consistency
         spend = safe_float(ad_data.get('spend', 0))
         impressions = safe_float(ad_data.get('impressions', 0))
+        clicks = safe_float(ad_data.get('clicks', 0))
         
         if spend <= 0 or impressions <= 0:
             return 0.0
         
-        # Basic stability calculation (simplified)
-        ctr = (safe_float(ad_data.get('clicks', 0)) / impressions) * 100 if impressions > 0 else 0
+        # Calculate CTR
+        ctr = (clicks / impressions) * 100 if impressions > 0 else 0
         
-        # Higher CTR = more stable performance
-        if ctr >= 1.0:
-            return min(ctr / 2.0, 9.9999)
+        # Stability based on CTR performance
+        if ctr >= 3.0:
+            return 9.0  # Very stable
+        elif ctr >= 2.0:
+            return 7.0  # Stable
+        elif ctr >= 1.0:
+            return 5.0  # Moderate
+        elif ctr >= 0.5:
+            return 3.0  # Low stability
+        elif ctr >= 0.1:
+            return 1.0  # Very low stability
         else:
-            return min(ctr, 9.9999)
+            return 0.0  # No stability
             
-    except Exception:
+    except Exception as e:
+        print(f"Error calculating stability score: {e}")
         return 0.0
 
 
@@ -399,21 +413,48 @@ def _calculate_momentum_score(ad_data: Dict[str, Any]) -> float:
     """Calculate momentum score based on recent performance trends."""
     try:
         spend = safe_float(ad_data.get('spend', 0))
+        impressions = safe_float(ad_data.get('impressions', 0))
+        clicks = safe_float(ad_data.get('clicks', 0))
         purchases = safe_float(ad_data.get('purchases', 0))
         
-        if spend <= 0:
+        if spend <= 0 or impressions <= 0:
             return 0.0
         
-        # Basic momentum calculation based on ROAS
-        revenue = safe_float(ad_data.get('revenue', 0))
-        roas = revenue / spend if spend > 0 else 0
+        # Calculate CTR and conversion rate
+        ctr = (clicks / impressions) * 100 if impressions > 0 else 0
+        conversion_rate = (purchases / clicks) * 100 if clicks > 0 else 0
         
-        # Convert ROAS to momentum score (0-9.9999)
-        momentum = min(roas * 2.0, 9.9999)  # Scale ROAS to momentum score
+        # Momentum based on CTR and conversion performance
+        momentum = 0.0
         
-        return max(momentum, 0.0)
+        # CTR momentum (0-5 points)
+        if ctr >= 3.0:
+            momentum += 5.0
+        elif ctr >= 2.0:
+            momentum += 4.0
+        elif ctr >= 1.0:
+            momentum += 3.0
+        elif ctr >= 0.5:
+            momentum += 2.0
+        elif ctr >= 0.1:
+            momentum += 1.0
         
-    except Exception:
+        # Conversion momentum (0-5 points)
+        if conversion_rate >= 10.0:
+            momentum += 5.0
+        elif conversion_rate >= 5.0:
+            momentum += 4.0
+        elif conversion_rate >= 2.0:
+            momentum += 3.0
+        elif conversion_rate >= 1.0:
+            momentum += 2.0
+        elif conversion_rate >= 0.1:
+            momentum += 1.0
+        
+        return min(momentum, 9.9999)
+        
+    except Exception as e:
+        print(f"Error calculating momentum score: {e}")
         return 0.0
 
 
@@ -423,26 +464,49 @@ def _calculate_fatigue_index(ad_data: Dict[str, Any]) -> float:
         spend = safe_float(ad_data.get('spend', 0))
         impressions = safe_float(ad_data.get('impressions', 0))
         clicks = safe_float(ad_data.get('clicks', 0))
+        purchases = safe_float(ad_data.get('purchases', 0))
         
         if spend <= 0 or impressions <= 0:
             return 0.0
         
-        # Basic fatigue calculation based on CTR decline
+        # Calculate CTR and conversion rate
         ctr = (clicks / impressions) * 100 if impressions > 0 else 0
+        conversion_rate = (purchases / clicks) * 100 if clicks > 0 else 0
         
-        # Lower CTR = higher fatigue
-        if ctr >= 2.0:
-            fatigue = 0.0  # No fatigue
+        # Fatigue calculation based on performance
+        fatigue = 0.0
+        
+        # CTR fatigue (higher CTR = lower fatigue)
+        if ctr >= 3.0:
+            fatigue += 0.0  # No fatigue
+        elif ctr >= 2.0:
+            fatigue += 0.2  # Low fatigue
         elif ctr >= 1.0:
-            fatigue = 0.3  # Low fatigue
+            fatigue += 0.4  # Medium fatigue
         elif ctr >= 0.5:
-            fatigue = 0.6  # Medium fatigue
+            fatigue += 0.6  # High fatigue
         else:
-            fatigue = 0.9  # High fatigue
+            fatigue += 0.8  # Very high fatigue
+        
+        # Conversion fatigue (higher conversion = lower fatigue)
+        if conversion_rate >= 5.0:
+            fatigue += 0.0  # No fatigue
+        elif conversion_rate >= 2.0:
+            fatigue += 0.1  # Low fatigue
+        elif conversion_rate >= 1.0:
+            fatigue += 0.2  # Medium fatigue
+        elif conversion_rate >= 0.1:
+            fatigue += 0.3  # High fatigue
+        else:
+            fatigue += 0.4  # Very high fatigue
+        
+        # Average the fatigue scores
+        fatigue = fatigue / 2.0
         
         return min(fatigue, 9.9999)
         
-    except Exception:
+    except Exception as e:
+        print(f"Error calculating fatigue index: {e}")
         return 0.0
 
 
@@ -495,7 +559,8 @@ def _get_stage_performance(ad_data: Dict[str, Any], stage: str) -> Dict[str, Any
             'purchases': int(ad_data.get('purchases', 0)),
             'stage': stage
         }
-    except Exception:
+    except Exception as e:
+        print(f"Error getting stage performance: {e}")
         return {'stage': stage}
 
 
@@ -573,6 +638,15 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         if not lifecycle_id or lifecycle_id == f"lifecycle_":
             print(f"⚠️ DEBUG: ad_id='{ad_id}', lifecycle_id='{lifecycle_id}', ad_data keys: {list(ad_data.keys())}")
         
+        # Calculate performance scores
+        quality_score = _calculate_performance_quality_score(ad_data)
+        stability_score = _calculate_stability_score(ad_data)
+        momentum_score = _calculate_momentum_score(ad_data)
+        fatigue_index = _calculate_fatigue_index(ad_data)
+        
+        # Debug logging for performance calculations
+        print(f"🔍 DEBUG: Ad {ad_id} - CTR: {safe_float(ad_data.get('ctr', 0)):.2f}%, Quality: {quality_score}, Stability: {stability_score:.2f}, Momentum: {momentum_score:.2f}, Fatigue: {fatigue_index:.2f}")
+        
         performance_data = {
             'ad_id': ad_id,
             'lifecycle_id': lifecycle_id,
@@ -598,10 +672,10 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             'purchase_rate': safe_float(ad_data.get('purchase_rate', 0), 99.9999),  # Cap at 99.9999%
             'atc_to_ic_rate': safe_float(ad_data.get('atc_to_ic_rate', 0), 99.9999),  # Cap at 99.9999%
             'ic_to_purchase_rate': safe_float(ad_data.get('ic_to_purchase_rate', 0), 99.9999),  # Cap at 99.9999%
-            'performance_quality_score': _calculate_performance_quality_score(ad_data),
-            'stability_score': _calculate_stability_score(ad_data),
-            'momentum_score': _calculate_momentum_score(ad_data),
-            'fatigue_index': _calculate_fatigue_index(ad_data),
+            'performance_quality_score': quality_score,
+            'stability_score': stability_score,
+            'momentum_score': momentum_score,
+            'fatigue_index': fatigue_index,
             'hour_of_day': hour_of_day,
             'day_of_week': day_of_week,
             'is_weekend': is_weekend,
