@@ -309,6 +309,219 @@ def _get_validated_supabase():
     except Exception:
         return None
 
+# Helper function to safely convert and bound numeric values
+def safe_float(value, max_val=999999.99):
+    try:
+        val = float(value or 0)
+        # Handle infinity and NaN
+        if not (val == val) or val == float('inf') or val == float('-inf'):
+            return 0.0
+        # Bound the value to prevent overflow
+        bounded_val = min(max(val, -max_val), max_val)
+        # Round to 4 decimal places to prevent precision issues
+        return round(bounded_val, 4)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _calculate_performance_quality_score(ad_data: Dict[str, Any]) -> int:
+    """Calculate performance quality score based on ad metrics."""
+    try:
+        spend = safe_float(ad_data.get('spend', 0))
+        impressions = safe_float(ad_data.get('impressions', 0))
+        clicks = safe_float(ad_data.get('clicks', 0))
+        purchases = safe_float(ad_data.get('purchases', 0))
+        
+        if spend <= 0 or impressions <= 0:
+            return 0
+        
+        # Calculate basic metrics
+        ctr = (clicks / impressions) * 100 if impressions > 0 else 0
+        cpa = spend / purchases if purchases > 0 else float('inf')
+        
+        # Quality score based on CTR and CPA
+        quality_score = 0
+        
+        # CTR scoring (0-50 points)
+        if ctr >= 2.0:
+            quality_score += 50
+        elif ctr >= 1.5:
+            quality_score += 40
+        elif ctr >= 1.0:
+            quality_score += 30
+        elif ctr >= 0.5:
+            quality_score += 20
+        elif ctr >= 0.1:
+            quality_score += 10
+        
+        # CPA scoring (0-50 points)
+        if cpa <= 20:
+            quality_score += 50
+        elif cpa <= 30:
+            quality_score += 40
+        elif cpa <= 40:
+            quality_score += 30
+        elif cpa <= 60:
+            quality_score += 20
+        elif cpa <= 100:
+            quality_score += 10
+        
+        return min(max(int(quality_score), 0), 100)
+        
+    except Exception:
+        return 0
+
+
+def _calculate_stability_score(ad_data: Dict[str, Any]) -> float:
+    """Calculate stability score based on performance consistency."""
+    try:
+        # For now, return a basic stability score based on spend consistency
+        spend = safe_float(ad_data.get('spend', 0))
+        impressions = safe_float(ad_data.get('impressions', 0))
+        
+        if spend <= 0 or impressions <= 0:
+            return 0.0
+        
+        # Basic stability calculation (simplified)
+        ctr = (safe_float(ad_data.get('clicks', 0)) / impressions) * 100 if impressions > 0 else 0
+        
+        # Higher CTR = more stable performance
+        if ctr >= 1.0:
+            return min(ctr / 2.0, 9.9999)
+        else:
+            return min(ctr, 9.9999)
+            
+    except Exception:
+        return 0.0
+
+
+def _calculate_momentum_score(ad_data: Dict[str, Any]) -> float:
+    """Calculate momentum score based on recent performance trends."""
+    try:
+        spend = safe_float(ad_data.get('spend', 0))
+        purchases = safe_float(ad_data.get('purchases', 0))
+        
+        if spend <= 0:
+            return 0.0
+        
+        # Basic momentum calculation based on ROAS
+        revenue = safe_float(ad_data.get('revenue', 0))
+        roas = revenue / spend if spend > 0 else 0
+        
+        # Convert ROAS to momentum score (0-9.9999)
+        momentum = min(roas * 2.0, 9.9999)  # Scale ROAS to momentum score
+        
+        return max(momentum, 0.0)
+        
+    except Exception:
+        return 0.0
+
+
+def _calculate_fatigue_index(ad_data: Dict[str, Any]) -> float:
+    """Calculate fatigue index based on ad performance decay."""
+    try:
+        spend = safe_float(ad_data.get('spend', 0))
+        impressions = safe_float(ad_data.get('impressions', 0))
+        clicks = safe_float(ad_data.get('clicks', 0))
+        
+        if spend <= 0 or impressions <= 0:
+            return 0.0
+        
+        # Basic fatigue calculation based on CTR decline
+        ctr = (clicks / impressions) * 100 if impressions > 0 else 0
+        
+        # Lower CTR = higher fatigue
+        if ctr >= 2.0:
+            fatigue = 0.0  # No fatigue
+        elif ctr >= 1.0:
+            fatigue = 0.3  # Low fatigue
+        elif ctr >= 0.5:
+            fatigue = 0.6  # Medium fatigue
+        else:
+            fatigue = 0.9  # High fatigue
+        
+        return min(fatigue, 9.9999)
+        
+    except Exception:
+        return 0.0
+
+
+def _get_next_stage(current_stage: str) -> str:
+    """Get the next stage in the lifecycle."""
+    stage_flow = {
+        'testing': 'validation',
+        'validation': 'scaling',
+        'scaling': 'scaling'  # Scaling is the final stage
+    }
+    return stage_flow.get(current_stage, 'testing')
+
+
+def _calculate_stage_duration_hours(ad_id: str, current_stage: str) -> float:
+    """Calculate how long the ad has been in the current stage."""
+    try:
+        # For now, return a basic calculation based on ad age
+        # In a real implementation, this would track stage transitions
+        from infrastructure.supabase_storage import SupabaseStorage
+        validated_client = _get_validated_supabase()
+        if validated_client:
+            storage = SupabaseStorage(validated_client)
+            age_days = storage.get_ad_age_days(ad_id)
+            if age_days:
+                # Convert days to hours and estimate stage duration
+                return min(age_days * 24, 168)  # Cap at 1 week
+        return 0.0
+    except Exception:
+        return 0.0
+
+
+def _get_previous_stage(ad_id: str, current_stage: str) -> str:
+    """Get the previous stage in the lifecycle."""
+    stage_flow = {
+        'validation': 'testing',
+        'scaling': 'validation',
+        'testing': 'testing'  # Testing is the first stage
+    }
+    return stage_flow.get(current_stage, 'testing')
+
+
+def _get_stage_performance(ad_data: Dict[str, Any], stage: str) -> Dict[str, Any]:
+    """Get performance metrics for the current stage."""
+    try:
+        return {
+            'ctr': safe_float(ad_data.get('ctr', 0)),
+            'cpa': safe_float(ad_data.get('cpa', 0)),
+            'roas': safe_float(ad_data.get('roas', 0)),
+            'spend': safe_float(ad_data.get('spend', 0)),
+            'purchases': int(ad_data.get('purchases', 0)),
+            'stage': stage
+        }
+    except Exception:
+        return {'stage': stage}
+
+
+def _get_transition_reason(ad_data: Dict[str, Any], stage: str) -> str:
+    """Get the reason for stage transition."""
+    try:
+        ctr = safe_float(ad_data.get('ctr', 0))
+        cpa = safe_float(ad_data.get('cpa', 0))
+        roas = safe_float(ad_data.get('roas', 0))
+        
+        if stage == 'validation':
+            if ctr >= 1.0 and cpa <= 30:
+                return 'High CTR and low CPA - ready for validation'
+            else:
+                return 'Testing phase - monitoring performance'
+        elif stage == 'scaling':
+            if ctr >= 1.5 and cpa <= 25 and roas >= 2.0:
+                return 'Excellent performance - ready for scaling'
+            else:
+                return 'Validation phase - optimizing performance'
+        else:
+            return 'Initial testing phase'
+    except Exception:
+        return 'Stage transition'
+
+
 def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any], stage: str) -> None:
     """Store performance data in Supabase for ML system with automatic validation."""
     if not supabase_client:
@@ -329,34 +542,15 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             notify(f"❌ Supabase connection failed: {e}")
             return
         
-        # Helper function to safely convert and bound numeric values
-        def safe_float(value, max_val=999999.99):
-            try:
-                val = float(value or 0)
-                # Handle infinity and NaN
-                if not (val == val) or val == float('inf') or val == float('-inf'):
-                    return 0.0
-                # Bound the value to prevent overflow
-                bounded_val = min(max(val, -max_val), max_val)
-                # Round to 4 decimal places to prevent precision issues
-                return round(bounded_val, 4)
-            except (ValueError, TypeError):
-                return 0.0
-        
-        # Calculate day_of_week, is_weekend, hour_of_day from date_start
+        # Calculate day_of_week, is_weekend, hour_of_day from current date
         from datetime import datetime
-        date_start = ad_data.get('date_start', '')
-        day_of_week = None
-        is_weekend = False
-        hour_of_day = None
-        if date_start:
-            try:
-                date_obj = datetime.strptime(date_start, '%Y-%m-%d')
-                day_of_week = date_obj.weekday()  # 0=Monday, 6=Sunday
-                is_weekend = day_of_week >= 5  # Saturday or Sunday
-                hour_of_day = datetime.now().hour  # 0-23
-            except (ValueError, TypeError):
-                pass
+        current_date = datetime.now().strftime('%Y-%m-%d')
+        date_start = current_date  # Facebook API doesn't return date_start, use current date
+        date_end = current_date    # Facebook API doesn't return date_end, use current date
+        
+        day_of_week = datetime.now().weekday()  # 0=Monday, 6=Sunday
+        is_weekend = day_of_week >= 5  # Saturday or Sunday
+        hour_of_day = datetime.now().hour  # 0-23
         
         # Calculate ad_age_days from creation time
         ad_age_days = 0
@@ -404,14 +598,19 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             'purchase_rate': safe_float(ad_data.get('purchase_rate', 0), 99.9999),  # Cap at 99.9999%
             'atc_to_ic_rate': safe_float(ad_data.get('atc_to_ic_rate', 0), 99.9999),  # Cap at 99.9999%
             'ic_to_purchase_rate': safe_float(ad_data.get('ic_to_purchase_rate', 0), 99.9999),  # Cap at 99.9999%
-            'performance_quality_score': int(ad_data.get('performance_quality_score', 0)),
-            'stability_score': safe_float(ad_data.get('stability_score', 0), 9.9999),
-            'momentum_score': safe_float(ad_data.get('momentum_score', 0), 9.9999),
-            'fatigue_index': safe_float(ad_data.get('fatigue_index', 0), 9.9999),
+            'performance_quality_score': _calculate_performance_quality_score(ad_data),
+            'stability_score': _calculate_stability_score(ad_data),
+            'momentum_score': _calculate_momentum_score(ad_data),
+            'fatigue_index': _calculate_fatigue_index(ad_data),
             'hour_of_day': hour_of_day,
             'day_of_week': day_of_week,
             'is_weekend': is_weekend,
             'ad_age_days': int(ad_age_days) if ad_age_days else 0,
+            'next_stage': _get_next_stage(stage),
+            'stage_duration_hours': _calculate_stage_duration_hours(ad_id, stage),
+            'previous_stage': _get_previous_stage(ad_id, stage),
+            'stage_performance': _get_stage_performance(ad_data, stage),
+            'transition_reason': _get_transition_reason(ad_data, stage),
         }
         
         # Insert performance data with automatic validation
