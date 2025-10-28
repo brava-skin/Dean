@@ -54,9 +54,9 @@ Dean is an **intelligent advertising automation platform** that manages your ent
 └─────────────────────────────────────────────────────────┘
 ```
 
-## 🎯 20 Advanced ML Improvements (NEW!)
+## 🎯 20 Advanced ML Improvements + Recent Fixes
 
-Dean now includes **20 cutting-edge ML enhancements** that take ad automation to the next level:
+Dean now includes **20 cutting-edge ML enhancements** plus comprehensive system fixes that make it production-ready:
 
 ### 🔴 Critical Enhancements (Game-Changers)
 
@@ -192,6 +192,21 @@ Dean now includes **20 cutting-edge ML enhancements** that take ad automation to
 - **Lookahead Bias Protection**: Ensures no future data leaks into features
 - **Anomaly Detection**: IQR-based outlier detection prevents bad data from affecting decisions
 - **Cold Start Handling**: Uses creative similarity when insufficient training data
+
+### 🔧 Recent System Fixes (October 2025)
+
+**Critical Error Resolution:**
+- ✅ **ML Model Loading** - Fixed pickle protocol errors with multiple fallback strategies
+- ✅ **Date Validation** - Centralized date validation with timezone safety and malformed date detection
+- ✅ **Timezone Handling** - Comprehensive timezone-aware datetime operations
+- ✅ **Model Management** - Gzip compression, MD5 hashing, and robust error recovery
+- ✅ **Data Validation** - Enhanced validation with graceful fallback for corrupted data
+
+**System Improvements:**
+- ✅ **Error Recovery** - Multiple fallback strategies for all critical operations
+- ✅ **Logging Enhancement** - Clear error messages and debugging information
+- ✅ **Model Cleanup** - Automatic cleanup of corrupted models without validation issues
+- ✅ **Date Parsing** - Robust handling of malformed dates and timezone issues
 
 ---
 
@@ -450,21 +465,22 @@ The ML system learns from every ad performance and makes intelligent decisions:
 
 ### Core Tables (Active)
 
-| Table | Purpose | Records |
-|-------|---------|---------|
-| `performance_metrics` | Daily performance snapshots | Growing daily |
-| `ad_lifecycle` | Ad journey across stages | One per ad |
-| `fatigue_analysis` | Ad fatigue tracking | Updated daily |
-| `creative_intelligence` | Creative performance | One per creative |
+| Table | Purpose | Records | Status |
+|-------|---------|---------|--------|
+| `performance_metrics` | Daily performance snapshots | Growing daily | ✅ Active |
+| `ad_lifecycle` | Ad journey across stages | One per ad | ✅ Active |
+| `time_series_data` | Hourly granular metrics | Growing hourly | ✅ Active |
+| `creative_intelligence` | Creative performance | One per creative | ✅ Active |
+| `historical_data` | Historical metric data | Growing daily | ✅ Active |
+| `ad_creation_times` | Ad creation timestamps | One per ad | ✅ Active |
 
 ### ML Tables (Training)
 
-| Table | Purpose | Status |
-|-------|---------|--------|
-| `ml_models` | Trained ML models | Training |
-| `ml_predictions` | Model predictions | Day 5+ |
-| `learning_events` | System learnings | Accumulating |
-| `adaptive_rules` | Dynamic thresholds | Day 30+ |
+| Table | Purpose | Status | Features |
+|-------|---------|--------|----------|
+| `ml_models` | Trained ML models | ✅ Active | Gzip compressed, MD5 hashed |
+| `ml_predictions` | Model predictions | ✅ Active | Confidence scores, intervals |
+| `learning_events` | System learnings | ✅ Active | Event tracking, impact scores |
 
 [See complete schema documentation](docs/advanced/)
 
@@ -584,18 +600,23 @@ dean/
 ├── src/
 │   ├── main.py                      # Main automation runner
 │   ├── meta_client.py               # Meta API client
-│   ├── ml_intelligence.py           # ML prediction engine
+│   ├── ml_intelligence.py           # ML prediction engine (Enhanced ⭐)
 │   ├── adaptive_rules.py            # Dynamic rule engine
 │   ├── performance_tracking.py      # Fatigue & tracking
 │   ├── ml_reporting.py              # ML-enhanced reports
-│   ├── ml_decision_engine.py        # ML-integrated decisions (NEW ⭐)
-│   ├── ml_enhancements.py           # Advanced ML capabilities (NEW ⭐)
+│   ├── ml_decision_engine.py        # ML-integrated decisions
+│   ├── ml_enhancements.py           # Advanced ML capabilities
 │   ├── rules.py                     # Business logic
 │   ├── storage.py                   # SQLite state management
 │   ├── slack.py                     # Slack notifications
 │   ├── scheduler.py                 # Background scheduling
 │   ├── utils.py                     # Helper functions
 │   ├── metrics.py                   # Performance metrics
+│   ├── infrastructure/
+│   │   ├── date_validation.py       # Centralized date validation (NEW ⭐)
+│   │   ├── data_validation.py       # Data validation schemas
+│   │   ├── supabase_storage.py      # Supabase storage layer
+│   │   └── validated_supabase.py    # Validated Supabase client
 │   └── stages/
 │       ├── testing.py               # Testing stage logic
 │       ├── validation.py            # Validation stage logic
@@ -604,6 +625,9 @@ dean/
 │   ├── settings.yaml                # Main configuration
 │   ├── rules.yaml                   # Business rules
 │   └── production.yaml              # Production config
+├── data/
+│   ├── copy_bank.json               # Creative content bank
+│   └── digests/                     # Data digests
 ├── docs/
 │   ├── API_REFERENCE.md             # API documentation
 │   ├── CONFIGURATION.md             # Config guide
@@ -748,6 +772,24 @@ Dean uses an intelligent tiered system to optimize learning budgets:
 No data available for training performance_predictor model
 ```
 → Normal for first 5 days. System needs historical data.
+
+**Model Loading Errors**
+```
+Failed to load model: could not find MARK
+```
+→ Fixed in latest version with pickle protocol support and fallback strategies
+
+**Date Parsing Errors**
+```
+Failed to parse date_start '2025-10-***'
+```
+→ Fixed with centralized date validation and malformed date detection
+
+**Timezone Comparison Errors**
+```
+can't compare offset-naive and offset-aware datetimes
+```
+→ Fixed with comprehensive timezone-aware datetime operations
 
 **Duplicate Key Constraint**
 ```
