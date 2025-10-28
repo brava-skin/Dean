@@ -604,9 +604,21 @@ class SupabaseDataValidator:
             
             'learning_events': TableValidator('learning_events', {
                 'event_type': StringValidator('event_type', required=True, max_length=100),
+                'ad_id': StringValidator('ad_id', max_length=100),
+                'lifecycle_id': StringValidator('lifecycle_id', max_length=100),
+                'from_stage': StringValidator('from_stage', max_length=50,
+                                            allowed_values=['testing', 'validation', 'scaling']),
+                'to_stage': StringValidator('to_stage', max_length=50,
+                                          allowed_values=['testing', 'validation', 'scaling']),
+                'learning_data': JSONValidator('learning_data'),
+                'confidence_score': FloatValidator('confidence_score'),
+                'impact_score': FloatValidator('impact_score'),
+                'created_at': DateValidator('created_at', date_format="%Y-%m-%dT%H:%M:%S"),
+                'model_name': StringValidator('model_name', max_length=100),
+                'event_data': JSONValidator('event_data'),
                 'stage': StringValidator('stage', required=True,
                                        allowed_values=['testing', 'validation', 'scaling']),
-                'created_at': DateValidator('created_at', date_format="%Y-%m-%dT%H:%M:%S"),
+                'timestamp': DateValidator('timestamp', date_format="%Y-%m-%dT%H:%M:%S"),
             }),
         }
     
