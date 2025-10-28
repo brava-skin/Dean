@@ -1235,6 +1235,25 @@ class XGBoostPredictor:
                 
             except Exception as e:
                 self.logger.warning(f"Failed to load model {model_key}: {e}")
+                # Clear corrupted model from database to force retraining
+                try:
+                    validated_client = self._get_validated_client()
+                    if validated_client and hasattr(validated_client, 'update'):
+                        validated_client.update(
+                            'ml_models',
+                            {'is_active': False},
+                            eq='model_type',
+                            value=model_type,
+                            eq2='stage',
+                            value2=stage
+                        )
+                    else:
+                        self.supabase.client.table('ml_models').update({'is_active': False}).eq(
+                            'model_type', model_type
+                        ).eq('stage', stage).execute()
+                    self.logger.info(f"Disabled corrupted model {model_key} for retraining")
+                except Exception as cleanup_error:
+                    self.logger.warning(f"Failed to clean up corrupted model: {cleanup_error}")
                 return False
             
             # Load scaler if available
