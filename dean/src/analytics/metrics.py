@@ -141,7 +141,9 @@ def _wilson_ci(successes: float, trials: float, z: float) -> Tuple[Optional[floa
     p = successes / trials
     denom = 1 + z * z / trials
     centre = p + z * z / (2 * trials)
-    adj = z * math.sqrt((p * (1 - p) + z * z / (4 * trials)) / trials)
+    # Ensure the value under sqrt is non-negative to avoid math domain error
+    sqrt_arg = (p * (1 - p) + z * z / (4 * trials)) / trials
+    adj = z * math.sqrt(max(0.0, sqrt_arg))
     lo = (centre - adj) / denom
     hi = (centre + adj) / denom
     return (max(0.0, lo), min(1.0, hi))

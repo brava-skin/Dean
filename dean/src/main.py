@@ -42,7 +42,7 @@ except Exception:
 
 # ML Intelligence System (NEW) - Conditional imports
 try:
-    from ml.ml_intelligence import MLIntelligenceSystem, MLConfig, create_ml_system
+    from ml.ml_intelligence import create_ml_system, MLConfig
     from rules import IntelligentRuleEngine, RuleConfig, create_intelligent_rule_engine
     from analytics import PerformanceTrackingSystem, create_performance_tracking_system
     from ml.ml_reporting import MLReportingSystem, create_ml_reporting_system
@@ -63,7 +63,7 @@ except ImportError as e:
     print("   System will run in standard mode")
     ML_AVAILABLE = False
     # Create dummy classes for compatibility
-    class MLIntelligenceSystem: pass
+    class SimpleMLIntelligenceSystem: pass
     class MLConfig: pass
     class IntelligentRuleEngine: pass
     class RuleConfig: pass
@@ -416,9 +416,6 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         
         # Insert performance data with automatic validation
         try:
-            print(f"🔧 [DEBUG] Upserting performance_metrics with on_conflict='ad_id,window_type,date_start'")
-            print(f"🔧 [DEBUG] Data keys: {list(performance_data.keys())}")
-            print(f"🔧 [DEBUG] Sample data: ad_id={performance_data.get('ad_id')}, window_type={performance_data.get('window_type')}, date_start={performance_data.get('date_start')}")
             result = validated_client.upsert(
                 'performance_metrics',
                 performance_data,
@@ -1460,8 +1457,8 @@ def main() -> None:
             supabase_url = os.getenv("SUPABASE_URL")
             supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
             
-            # Initialize core ML system
-            ml_system = create_ml_system(supabase_url, supabase_key)
+            # Initialize full ML system with database integration
+            ml_system = create_ml_system(supabase_url, supabase_key, MLConfig())
             
             # Initialize intelligent rule engine
             rule_engine_ml = create_intelligent_rule_engine(supabase_url, supabase_key, ml_system)

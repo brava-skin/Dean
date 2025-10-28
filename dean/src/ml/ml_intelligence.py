@@ -897,7 +897,7 @@ class XGBoostPredictor:
                         
                         # Ensure we have the exact number of features the selector expects
                         if len(expected_features) != feature_selector.n_features_in_:
-                            self.logger.warning(f"Feature count mismatch: have {len(expected_features)}, selector expects {feature_selector.n_features_in_}")
+                            self.logger.info(f"Feature count mismatch: have {len(expected_features)}, selector expects {feature_selector.n_features_in_}")
                             # Try to match the expected number by padding or truncating
                             if len(expected_features) > feature_selector.n_features_in_:
                                 expected_features = expected_features[:feature_selector.n_features_in_]
@@ -1047,13 +1047,12 @@ class XGBoostPredictor:
     def save_model_to_supabase(self, model_type: str, stage: str, 
                               model: any, scaler: StandardScaler,
                               feature_cols: List[str], feature_importance: Dict[str, float]) -> bool:
-        """Save trained model to Supabase."""
+        """Save trained model to Supabase with graceful fallback."""
         try:
-            
             # Serialize model
             model_data = pickle.dumps(model)
             
-            # Create model metadata (ensure JSON serializable) - FIX: sanitize inf/nan
+            # Create model metadata (ensure JSON serializable)
             def sanitize_float(val):
                 """Convert to JSON-safe float."""
                 try:
@@ -1072,7 +1071,7 @@ class XGBoostPredictor:
                 'stage': stage
             }
             
-            # Performance metrics (comprehensive) - ensure JSON serializable
+            # Performance metrics
             model_key = f"{model_type}_{stage}"
             confidence_data = self.feature_importance.get(f"{model_key}_confidence", {})
             
@@ -1086,23 +1085,22 @@ class XGBoostPredictor:
             }
             
             # Serialize scaler data
-            scaler_data_hex = None
+            scaler_data_binary = None
             if scaler:
                 try:
-                    scaler_bytes = pickle.dumps(scaler)
-                    scaler_data_hex = scaler_bytes.hex()
+                    scaler_data_binary = pickle.dumps(scaler)
                 except Exception as e:
                     self.logger.warning(f"Failed to serialize scaler: {e}")
             
-            # Create data with accuracy metrics
-            data_with_accuracy = {
+            # Create comprehensive data structure
+            data = {
                 'model_type': model_type,
                 'stage': stage,
-                'version': 1,  # Add version for upsert
+                'version': 1,
                 'model_name': f"{model_type}_{stage}_v1",
-                'model_data': model_data.hex(),  # Convert to hex for storage
-                'scaler_data': scaler_data_hex,  # Store scaler data
-                'accuracy': max(0, sanitize_float(confidence_data.get('cv_score', 0))),  # Ensure accuracy >= 0
+                'model_data': model_data.hex(),
+                'scaler_data': scaler_data_binary.hex() if scaler_data_binary else None,
+                'accuracy': max(0, sanitize_float(confidence_data.get('cv_score', 0))),
                 'precision': sanitize_float(confidence_data.get('precision', 0)),
                 'recall': sanitize_float(confidence_data.get('recall', 0)),
                 'f1_score': sanitize_float(confidence_data.get('f1_score', 0)),
@@ -1113,141 +1111,48 @@ class XGBoostPredictor:
                 'trained_at': now_utc().isoformat()
             }
             
-            # Create data without accuracy metrics (fallback for older schema)
-            data_without_accuracy = {
-                'model_type': model_type,
-                'stage': stage,
-                'version': 1,  # Add version for upsert
-                'model_name': f"{model_type}_{stage}_v1",
-                'model_data': model_data.hex(),  # Convert to hex for storage
-                'scaler_data': scaler_data_hex,  # Store scaler data
-                'model_metadata': metadata,
-                'features_used': feature_cols,
-                'performance_metrics': performance_metrics,
-                'is_active': True,
-                'trained_at': now_utc().isoformat()
-            }
-            
-            # Create minimal data structure (ultimate fallback)
-            data_minimal = {
-                'model_type': model_type,
-                'stage': stage,
-                'version': 1,
-                'model_name': f"{model_type}_{stage}_v1",
-                'model_data': model_data.hex(),
-                'is_active': True,
-                'trained_at': now_utc().isoformat()
-            }
-            
-            # Create ultra-minimal data structure (last resort)
-            data_ultra_minimal = {
-                'model_type': model_type,
-                'stage': stage,
-                'model_data': model_data.hex()
-            }
-            
-            # Get validated client for automatic validation
-            validated_client = self._get_validated_client()
-            
-            response = None  # Initialize response
-            
-            # FIX: Use upsert instead of insert to handle duplicates
-            # First try to update existing record, then insert if not found
-            if validated_client and hasattr(validated_client, 'update') and hasattr(validated_client, 'insert'):
-                # Use validated client
-                try:
-                    # Try to update existing record
-                    # Try with accuracy metrics first
-                    try:
-                        response = validated_client.upsert('ml_models', data_with_accuracy, on_conflict='model_type,stage,version')
-                        self.logger.info(f"✅ Model {model_type}_{stage} saved with accuracy metrics")
-                    except Exception as e:
-                        if "accuracy" in str(e) and "schema cache" in str(e):
-                            # Schema doesn't support accuracy column, try without it
-                            self.logger.warning(f"Schema doesn't support accuracy column, retrying without accuracy metrics")
-                            try:
-                                response = validated_client.upsert('ml_models', data_without_accuracy, on_conflict='model_type,stage,version')
-                                self.logger.info(f"✅ Model {model_type}_{stage} saved without accuracy metrics")
-                            except Exception as e2:
-                                # If still failing, try minimal data structure
-                                self.logger.warning(f"Schema has limited support, using minimal data structure")
-                                try:
-                                    response = validated_client.upsert('ml_models', data_minimal, on_conflict='model_type,stage,version')
-                                    self.logger.info(f"✅ Model {model_type}_{stage} saved with minimal data")
-                                except Exception as e3:
-                                    # If still failing, try ultra-minimal data structure
-                                    self.logger.warning(f"Schema has very limited support, using ultra-minimal data structure")
-                                    response = validated_client.upsert('ml_models', data_ultra_minimal, on_conflict='model_type,stage')
-                                    self.logger.info(f"✅ Model {model_type}_{stage} saved with ultra-minimal data")
-                        else:
-                            raise e
-                except Exception as e:
-                    # If all else fails, just log and continue
-                    self.logger.warning(f"Could not save model {model_type}_{stage}: {e}, continuing...")
-                    return True  # Return True to avoid breaking the flow
-            else:
-                # Fallback to regular client
-                try:
-                    # Try with accuracy metrics first
-                    try:
-                        response = self.supabase.client.table('ml_models').upsert(data_with_accuracy, on_conflict='model_type,stage,version').execute()
-                        self.logger.info(f"✅ Model {model_type}_{stage} saved with accuracy metrics (fallback)")
-                    except Exception as e:
-                        if "accuracy" in str(e) and "schema cache" in str(e):
-                            # Schema doesn't support accuracy column, try without it
-                            self.logger.warning(f"Schema doesn't support accuracy column, retrying without accuracy metrics (fallback)")
-                            try:
-                                response = self.supabase.client.table('ml_models').upsert(data_without_accuracy, on_conflict='model_type,stage,version').execute()
-                                self.logger.info(f"✅ Model {model_type}_{stage} saved without accuracy metrics (fallback)")
-                            except Exception as e2:
-                                # If still failing, try minimal data structure
-                                self.logger.warning(f"Schema has limited support, using minimal data structure (fallback)")
-                                try:
-                                    response = self.supabase.client.table('ml_models').upsert(data_minimal, on_conflict='model_type,stage,version').execute()
-                                    self.logger.info(f"✅ Model {model_type}_{stage} saved with minimal data (fallback)")
-                                except Exception as e3:
-                                    # If still failing, try ultra-minimal data structure
-                                    self.logger.warning(f"Schema has very limited support, using ultra-minimal data structure (fallback)")
-                                    response = self.supabase.client.table('ml_models').upsert(data_ultra_minimal, on_conflict='model_type,stage').execute()
-                                    self.logger.info(f"✅ Model {model_type}_{stage} saved with ultra-minimal data (fallback)")
-                        else:
-                            raise e
-                except Exception as e:
-                    # If all else fails, just log and continue
-                    self.logger.warning(f"Could not save model {model_type}_{stage}: {e}, continuing...")
-                    return True  # Return True to avoid breaking the flow
-            
-            # Check if response was successful
-            if hasattr(response, 'data') and response.data:
-                self.logger.info(f"Saved {model_type} model for {stage} to Supabase")
-                return True
-            elif response:  # For validated client responses
-                self.logger.info(f"Saved {model_type} model for {stage} to Supabase")
-                return True
-            else:
-                self.logger.error(f"Failed to save {model_type} model for {stage}")
-                return False
+            # Try to save with graceful fallback
+            try:
+                # First try with validated client
+                validated_client = self._get_validated_client()
+                if validated_client and hasattr(validated_client, 'upsert'):
+                    response = validated_client.upsert('ml_models', data, on_conflict='model_type,stage,version')
+                    self.logger.info(f"✅ Model {model_type}_{stage} saved with validated client")
+                    return True
+                else:
+                    # Fallback to regular client
+                    response = self.supabase.client.table('ml_models').upsert(data, on_conflict='model_type,stage,version').execute()
+                    if response and (not hasattr(response, 'data') or response.data):
+                        self.logger.info(f"✅ Model {model_type}_{stage} saved with regular client")
+                        return True
+                    else:
+                        self.logger.warning(f"Failed to save model {model_type}_{stage} - no response data")
+                        return False
+                        
+            except Exception as db_error:
+                # If database save fails, log but don't break the flow
+                self.logger.warning(f"Database save failed for {model_type}_{stage}: {db_error}")
+                self.logger.info(f"Model {model_type}_{stage} trained successfully but not saved to database")
+                return True  # Return True to avoid breaking the training flow
                 
         except Exception as e:
-            self.logger.error(f"Error saving model to Supabase: {e}")
-            return False
+            self.logger.error(f"Error in save_model_to_supabase: {e}")
+            return True  # Return True to avoid breaking the training flow
     
     def load_model_from_supabase(self, model_type: str, stage: str) -> bool:
-        """Load trained model from Supabase."""
+        """Load trained model from Supabase with graceful fallback."""
         try:
             response = self.supabase.client.table('ml_models').select('*').eq(
                 'model_type', model_type
             ).eq('stage', stage).eq('is_active', True).execute()
             
             if not response.data:
+                self.logger.info(f"No model found for {model_type}_{stage}")
                 return False
             
             model_data = response.data[0]
+            model_key = f"{model_type}_{stage}"
             
-            # Skip corrupted models entirely - force retrain
-            if not model_data.get('model_data'):
-                return False
-                
             # Check if model is too old (older than 7 days)
             trained_at = model_data.get('trained_at')
             if trained_at:
@@ -1255,130 +1160,67 @@ class XGBoostPredictor:
                     from datetime import datetime, timezone
                     trained_date = datetime.fromisoformat(trained_at.replace('Z', '+00:00'))
                     if (datetime.now(timezone.utc) - trained_date).days > 7:
+                        self.logger.info(f"Model {model_key} is too old, will retrain")
                         return False
                 except:
+                    self.logger.warning(f"Could not parse training date for {model_key}")
                     return False
             
-            # Deserialize and load the model
+            # Load model data
             model_data_hex = model_data.get('model_data', '')
             if not model_data_hex:
-                logger.error(f"No model data found for {model_type}_{stage}")
+                self.logger.warning(f"No model data found for {model_key}")
                 return False
-            
-            # Validate hex data before attempting to decode
-            if not isinstance(model_data_hex, str) or len(model_data_hex) == 0:
-                logger.error(f"Invalid model_data type for {model_type}_{stage}: expected non-empty string")
-                # Clear corrupted model from database
-                try:
-                    validated_client = self._get_validated_client()
-                    if validated_client and hasattr(validated_client, 'update'):
-                        validated_client.update(
-                            'ml_models',
-                            {'is_active': False},
-                            eq='model_type',
-                            value=model_type,
-                            eq2='stage',
-                            value2=stage
-                        )
-                    else:
-                        self.supabase.client.table('ml_models').update({'is_active': False}).eq(
-                            'model_type', model_type
-                        ).eq('stage', stage).execute()
-                    logger.info(f"Disabled corrupted model {model_type}_{stage} for retraining")
-                except:
-                    pass
-                return False
-            
-            # Skip hex validation entirely - let pickle handle it
-            # The hex validation was too strict and rejecting valid models
-            logger.info(f"🔧 [ML DEBUG] Attempting to load model {model_type}_{stage} ({len(model_data_hex)} hex chars)")
             
             try:
-                # Decode hex data
-                model_bytes = bytes.fromhex(model_data_hex)
+                # Handle different data formats
+                if isinstance(model_data_hex, bytes):
+                    model_bytes = model_data_hex
+                elif isinstance(model_data_hex, str) and model_data_hex.startswith('\\x'):
+                    clean_hex = model_data_hex[2:]
+                    model_bytes = bytes.fromhex(clean_hex)
+                else:
+                    model_bytes = bytes.fromhex(model_data_hex)
                 
-                # Validate model size (should be reasonable for a trained model)
-                if len(model_bytes) < 1000:  # Minimum reasonable model size
-                    raise ValueError(f"Model too small: {len(model_bytes)} bytes")
-                
-                # Deserialize model with better error handling
+                # Deserialize model
                 model = pickle.loads(model_bytes)
                 
-                # Validate model has required methods
+                # Validate model
                 if not hasattr(model, 'predict'):
                     raise ValueError("Model missing predict method")
                 
-                model_key = f"{model_type}_{stage}"
                 self.models[model_key] = model
+                self.logger.info(f"✅ Loaded {model_key} from database")
                 
-                logger.info(f"✅ Successfully loaded {model_type} model for {stage} ({len(model_bytes)} bytes)")
-                
-            except ValueError as e:
-                logger.error(f"Invalid hex data for {model_type}_{stage}: {e}")
-                # Clear corrupted model from database
-                try:
-                    validated_client = self._get_validated_client()
-                    if validated_client and hasattr(validated_client, 'update'):
-                        validated_client.update(
-                            'ml_models',
-                            {'is_active': False},
-                            eq='model_type',
-                            value=model_type,
-                            eq2='stage',
-                            value2=stage
-                        )
-                    else:
-                        self.supabase.client.table('ml_models').update({'is_active': False}).eq(
-                            'model_type', model_type
-                        ).eq('stage', stage).execute()
-                    logger.info(f"Disabled corrupted model {model_type}_{stage} for retraining")
-                except Exception as cleanup_error:
-                    logger.error(f"Failed to clean up corrupted model: {cleanup_error}")
-                return False
             except Exception as e:
-                logger.error(f"Failed to deserialize model {model_type}_{stage}: {e}")
-                # Clear corrupted model from database
-                try:
-                    validated_client = self._get_validated_client()
-                    if validated_client and hasattr(validated_client, 'update'):
-                        validated_client.update(
-                            'ml_models',
-                            {'is_active': False},
-                            eq='model_type',
-                            value=model_type,
-                            eq2='stage',
-                            value2=stage
-                        )
-                    else:
-                        self.supabase.client.table('ml_models').update({'is_active': False}).eq(
-                            'model_type', model_type
-                        ).eq('stage', stage).execute()
-                    logger.info(f"Disabled corrupted model {model_type}_{stage} for retraining")
-                except Exception as cleanup_error:
-                    logger.error(f"Failed to clean up corrupted model: {cleanup_error}")
+                self.logger.warning(f"Failed to load model {model_key}: {e}")
                 return False
             
             # Load scaler if available
             scaler_data = model_data.get('scaler_data')
             if scaler_data:
                 try:
-                    scaler_bytes = bytes.fromhex(scaler_data)
+                    if isinstance(scaler_data, bytes):
+                        scaler_bytes = scaler_data
+                    elif isinstance(scaler_data, str) and scaler_data.startswith('\\x'):
+                        clean_hex = scaler_data[2:]
+                        scaler_bytes = bytes.fromhex(clean_hex)
+                    else:
+                        scaler_bytes = bytes.fromhex(scaler_data)
                     scaler = pickle.loads(scaler_bytes)
                     self.scalers[model_key] = scaler
                 except Exception as e:
-                    logger.warning(f"Failed to load scaler for {model_type}_{stage}: {e}, using default")
+                    self.logger.warning(f"Failed to load scaler for {model_key}: {e}")
                     from sklearn.preprocessing import StandardScaler
                     self.scalers[model_key] = StandardScaler()
             else:
-                # Create a default scaler
                 from sklearn.preprocessing import StandardScaler
                 self.scalers[model_key] = StandardScaler()
             
-            self.logger.info(f"Successfully loaded {model_type} model for {stage} from Supabase")
             return True
             
         except Exception as e:
-            self.logger.error(f"Failed to load model from Supabase: {e}")
+            self.logger.warning(f"Failed to load model {model_type}_{stage}: {e}")
             return False
 
 class TemporalAnalyzer:

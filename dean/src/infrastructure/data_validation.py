@@ -669,7 +669,11 @@ class SupabaseDataValidator:
         if value is None or value == '':
             return errors
         
-        if isinstance(value, str):
+        if isinstance(value, bytes):
+            # Binary data - check minimum size
+            if len(value) < 1000:  # Minimum reasonable model size
+                errors.append("Model data appears too small")
+        elif isinstance(value, str):
             # Check if it's valid hex
             try:
                 bytes.fromhex(value)
@@ -678,16 +682,19 @@ class SupabaseDataValidator:
             except ValueError:
                 errors.append("Model data must be valid hex string")
         else:
-            errors.append("Model data must be a hex string")
+            errors.append("Model data must be a hex string or binary data")
         
         return errors
     
-    def _sanitize_model_data(self, value: Any) -> Optional[str]:
+    def _sanitize_model_data(self, value: Any) -> Any:
         """Sanitize model data."""
         if value is None or value == '':
             return None
         
-        if isinstance(value, str):
+        if isinstance(value, bytes):
+            # Return binary data as-is
+            return value
+        elif isinstance(value, str):
             try:
                 # Validate hex and return
                 bytes.fromhex(value)
