@@ -58,13 +58,37 @@ class SupabaseStorage:
     def get_ad_creation_time(self, ad_id: str) -> Optional[datetime]:
         """Get when an ad was created."""
         try:
-            response = self.client.table('ad_creation_times').select('created_at_epoch').eq(
+            # Try to get from ad_creation_times table first
+            response = self.client.table('ad_creation_times').select('created_at_iso, created_at_epoch').eq(
                 'ad_id', ad_id
             ).execute()
             
             if response.data:
-                epoch = response.data[0]['created_at_epoch']
-                return datetime.fromtimestamp(epoch, timezone.utc)
+                data = response.data[0]
+                # Prefer created_at_iso as it's more reliable
+                if 'created_at_iso' in data and data['created_at_iso']:
+                    try:
+                        return datetime.fromisoformat(data['created_at_iso'].replace('Z', '+00:00'))
+                    except:
+                        pass
+                
+                # Fallback to epoch if iso parsing fails
+                if 'created_at_epoch' in data and data['created_at_epoch']:
+                    epoch = data['created_at_epoch']
+                    return datetime.fromtimestamp(epoch, timezone.utc)
+            
+            # If not found in ad_creation_times, try ad_lifecycle table
+            response = self.client.table('ad_lifecycle').select('created_at').eq(
+                'ad_id', ad_id
+            ).order('created_at', desc=False).limit(1).execute()
+            
+            if response.data:
+                created_at_str = response.data[0]['created_at']
+                try:
+                    return datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
+                except:
+                    pass
+            
             return None
             
         except Exception as e:
