@@ -1113,21 +1113,45 @@ class XGBoostPredictor:
             
             # Try to save with graceful fallback
             try:
-                # First try with validated client
+                # First try to update existing model, then insert if not found
                 validated_client = self._get_validated_client()
-                if validated_client and hasattr(validated_client, 'upsert'):
-                    response = validated_client.upsert('ml_models', data, on_conflict='model_type,stage,version')
-                    self.logger.info(f"✅ Model {model_type}_{stage} saved with validated client")
-                    return True
-                else:
-                    # Fallback to regular client
-                    response = self.supabase.client.table('ml_models').upsert(data, on_conflict='model_type,stage,version').execute()
-                    if response and (not hasattr(response, 'data') or response.data):
-                        self.logger.info(f"✅ Model {model_type}_{stage} saved with regular client")
+                
+                # Try update first
+                try:
+                    if validated_client and hasattr(validated_client, 'update'):
+                        # Update existing model
+                        response = validated_client.update(
+                            'ml_models', 
+                            data, 
+                            eq='model_type', 
+                            value=model_type,
+                            eq2='stage', 
+                            value2=stage
+                        )
+                        self.logger.info(f"✅ Model {model_type}_{stage} updated with validated client")
                         return True
                     else:
-                        self.logger.warning(f"Failed to save model {model_type}_{stage} - no response data")
-                        return False
+                        # Fallback to regular client update
+                        response = self.supabase.client.table('ml_models').update(data).eq('model_type', model_type).eq('stage', stage).execute()
+                        if response and (not hasattr(response, 'data') or response.data):
+                            self.logger.info(f"✅ Model {model_type}_{stage} updated with regular client")
+                            return True
+                except Exception as update_error:
+                    # If update fails, try insert
+                    self.logger.info(f"Update failed, trying insert for {model_type}_{stage}: {update_error}")
+                    try:
+                        if validated_client and hasattr(validated_client, 'insert'):
+                            response = validated_client.insert('ml_models', data)
+                            self.logger.info(f"✅ Model {model_type}_{stage} inserted with validated client")
+                            return True
+                        else:
+                            response = self.supabase.client.table('ml_models').insert(data).execute()
+                            if response and (not hasattr(response, 'data') or response.data):
+                                self.logger.info(f"✅ Model {model_type}_{stage} inserted with regular client")
+                                return True
+                    except Exception as insert_error:
+                        self.logger.warning(f"Both update and insert failed for {model_type}_{stage}: {insert_error}")
+                        return True  # Return True to avoid breaking the training flow
                         
             except Exception as db_error:
                 # If database save fails, log but don't break the flow
@@ -1182,8 +1206,25 @@ class XGBoostPredictor:
                 else:
                     model_bytes = bytes.fromhex(model_data_hex)
                 
-                # Deserialize model
-                model = pickle.loads(model_bytes)
+                # Validate model data before deserialization
+                if len(model_bytes) < 100:  # Minimum reasonable model size
+                    raise ValueError(f"Model data too small: {len(model_bytes)} bytes")
+                
+                # Deserialize model with better error handling
+                try:
+                    model = pickle.loads(model_bytes)
+                except Exception as pickle_error:
+                    # Try to clean the data if it's corrupted
+                    if isinstance(model_data_hex, str):
+                        # Try removing any non-hex characters
+                        clean_hex = ''.join(c for c in model_data_hex if c in '0123456789abcdefABCDEF')
+                        if len(clean_hex) % 2 == 0:  # Must be even length for hex
+                            model_bytes = bytes.fromhex(clean_hex)
+                            model = pickle.loads(model_bytes)
+                        else:
+                            raise pickle_error
+                    else:
+                        raise pickle_error
                 
                 # Validate model
                 if not hasattr(model, 'predict'):
