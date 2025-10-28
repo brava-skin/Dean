@@ -20,6 +20,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 import warnings
+from infrastructure.date_validation import date_validator, validate_all_timestamps
 
 import numpy as np
 import pandas as pd
@@ -403,6 +404,9 @@ class SupabaseMLClient:
                 'model_name': model_name
             }
             
+            # Validate all timestamps in prediction data
+            data = validate_all_timestamps(data)
+            
             # Get validated client for automatic validation
             validated_client = self._get_validated_client()
             
@@ -541,6 +545,9 @@ class SupabaseMLClient:
                 'stage': event.stage,
                 'timestamp': now.isoformat()
             }
+            
+            # Validate all timestamps in learning event data
+            data = validate_all_timestamps(data)
             
             # Get validated client for automatic validation
             validated_client = self._get_validated_client()
@@ -1298,6 +1305,9 @@ class XGBoostPredictor:
                 'is_active': True,
                 'trained_at': now_utc().isoformat()
             }
+            
+            # Validate all timestamps in ML model data
+            data = validate_all_timestamps(data)
             
             # Try to save with graceful fallback
             try:

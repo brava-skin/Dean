@@ -93,6 +93,7 @@ except ImportError as e:
 # Legacy modules (updated for ML integration)
 from infrastructure import Store
 from infrastructure.supabase_storage import create_supabase_storage
+from infrastructure.date_validation import date_validator, validate_all_timestamps
 from integrations import notify, post_run_header_and_get_thread_ts, post_thread_ads_snapshot, prettify_ad_name, fmt_eur, fmt_pct, fmt_roas, fmt_int
 from integrations import MetaClient, AccountAuth, ClientConfig
 from rules.rules import AdvancedRuleEngine as RuleEngine
@@ -687,6 +688,9 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             'transition_reason': _get_transition_reason(ad_data, stage),
         }
         
+        # Validate all timestamps in performance data
+        performance_data = validate_all_timestamps(performance_data)
+        
         # Insert performance data with automatic validation
         try:
             result = validated_client.upsert(
@@ -860,6 +864,9 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                     'metadata': metadata
                 }
                 
+                # Validate all timestamps in creative intelligence data
+                creative_data = validate_all_timestamps(creative_data)
+                
                 # Insert creative intelligence data with automatic validation
                 result = validated_client.insert('creative_intelligence', creative_data)
                 if result:
@@ -997,6 +1004,9 @@ def store_timeseries_data_in_supabase(supabase_client, ad_id: str, ad_data: Dict
                     'values': values,
                     'trend_direction': trend_direction
                 }
+                
+                # Validate all timestamps in time series data
+                timeseries_data = validate_all_timestamps(timeseries_data)
                 
                 # Get validated client for automatic validation
                 validated_client = _get_validated_supabase()

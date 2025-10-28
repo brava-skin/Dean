@@ -7,6 +7,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 import logging
 import random
+from .date_validation import date_validator, validate_all_timestamps
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,9 @@ class SupabaseStorage:
                 'updated_at': now.isoformat(),
                 'created_at': created_at.isoformat()  # Add created_at field for consistency
             }
+            
+            # Validate all timestamps in ad creation data
+            data = validate_all_timestamps(data)
             
             # Use upsert to handle duplicates with validation
             try:
@@ -197,6 +201,9 @@ class SupabaseStorage:
                 'created_at': timestamp.isoformat(),
                 'recorded_at': now.isoformat()  # When we actually recorded it
             }
+            
+            # Validate all timestamps in historical data
+            data = validate_all_timestamps(data)
             
             # Insert with validation
             try:
