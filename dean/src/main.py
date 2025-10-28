@@ -708,7 +708,13 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             'stage': stage,
             'status': ad_data.get('status', 'active'),
             'lifecycle_id': ad_data.get('lifecycle_id', ''),
-            'metadata': ad_data.get('metadata', {})
+            'metadata': ad_data.get('metadata', {}),
+            'next_stage': _get_next_stage(stage),
+            'stage_duration_hours': _calculate_stage_duration_hours(ad_id, stage),
+            'previous_stage': _get_previous_stage(ad_id, stage),
+            'stage_performance': _get_stage_performance(ad_data, stage),
+            'transition_reason': _get_transition_reason(ad_data, stage),
+            'stage_entry_time': datetime.now().isoformat()
         }
         
         # Insert lifecycle data with automatic validation
@@ -851,7 +857,7 @@ def collect_stage_ad_data(meta_client, settings: Dict[str, Any], stage: str) -> 
         # Get all active ads from account insights (more reliable than stage-specific adsets)
         insights_data = meta_client.get_ad_insights(level="ad", fields=[
             "ad_id", "spend", "impressions", "clicks", "ctr", "cpc", "cpm", 
-            "actions", "campaign_name", "adset_name"
+            "actions", "campaign_name", "adset_name", "campaign_id", "adset_id", "creative_id"
         ], date_preset="today")
         
         if insights_data:
@@ -874,6 +880,9 @@ def collect_stage_ad_data(meta_client, settings: Dict[str, Any], stage: str) -> 
                         "lifecycle_id": f"lifecycle_{ad_id}",
                         "stage": stage,  # We'll determine the actual stage later if needed
                         "status": "active",
+                        "creative_id": insight.get("creative_id", ""),
+                        "campaign_id": insight.get("campaign_id", ""),
+                        "adset_id": insight.get("adset_id", ""),
                         "spend": float(insight.get("spend", 0)),
                         "impressions": int(insight.get("impressions", 0)),
                         "clicks": int(insight.get("clicks", 0)),
