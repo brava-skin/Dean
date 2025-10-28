@@ -1410,15 +1410,33 @@ class XGBoostPredictor:
                 
                 # Deserialize model with better error handling
                 try:
-                    model = pickle.loads(model_bytes)
+                    # Try to decompress if it's compressed
+                    try:
+                        import gzip
+                        decompressed = gzip.decompress(model_bytes)
+                        model = pickle.loads(decompressed)
+                    except:
+                        # If decompression fails, try direct deserialization
+                        model = pickle.loads(model_bytes)
                 except Exception as pickle_error:
+                    self.logger.warning(f"Model deserialization failed for {model_key}: {pickle_error}")
                     # Try to clean the data if it's corrupted
                     if isinstance(model_data_hex, str):
                         # Try removing any non-hex characters
                         clean_hex = ''.join(c for c in model_data_hex if c in '0123456789abcdefABCDEF')
                         if len(clean_hex) % 2 == 0:  # Must be even length for hex
-                            model_bytes = bytes.fromhex(clean_hex)
-                            model = pickle.loads(model_bytes)
+                            try:
+                                model_bytes = bytes.fromhex(clean_hex)
+                                # Try decompression again
+                                try:
+                                    import gzip
+                                    decompressed = gzip.decompress(model_bytes)
+                                    model = pickle.loads(decompressed)
+                                except:
+                                    model = pickle.loads(model_bytes)
+                            except Exception as retry_error:
+                                self.logger.error(f"Failed to clean and deserialize model {model_key}: {retry_error}")
+                                raise pickle_error
                         else:
                             raise pickle_error
                     else:
@@ -1436,20 +1454,22 @@ class XGBoostPredictor:
                 # Clear corrupted model from database to force retraining
                 try:
                     validated_client = self._get_validated_client()
-                    if validated_client and hasattr(validated_client, 'update'):
-                        validated_client.update(
+                    if validated_client and hasattr(validated_client, 'delete'):
+                        # Delete the corrupted model entirely
+                        validated_client.delete(
                             'ml_models',
-                            {'is_active': False},
                             eq='model_type',
                             value=model_type,
                             eq2='stage',
                             value2=stage
                         )
+                        self.logger.info(f"Deleted corrupted model {model_key} for retraining")
                     else:
-                        self.supabase.client.table('ml_models').update({'is_active': False}).eq(
+                        # Fallback to regular client
+                        self.supabase.client.table('ml_models').delete().eq(
                             'model_type', model_type
                         ).eq('stage', stage).execute()
-                    self.logger.info(f"Disabled corrupted model {model_key} for retraining")
+                        self.logger.info(f"Deleted corrupted model {model_key} for retraining")
                 except Exception as cleanup_error:
                     self.logger.warning(f"Failed to clean up corrupted model: {cleanup_error}")
                 return False
