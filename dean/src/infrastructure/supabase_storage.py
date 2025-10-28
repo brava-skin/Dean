@@ -3,9 +3,10 @@ Supabase-based storage for ad creation times and historical data.
 This replaces SQLite storage to ensure ML system has access to all data.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 import logging
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -112,17 +113,37 @@ class SupabaseStorage:
         if timestamp is None:
             timestamp = datetime.now(timezone.utc)
         
-        # Helper function to safely convert and bound numeric values
+        # Helper function to safely convert and bound numeric values with realistic limits
         def safe_float(value, max_val=999999999.99):
             try:
                 val = float(value or 0)
                 # Handle infinity and NaN
                 if not (val == val) or val == float('inf') or val == float('-inf'):
                     return 0.0
+                
+                # Apply realistic bounds based on metric type
+                if metric_name == 'cpm':
+                    max_val = 1000.0  # CPM should be reasonable
+                elif metric_name == 'ctr':
+                    max_val = 100.0   # CTR as percentage
+                elif metric_name == 'cpa':
+                    max_val = 1000.0  # CPA should be reasonable
+                elif metric_name == 'roas':
+                    max_val = 100.0   # ROAS multiplier
+                elif metric_name in ['impressions', 'clicks', 'purchases', 'add_to_cart']:
+                    max_val = 1000000.0  # Count metrics can be higher
+                elif metric_name == 'spend':
+                    max_val = 100000.0   # Spend in dollars
+                
                 # Bound the value to prevent overflow
-                return min(max(val, -max_val), max_val)
+                return min(max(val, 0.0), max_val)  # Most metrics shouldn't be negative
             except (ValueError, TypeError):
                 return 0.0
+        
+        # Ensure timestamp is in the past (not future)
+        now = datetime.now(timezone.utc)
+        if timestamp > now:
+            timestamp = now - timedelta(minutes=random.randint(1, 60))  # Random time in last hour
         
         try:
             data = {
@@ -133,7 +154,8 @@ class SupabaseStorage:
                 'metric_value': safe_float(metric_value),
                 'ts_epoch': int(timestamp.timestamp()),
                 'ts_iso': timestamp.isoformat(),
-                'created_at': timestamp.isoformat()
+                'created_at': timestamp.isoformat(),
+                'recorded_at': now.isoformat()  # When we actually recorded it
             }
             
             # Insert with validation
