@@ -1887,14 +1887,24 @@ class MLIntelligenceSystem:
                 
                 # Check if model exists and is recent (< 24h old)
                 if not force_retrain and self._should_use_cached_model(model_type, stage):
-                    if self.predictor.load_model_from_supabase(model_type, stage):
-                        cached_count += 1
-                        success_count += 1
-                        self.logger.info(f"✅ Loaded cached {model_type} for {stage}")
-                        continue
-                    else:
-                        # Cached model failed to load, try to train new one
-                        self.logger.info(f"🔄 Cached model failed to load, attempting to train {model_type} for {stage}")
+                    try:
+                        if self.predictor.load_model_from_supabase(model_type, stage):
+                            cached_count += 1
+                            success_count += 1
+                            self.logger.info(f"✅ Loaded cached {model_type} for {stage}")
+                            continue
+                        else:
+                            # Cached model failed to load, try to train new one
+                            self.logger.info(f"🔄 Cached model failed to load, attempting to train {model_type} for {stage}")
+                            trained = self.predictor.train_model(model_type, stage, target)
+                            if trained:
+                                success_count += 1
+                                self.logger.info(f"✅ Trained new {model_type} for {stage}")
+                            else:
+                                self.logger.info(f"ℹ️ No data available for {model_type} {stage} - will train later when data is available")
+                    except Exception as e:
+                        # Model loading failed, try to train new one
+                        self.logger.info(f"🔄 Model loading failed for {model_type} {stage}: {e}, attempting to train new one")
                         trained = self.predictor.train_model(model_type, stage, target)
                         if trained:
                             success_count += 1
@@ -2094,7 +2104,8 @@ def create_ml_system(supabase_url: str, supabase_key: str,
                     config: Optional[MLConfig] = None) -> MLIntelligenceSystem:
     """Create and initialize ML intelligence system."""
     system = MLIntelligenceSystem(supabase_url, supabase_key, config)
-    system.initialize_models()
+    # Don't initialize models during creation - let them be trained when needed
+    # system.initialize_models()
     return system
 
 def analyze_ad_performance(ml_system: MLIntelligenceSystem, 
