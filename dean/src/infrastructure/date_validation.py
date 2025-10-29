@@ -50,7 +50,7 @@ class DateValidator:
             try:
                 # Check for malformed dates with asterisks or other invalid characters
                 if ('*' in date_value or '***' in date_value or 
-                    len(date_value) < 10 or 
+                    len(date_value) < 8 or  # Reduced from 10 to allow YYYY-MM-DD format
                     date_value.count('-') < 2 or
                     not any(c.isdigit() for c in date_value)):
                     self.logger.warning(f"Malformed date {field_name} '{date_value}', using current timestamp")

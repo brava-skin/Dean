@@ -817,8 +817,8 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                     fatigue_index += 0.4
                 fatigue_index = min(fatigue_index, 1.0)
                 
-                # Generate similarity vector (512 dimensions)
-                similarity_vector = [random.uniform(-1, 1) for _ in range(512)]
+                # Generate similarity vector (384 dimensions to match validation)
+                similarity_vector = [random.uniform(-1, 1) for _ in range(384)]
                 
                 # Enhanced metadata
                 metadata = {
