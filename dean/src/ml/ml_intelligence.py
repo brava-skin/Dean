@@ -1336,11 +1336,13 @@ class XGBoostPredictor:
             try:
                 # First try to update existing model, then insert if not found
                 validated_client = self._get_validated_client()
+                self.logger.info(f"🔧 Using validated client: {validated_client is not None}")
                 
                 # Try update first
                 try:
                     if validated_client and hasattr(validated_client, 'update'):
                         # Update existing model
+                        self.logger.info(f"🔧 Attempting update with validated client for {model_type}_{stage}")
                         response = validated_client.update(
                             'ml_models', 
                             data, 
@@ -1353,36 +1355,43 @@ class XGBoostPredictor:
                         return True
                     else:
                         # Fallback to regular client update
+                        self.logger.info(f"🔧 Attempting update with regular client for {model_type}_{stage}")
                         response = self.supabase.client.table('ml_models').update(data).eq('model_type', model_type).eq('stage', stage).execute()
                         if response and (not hasattr(response, 'data') or response.data):
                             self.logger.info(f"✅ Model {model_type}_{stage} updated with regular client")
                             return True
+                        else:
+                            self.logger.warning(f"Update returned no data for {model_type}_{stage}")
                 except Exception as update_error:
                     # If update fails, try insert
                     self.logger.info(f"Update failed, trying insert for {model_type}_{stage}: {update_error}")
                     try:
                         if validated_client and hasattr(validated_client, 'insert'):
+                            self.logger.info(f"🔧 Attempting insert with validated client for {model_type}_{stage}")
                             response = validated_client.insert('ml_models', data)
                             self.logger.info(f"✅ Model {model_type}_{stage} inserted with validated client")
                             return True
                         else:
+                            self.logger.info(f"🔧 Attempting insert with regular client for {model_type}_{stage}")
                             response = self.supabase.client.table('ml_models').insert(data).execute()
                             if response and (not hasattr(response, 'data') or response.data):
                                 self.logger.info(f"✅ Model {model_type}_{stage} inserted with regular client")
                                 return True
+                            else:
+                                self.logger.warning(f"Insert returned no data for {model_type}_{stage}")
                     except Exception as insert_error:
                         self.logger.error(f"Both update and insert failed for {model_type}_{stage}: {insert_error}")
                         return False  # Return False to indicate save failure
                         
             except Exception as db_error:
-                # If database save fails, log but don't break the flow
-                self.logger.warning(f"Database save failed for {model_type}_{stage}: {db_error}")
-                self.logger.info(f"Model {model_type}_{stage} trained successfully but not saved to database")
-                return True  # Return True to avoid breaking the training flow
+                # If database save fails, log and return False to indicate failure
+                self.logger.error(f"Database save failed for {model_type}_{stage}: {db_error}")
+                self.logger.error(f"Model {model_type}_{stage} trained successfully but FAILED to save to database")
+                return False  # Return False to indicate save failure
                 
         except Exception as e:
             self.logger.error(f"Error in save_model_to_supabase: {e}")
-            return True  # Return True to avoid breaking the training flow
+            return False  # Return False to indicate save failure
     
     def load_model_from_supabase(self, model_type: str, stage: str) -> bool:
         """Load trained model from Supabase with graceful fallback."""
