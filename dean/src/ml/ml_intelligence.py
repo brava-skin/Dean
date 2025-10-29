@@ -869,8 +869,12 @@ class XGBoostPredictor:
                 else:
                     self.logger.info(f"Using cross-stage data for {stage} training: {len(df)} samples")
             
+            self.logger.info(f"🔧 Data loaded for {model_type}_{stage}: {len(df)} rows")
+            
             # Prepare data
+            self.logger.info(f"🔧 Preparing training data for {model_type}_{stage}...")
             X, y, feature_cols = self.prepare_training_data(df, target_col)
+            self.logger.info(f"🔧 Prepared data shape: X={X.shape}, y={y.shape}, features={len(feature_cols)}")
             
             if len(X) == 0 or X.shape[1] == 0:
                 self.logger.warning(f"No features available for training {model_type} model: {X.shape}")
