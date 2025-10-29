@@ -1445,7 +1445,7 @@ class XGBoostPredictor:
                 if isinstance(model_data_hex, bytes):
                     model_bytes = model_data_hex
                 elif isinstance(model_data_hex, str):
-                    # Remove \x prefix if present
+                    # Remove \x prefix if present (Supabase adds this automatically)
                     if model_data_hex.startswith('\\x'):
                         clean_hex = model_data_hex[2:]
                     else:
