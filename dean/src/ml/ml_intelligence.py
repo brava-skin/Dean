@@ -1351,17 +1351,27 @@ class XGBoostPredictor:
                             eq2='stage', 
                             value2=stage
                         )
-                        self.logger.info(f"✅ Model {model_type}_{stage} updated with validated client")
-                        return True
+                        self.logger.info(f"🔧 Update response: {response}")
+                        if hasattr(response, 'data'):
+                            self.logger.info(f"🔧 Update response data: {response.data}")
+                        
+                        # Check if any rows were actually updated
+                        if hasattr(response, 'data') and len(response.data) > 0:
+                            self.logger.info(f"✅ Model {model_type}_{stage} updated with validated client")
+                            return True
+                        else:
+                            self.logger.info(f"⚠️ Update affected 0 rows, will try insert for {model_type}_{stage}")
+                            raise Exception("No rows updated, trying insert")
                     else:
                         # Fallback to regular client update
                         self.logger.info(f"🔧 Attempting update with regular client for {model_type}_{stage}")
                         response = self.supabase.client.table('ml_models').update(data).eq('model_type', model_type).eq('stage', stage).execute()
-                        if response and (not hasattr(response, 'data') or response.data):
+                        if response and hasattr(response, 'data') and len(response.data) > 0:
                             self.logger.info(f"✅ Model {model_type}_{stage} updated with regular client")
                             return True
                         else:
-                            self.logger.warning(f"Update returned no data for {model_type}_{stage}")
+                            self.logger.warning(f"Update affected 0 rows for {model_type}_{stage}, will try insert")
+                            raise Exception("No rows updated, trying insert")
                 except Exception as update_error:
                     # If update fails, try insert
                     self.logger.info(f"Update failed, trying insert for {model_type}_{stage}: {update_error}")
@@ -1370,15 +1380,19 @@ class XGBoostPredictor:
                             self.logger.info(f"🔧 Attempting insert with validated client for {model_type}_{stage}")
                             response = validated_client.insert('ml_models', data)
                             self.logger.info(f"✅ Model {model_type}_{stage} inserted with validated client")
+                            self.logger.info(f"🔧 Insert response: {response}")
+                            if hasattr(response, 'data'):
+                                self.logger.info(f"🔧 Insert response data: {response.data}")
                             return True
                         else:
                             self.logger.info(f"🔧 Attempting insert with regular client for {model_type}_{stage}")
                             response = self.supabase.client.table('ml_models').insert(data).execute()
-                            if response and (not hasattr(response, 'data') or response.data):
+                            if response and hasattr(response, 'data') and len(response.data) > 0:
                                 self.logger.info(f"✅ Model {model_type}_{stage} inserted with regular client")
                                 return True
                             else:
-                                self.logger.warning(f"Insert returned no data for {model_type}_{stage}")
+                                self.logger.error(f"Insert failed - no data returned for {model_type}_{stage}")
+                                return False
                     except Exception as insert_error:
                         self.logger.error(f"Both update and insert failed for {model_type}_{stage}: {insert_error}")
                         return False  # Return False to indicate save failure
