@@ -1019,6 +1019,8 @@ class XGBoostPredictor:
                 'ensemble_size': len(models_ensemble)
             }
             
+            self.logger.info(f"🔧 Training completed for {model_type}_{stage}, preparing to save...")
+            
             # Save to Supabase (FIX: use primary_model instead of undefined 'model')
             self.logger.info(f"🔧 Attempting to save {model_type}_{stage} model to Supabase...")
             save_success = self.save_model_to_supabase(model_type, stage, primary_model, scaler, feature_cols, feature_importance)
@@ -1031,6 +1033,8 @@ class XGBoostPredictor:
             
         except Exception as e:
             self.logger.error(f"Error training {model_type} model for {stage}: {e}")
+            import traceback
+            self.logger.error(f"Full traceback: {traceback.format_exc()}")
             return False
     
     def predict(self, model_type: str, stage: str, ad_id: str, 
