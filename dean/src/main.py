@@ -2485,9 +2485,13 @@ def main() -> None:
             time.sleep(2)
             
             # Train testing stage models directly
+            print(f"🔧 Starting ML training...")
             perf_success = ml_system.predictor.train_model('performance_predictor', 'testing', 'cpa')
+            print(f"🔧 Performance predictor training result: {perf_success}")
             roas_success = ml_system.predictor.train_model('roas_predictor', 'testing', 'roas')
+            print(f"🔧 ROAS predictor training result: {roas_success}")
             purchase_success = ml_system.predictor.train_model('purchase_probability', 'testing', 'purchases')
+            print(f"🔧 Purchase predictor training result: {purchase_success}")
             
             training_success = perf_success or roas_success or purchase_success
             

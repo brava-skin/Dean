@@ -60,8 +60,12 @@ class DateValidator:
                 if 'T' in date_value:
                     parsed_date = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
                 else:
-                    # Try parsing other common formats
-                    parsed_date = datetime.strptime(date_value, '%Y-%m-%d %H:%M:%S%z')
+                    # Try parsing date-only format first
+                    try:
+                        parsed_date = datetime.strptime(date_value, '%Y-%m-%d')
+                    except ValueError:
+                        # Try parsing other common formats
+                        parsed_date = datetime.strptime(date_value, '%Y-%m-%d %H:%M:%S%z')
             except (ValueError, TypeError):
                 self.logger.warning(f"Failed to parse {field_name} '{date_value}', using current timestamp")
                 return now

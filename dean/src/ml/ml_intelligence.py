@@ -851,6 +851,7 @@ class XGBoostPredictor:
     def train_model(self, model_type: str, stage: str, target_col: str) -> bool:
         """Train XGBoost model for specific prediction task."""
         try:
+            self.logger.info(f"🔧 Starting training for {model_type}_{stage}...")
             # Get training data - try stage-specific first, then all stages if insufficient
             df = self.supabase.get_performance_data(stages=[stage])
             
