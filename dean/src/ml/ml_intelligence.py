@@ -200,9 +200,10 @@ class SupabaseMLClient:
             if stages:
                 query = query.in_('stage', stages)
             
-            # Date filter
-            start_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
-            query = query.gte('date_start', start_date)
+            # Date filter - temporarily disabled to test data availability
+            start_date = datetime.now() - timedelta(days=days_back)
+            start_date_str = start_date.strftime('%Y-%m-%d')
+            # query = query.gte('date_start', start_date_str)  # Temporarily disabled
             
             self.logger.info(f"🔧 Querying performance_metrics with stages={stages}, start_date={start_date}")
             response = query.execute()
