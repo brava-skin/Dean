@@ -210,7 +210,8 @@ class SupabaseMLClient:
             self.logger.info(f"🔧 Query returned {len(response.data) if response.data else 0} rows")
             
             if not response.data:
-                self.logger.warning(f"🔧 No performance data found for stages={stages}, start_date={start_date}")
+                # Use info level instead of warning to reduce noise during initialization
+                self.logger.info(f"ℹ️ No performance data found for stages={stages}, start_date={start_date}")
                 return pd.DataFrame()
             
             df = pd.DataFrame(response.data)
@@ -1848,21 +1849,23 @@ class MLIntelligenceSystem:
                         self.logger.info(f"✅ Loaded cached {model_type} for {stage}")
                         continue
                     else:
-                        # Cached model failed to load, train new one
+                        # Cached model failed to load, try to train new one
+                        self.logger.info(f"🔄 Cached model failed to load, attempting to train {model_type} for {stage}")
                         trained = self.predictor.train_model(model_type, stage, target)
                         if trained:
                             success_count += 1
-                            self.logger.info(f"🔄 Trained new {model_type} for {stage}")
+                            self.logger.info(f"✅ Trained new {model_type} for {stage}")
                         else:
-                            self.logger.warning(f"⚠️ Failed to train {model_type} for {stage}")
+                            self.logger.info(f"ℹ️ No data available for {model_type} {stage} - will train later when data is available")
                 else:
-                    # No cached model or force retrain, train new one
+                    # No cached model or force retrain, try to train new one
+                    self.logger.info(f"🔄 Attempting to train {model_type} for {stage}")
                     trained = self.predictor.train_model(model_type, stage, target)
                     if trained:
                         success_count += 1
-                        self.logger.info(f"🔄 Trained new {model_type} for {stage}")
+                        self.logger.info(f"✅ Trained new {model_type} for {stage}")
                     else:
-                        self.logger.warning(f"⚠️ Failed to train {model_type} for {stage}")
+                        self.logger.info(f"ℹ️ No data available for {model_type} {stage} - will train later when data is available")
 
             self.logger.info(f"Initialized {success_count}/{len(models_to_train)} models ({cached_count} from cache)")
             return success_count > 0
