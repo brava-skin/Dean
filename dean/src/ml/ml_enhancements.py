@@ -168,6 +168,23 @@ class ModelValidator:
             for model_type, stage in model_configs:
                 model_name = f"{model_type}_{stage}"
                 
+                # Check if model exists in database before validating
+                model_exists = self.client.table('ml_models').select('id').eq(
+                    'model_type', model_type
+                ).eq('stage', stage).eq('is_active', True).execute()
+                
+                if not model_exists.data:
+                    self.logger.info(f"Model {model_name} not found in database, skipping validation")
+                    results[model_name] = {
+                        'accuracy': 0.0,
+                        'mae': 0.0,
+                        'r2_score': 0.0,
+                        'is_performing_well': False,
+                        'sample_size': 0,
+                        'error': 'Model not found in database'
+                    }
+                    continue
+                
                 try:
                     validation_result = self.validate_predictions(model_type, stage, days_back)
                     
