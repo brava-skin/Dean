@@ -1019,9 +1019,14 @@ class XGBoostPredictor:
             }
             
             # Save to Supabase (FIX: use primary_model instead of undefined 'model')
-            self.save_model_to_supabase(model_type, stage, primary_model, scaler, feature_cols, feature_importance)
-            
-            return True
+            self.logger.info(f"🔧 Attempting to save {model_type}_{stage} model to Supabase...")
+            save_success = self.save_model_to_supabase(model_type, stage, primary_model, scaler, feature_cols, feature_importance)
+            if save_success:
+                self.logger.info(f"✅ Successfully saved {model_type}_{stage} model to Supabase")
+                return True
+            else:
+                self.logger.error(f"❌ Failed to save {model_type}_{stage} model to Supabase")
+                return False
             
         except Exception as e:
             self.logger.error(f"Error training {model_type} model for {stage}: {e}")
@@ -1217,6 +1222,7 @@ class XGBoostPredictor:
                               feature_cols: List[str], feature_importance: Dict[str, float]) -> bool:
         """Save trained model to Supabase with graceful fallback."""
         try:
+            self.logger.info(f"🔧 Starting save process for {model_type}_{stage}...")
             import gzip
             import hashlib
             
@@ -1348,8 +1354,8 @@ class XGBoostPredictor:
                                 self.logger.info(f"✅ Model {model_type}_{stage} inserted with regular client")
                                 return True
                     except Exception as insert_error:
-                        self.logger.warning(f"Both update and insert failed for {model_type}_{stage}: {insert_error}")
-                        return True  # Return True to avoid breaking the training flow
+                        self.logger.error(f"Both update and insert failed for {model_type}_{stage}: {insert_error}")
+                        return False  # Return False to indicate save failure
                         
             except Exception as db_error:
                 # If database save fails, log but don't break the flow
