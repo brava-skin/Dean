@@ -872,8 +872,8 @@ class XGBoostPredictor:
             # Prepare data
             X, y, feature_cols = self.prepare_training_data(df, target_col)
             
-            if len(X) == 0:
-                self.logger.warning(f"No features available for training {model_type} model")
+            if len(X) == 0 or X.shape[1] == 0:
+                self.logger.warning(f"No features available for training {model_type} model: {X.shape}")
                 return False
             
             # Check if we have enough data for training
