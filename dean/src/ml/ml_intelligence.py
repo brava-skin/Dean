@@ -1450,7 +1450,25 @@ class XGBoostPredictor:
                         clean_hex = model_data_hex[2:]
                     else:
                         clean_hex = model_data_hex
-                    model_bytes = bytes.fromhex(clean_hex)
+                    
+                    # Check if this is double-encoded hex (Supabase converts hex strings to hex again)
+                    # If the hex string contains only hex characters, it's likely double-encoded
+                    if all(c in '0123456789abcdefABCDEF' for c in clean_hex):
+                        # This is double-encoded, convert back to original bytes
+                        # The stored data is: hex(hex(original_bytes))
+                        # So we need to: hex_to_bytes(stored_data) -> hex_string -> hex_to_bytes(hex_string) -> original_bytes
+                        try:
+                            # First decode: hex string back to original hex string
+                            original_hex = bytes.fromhex(clean_hex).decode('ascii')
+                            # Second decode: original hex string to original bytes
+                            model_bytes = bytes.fromhex(original_hex)
+                        except Exception as e:
+                            # If double-decode fails, try single decode
+                            self.logger.warning(f"Double-decode failed, trying single decode: {e}")
+                            model_bytes = bytes.fromhex(clean_hex)
+                    else:
+                        # This is regular hex, convert normally
+                        model_bytes = bytes.fromhex(clean_hex)
                 else:
                     model_bytes = bytes.fromhex(str(model_data_hex))
                 
