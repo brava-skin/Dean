@@ -1243,9 +1243,9 @@ class XGBoostPredictor:
             import gzip
             import hashlib
             
-            # Serialize and compress model data
-            model_data = pickle.dumps(model)
-            compressed_model = gzip.compress(model_data)
+            # Serialize model data (no compression for now to avoid issues)
+            model_data = pickle.dumps(model, protocol=pickle.HIGHEST_PROTOCOL)
+            compressed_model = model_data  # Store raw pickle data
             
             # Create model metadata (ensure JSON serializable)
             def sanitize_float(val):
@@ -1444,11 +1444,15 @@ class XGBoostPredictor:
                 # Handle different data formats
                 if isinstance(model_data_hex, bytes):
                     model_bytes = model_data_hex
-                elif isinstance(model_data_hex, str) and model_data_hex.startswith('\\x'):
-                    clean_hex = model_data_hex[2:]
+                elif isinstance(model_data_hex, str):
+                    # Remove \x prefix if present
+                    if model_data_hex.startswith('\\x'):
+                        clean_hex = model_data_hex[2:]
+                    else:
+                        clean_hex = model_data_hex
                     model_bytes = bytes.fromhex(clean_hex)
                 else:
-                    model_bytes = bytes.fromhex(model_data_hex)
+                    model_bytes = bytes.fromhex(str(model_data_hex))
                 
                 # Validate model data before deserialization
                 if len(model_bytes) < 100:  # Minimum reasonable model size
@@ -1456,32 +1460,31 @@ class XGBoostPredictor:
                 
                 # Deserialize model with better error handling
                 try:
-                    # Try to decompress if it's compressed
+                    # Try direct pickle loading first (no compression)
                     try:
-                        import gzip
-                        decompressed = gzip.decompress(model_bytes)
-                        model = pickle.loads(decompressed, encoding='latin1')
+                        model = pickle.loads(model_bytes, encoding='latin1')
                     except:
-                        # If decompression fails, try direct deserialization with different protocols
+                        # Try with different pickle protocols
                         try:
-                            model = pickle.loads(model_bytes, encoding='latin1')
-                        except:
-                            # Try with different pickle protocols
                             model = pickle.loads(model_bytes, fix_imports=True)
+                        except:
+                            # Try without encoding
+                            model = pickle.loads(model_bytes)
                 except Exception as pickle_error:
                     self.logger.warning(f"Model deserialization failed for {model_key}: {pickle_error}")
                     # Try to clean the data if it's corrupted
                     if isinstance(model_data_hex, str):
-                        # Try removing any non-hex characters
-                        clean_hex = ''.join(c for c in model_data_hex if c in '0123456789abcdefABCDEF')
+                        # Remove \x prefix and any non-hex characters
+                        clean_hex = model_data_hex
+                        if clean_hex.startswith('\\x'):
+                            clean_hex = clean_hex[2:]
+                        clean_hex = ''.join(c for c in clean_hex if c in '0123456789abcdefABCDEF')
                         if len(clean_hex) % 2 == 0:  # Must be even length for hex
                             try:
                                 model_bytes = bytes.fromhex(clean_hex)
-                                # Try decompression again
+                                # Try direct pickle loading
                                 try:
-                                    import gzip
-                                    decompressed = gzip.decompress(model_bytes)
-                                    model = pickle.loads(decompressed)
+                                    model = pickle.loads(model_bytes, encoding='latin1')
                                 except:
                                     model = pickle.loads(model_bytes)
                             except Exception as retry_error:
