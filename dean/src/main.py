@@ -2479,6 +2479,14 @@ def main() -> None:
             pass
 
     # ML Model Training (if ML mode enabled and data is available)
+    print(f"🔧 ML mode enabled: {ml_mode_enabled}")
+    print(f"🔧 ML system exists: {ml_system is not None}")
+    if ml_system:
+        print(f"🔧 ML system type: {type(ml_system)}")
+        print(f"🔧 ML system has predictor: {hasattr(ml_system, 'predictor')}")
+        if hasattr(ml_system, 'predictor'):
+            print(f"🔧 ML predictor type: {type(ml_system.predictor)}")
+    
     if ml_mode_enabled and ml_system:
         try:
             # Small delay to ensure data is fully committed to Supabase
@@ -2486,12 +2494,33 @@ def main() -> None:
             
             # Train testing stage models directly
             print(f"🔧 Starting ML training...")
-            perf_success = ml_system.predictor.train_model('performance_predictor', 'testing', 'cpa')
-            print(f"🔧 Performance predictor training result: {perf_success}")
-            roas_success = ml_system.predictor.train_model('roas_predictor', 'testing', 'roas')
-            print(f"🔧 ROAS predictor training result: {roas_success}")
-            purchase_success = ml_system.predictor.train_model('purchase_probability', 'testing', 'purchases')
-            print(f"🔧 Purchase predictor training result: {purchase_success}")
+            print(f"🔧 ML system type: {type(ml_system)}")
+            print(f"🔧 ML predictor type: {type(ml_system.predictor)}")
+            print(f"🔧 ML predictor methods: {[m for m in dir(ml_system.predictor) if not m.startswith('_')]}")
+            
+            try:
+                print(f"🔧 Calling performance_predictor training...")
+                perf_success = ml_system.predictor.train_model('performance_predictor', 'testing', 'cpa')
+                print(f"🔧 Performance predictor training result: {perf_success}")
+            except Exception as e:
+                print(f"🔧 Performance predictor training error: {e}")
+                perf_success = False
+            
+            try:
+                print(f"🔧 Calling roas_predictor training...")
+                roas_success = ml_system.predictor.train_model('roas_predictor', 'testing', 'roas')
+                print(f"🔧 ROAS predictor training result: {roas_success}")
+            except Exception as e:
+                print(f"🔧 ROAS predictor training error: {e}")
+                roas_success = False
+            
+            try:
+                print(f"🔧 Calling purchase_probability training...")
+                purchase_success = ml_system.predictor.train_model('purchase_probability', 'testing', 'purchases')
+                print(f"🔧 Purchase predictor training result: {purchase_success}")
+            except Exception as e:
+                print(f"🔧 Purchase predictor training error: {e}")
+                purchase_success = False
             
             training_success = perf_success or roas_success or purchase_success
             
