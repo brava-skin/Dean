@@ -204,12 +204,16 @@ class SupabaseMLClient:
             start_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
             query = query.gte('date_start', start_date)
             
+            self.logger.info(f"🔧 Querying performance_metrics with stages={stages}, start_date={start_date}")
             response = query.execute()
+            self.logger.info(f"🔧 Query returned {len(response.data) if response.data else 0} rows")
             
             if not response.data:
+                self.logger.warning(f"🔧 No performance data found for stages={stages}, start_date={start_date}")
                 return pd.DataFrame()
             
             df = pd.DataFrame(response.data)
+            self.logger.info(f"🔧 DataFrame created with {len(df)} rows, columns: {list(df.columns)}")
             
             # Convert types
             numeric_columns = [
@@ -854,11 +858,13 @@ class XGBoostPredictor:
             self.logger.info(f"🔧 Starting training for {model_type}_{stage}...")
             # Get training data - try stage-specific first, then all stages if insufficient
             df = self.supabase.get_performance_data(stages=[stage])
+            self.logger.info(f"🔧 Stage-specific data for {stage}: {len(df) if not df.empty else 0} rows")
             
             if df.empty or len(df) < 5:  # Need at least 5 samples for meaningful training
                 self.logger.info(f"Insufficient stage-specific data for {stage} ({len(df) if not df.empty else 0} samples), trying all stages")
                 # Fallback to all available data for training
                 df = self.supabase.get_performance_data()
+                self.logger.info(f"🔧 All-stages data: {len(df) if not df.empty else 0} rows")
                 
                 if df.empty:
                     self.logger.warning(f"No data available for training {model_type} model for {stage}")
