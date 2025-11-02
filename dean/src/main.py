@@ -588,7 +588,7 @@ def _get_transition_reason(ad_data: Dict[str, Any], stage: str) -> str:
         return 'Stage transition'
 
 
-def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any], stage: str) -> None:
+def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any], stage: str, ml_system=None) -> None:
     """Store performance data in Supabase for ML system with automatic validation."""
     if not supabase_client:
         print("⚠️ No Supabase client available")
@@ -879,6 +879,22 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                     print(f"✅ Creative intelligence validated and inserted: {creative_id} for ad {ad_data.get('ad_id')}")
         except Exception as e:
             print(f"⚠️ Failed to store creative intelligence for {ad_data.get('ad_id')}: {e}")
+        
+        # Make ML predictions for this ad after data is stored
+        if ml_system:
+            try:
+                ad_id = ad_data.get('ad_id', '')
+                if ad_id:
+                    # Get ML intelligence analysis (this will make predictions and save them)
+                    ml_analysis = ml_system.analyze_ad_intelligence(ad_id, stage)
+                    if ml_analysis:
+                        # Store ML insights in creative_intelligence if needed
+                        if ml_analysis.get('predictions'):
+                            # Insights are already saved by analyze_ad_intelligence
+                            pass
+            except Exception as e:
+                # Don't fail the entire function if ML prediction fails
+                print(f"⚠️ Failed to make ML predictions for ad {ad_data.get('ad_id', 'unknown')}: {e}")
         
     except Exception as e:
         notify(f"❌ Failed to store performance data in Supabase: {e}")
@@ -2171,7 +2187,7 @@ def main() -> None:
                         testing_ad_data = collect_stage_ad_data(client, settings, "testing")
                         for ad_id, ad_data in testing_ad_data.items():
                             if isinstance(ad_data, dict) and 'spend' in ad_data:
-                                store_performance_data_in_supabase(supabase_client, ad_data, "testing")
+                                store_performance_data_in_supabase(supabase_client, ad_data, "testing", ml_system)
                                 
                                 # Record historical data for rule evaluation
                                 if store and ad_data.get("ad_id"):
@@ -2232,7 +2248,7 @@ def main() -> None:
                         testing_ad_data = collect_stage_ad_data(client, settings, "testing")
                         for ad_id, ad_data in testing_ad_data.items():
                             if isinstance(ad_data, dict) and 'spend' in ad_data:
-                                store_performance_data_in_supabase(supabase_client, ad_data, "testing")
+                                store_performance_data_in_supabase(supabase_client, ad_data, "testing", ml_system)
                                 # NEW: Store time-series and creative data
                                 store_timeseries_data_in_supabase(supabase_client, ad_id, ad_data, "testing")
                                 store_creative_data_in_supabase(supabase_client, client, ad_id, "testing")
@@ -2259,7 +2275,7 @@ def main() -> None:
                         validation_ad_data = collect_stage_ad_data(client, settings, "validation")
                         for ad_id, ad_data in validation_ad_data.items():
                             if isinstance(ad_data, dict) and 'spend' in ad_data:
-                                store_performance_data_in_supabase(supabase_client, ad_data, "validation")
+                                store_performance_data_in_supabase(supabase_client, ad_data, "validation", ml_system)
                                 
                                 # Record historical data for rule evaluation
                                 if store and ad_data.get("ad_id"):
@@ -2314,7 +2330,7 @@ def main() -> None:
                         scaling_ad_data = collect_stage_ad_data(client, settings, "scaling")
                         for ad_id, ad_data in scaling_ad_data.items():
                             if isinstance(ad_data, dict) and 'spend' in ad_data:
-                                store_performance_data_in_supabase(supabase_client, ad_data, "scaling")
+                                store_performance_data_in_supabase(supabase_client, ad_data, "scaling", ml_system)
                                 
                                 # Record historical data for rule evaluation
                                 if store and ad_data.get("ad_id"):
