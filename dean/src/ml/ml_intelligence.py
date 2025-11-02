@@ -1240,7 +1240,7 @@ class XGBoostPredictor:
                     feature_count_key = f"{model_key}_feature_count"
                     if feature_count_key in self.feature_importance:
                         expected_model_features = int(self.feature_importance[feature_count_key])
-                        self.logger.debug(f"Got expected feature count {expected_model_features} from stored metadata")
+                        self.logger.debug(f"✅ Got expected feature count {expected_model_features} from stored metadata")
                     
                     # If still None, try feature importance dict size
                     if expected_model_features is None:
@@ -1249,7 +1249,18 @@ class XGBoostPredictor:
                         feature_imp_clean = {k: v for k, v in feature_imp.items() if not k.endswith('_feature_count') and not k.endswith('_confidence')}
                         if feature_imp_clean:
                             expected_model_features = len(feature_imp_clean)
-                            self.logger.debug(f"Got expected feature count {expected_model_features} from feature importance dict")
+                            self.logger.debug(f"✅ Got expected feature count {expected_model_features} from feature importance dict")
+                    
+                    # Last resort: try to get from the model object directly (even if it doesn't have the attribute)
+                    if expected_model_features is None:
+                        try:
+                            # Try XGBoost booster
+                            if hasattr(model, 'get_booster'):
+                                booster = model.get_booster()
+                                expected_model_features = booster.num_feature()
+                                self.logger.debug(f"✅ Got expected feature count {expected_model_features} from XGBoost booster")
+                        except:
+                            pass
                 
                 # Always check and fix feature count BEFORE prediction attempt
                 if expected_model_features is not None:
@@ -1284,7 +1295,7 @@ class XGBoostPredictor:
                     predictions_ensemble.append(pred_result[0])
                 else:
                     predictions_ensemble.append(float(pred_result))
-            except ValueError as ve:
+            except (ValueError, TypeError) as ve:
                 # Feature shape mismatch - try to fix and retry
                 error_str = str(ve)
                 self.logger.debug(f"🔍 Caught ValueError: {error_str}")
@@ -1395,8 +1406,39 @@ class XGBoostPredictor:
                     self.logger.error(f"Prediction error: {ve}")
                     return None
             except Exception as e:
-                self.logger.error(f"Prediction error: {e}")
-                return None
+                error_str = str(e)
+                # Check if it's a feature shape issue even if not ValueError
+                if "Feature shape mismatch" in error_str or ("expected" in error_str.lower() and ("got" in error_str.lower() or "feature" in error_str.lower())):
+                    self.logger.warning(f"Feature shape mismatch detected (non-ValueError): {error_str}")
+                    # Try to extract expected count
+                    import re
+                    match = re.search(r'expected[:\s=]+(\d+)', error_str, re.IGNORECASE) or \
+                            re.search(r'expected.*?(\d+)', error_str, re.IGNORECASE)
+                    if match:
+                        expected = int(match.group(1))
+                        actual = len(feature_vector_scaled[0])
+                        self.logger.info(f"🔧 Extracted expected={expected}, actual={actual}, auto-fixing...")
+                        if actual > expected:
+                            feature_vector_scaled = [feature_vector_scaled[0][:expected]]
+                            try:
+                                pred_result = model.predict(feature_vector_scaled)
+                                if hasattr(pred_result, '__len__') and len(pred_result) > 0:
+                                    predictions_ensemble.append(pred_result[0])
+                                else:
+                                    predictions_ensemble.append(float(pred_result))
+                                self.logger.info(f"✅ Prediction successful after auto-fix")
+                            except Exception as e2:
+                                self.logger.error(f"Prediction error after auto-fix: {e2}")
+                                return None
+                        else:
+                            self.logger.error(f"Feature count issue (actual <= expected): {error_str}")
+                            return None
+                    else:
+                        self.logger.error(f"Prediction error (could not parse): {e}")
+                        return None
+                else:
+                    self.logger.error(f"Prediction error: {e}")
+                    return None
             
             # If we have multiple models, use ensemble
             model_key_base = f"{model_type}_{stage}"
@@ -1782,11 +1824,35 @@ class XGBoostPredictor:
                 
                 # Store feature count from metadata if available
                 feature_count = model_metadata.get('feature_count')
+                # Also check performance_metrics for feature_count
+                if not feature_count:
+                    performance_metrics = model_data.get('performance_metrics', {})
+                    if isinstance(performance_metrics, str):
+                        try:
+                            import json
+                            performance_metrics = json.loads(performance_metrics)
+                        except:
+                            performance_metrics = {}
+                    feature_count = performance_metrics.get('feature_count')
+                
+                # Also try to get from model directly
+                if not feature_count:
+                    if hasattr(model, 'n_features_in_'):
+                        feature_count = model.n_features_in_
+                    elif hasattr(model, 'n_features_'):
+                        feature_count = model.n_features_
+                    elif hasattr(model, 'get_booster'):
+                        try:
+                            feature_count = model.get_booster().num_feature()
+                        except:
+                            pass
+                
                 if feature_count:
                     # Store in a way we can retrieve later
                     if model_key not in self.feature_importance:
                         self.feature_importance[model_key] = {}
-                    self.feature_importance[f"{model_key}_feature_count"] = feature_count
+                    self.feature_importance[f"{model_key}_feature_count"] = int(feature_count)
+                    self.logger.info(f"✅ Stored feature_count={feature_count} for {model_key}")
                 
                 self.logger.info(f"✅ Loaded {model_key} from database")
                 
