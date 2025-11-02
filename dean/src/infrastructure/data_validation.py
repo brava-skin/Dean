@@ -476,9 +476,10 @@ class SupabaseDataValidator:
                 'text_overlay': BooleanValidator('text_overlay'),
                 'music_present': BooleanValidator('music_present'),
                 'voice_over': BooleanValidator('voice_over'),
-                'avg_ctr': FloatValidator('avg_ctr', min_value=0, max_value=100),
-                'avg_cpa': FloatValidator('avg_cpa', min_value=0, max_value=999.99),
-                'avg_roas': FloatValidator('avg_roas', min_value=0, max_value=999.99),
+                # NUMERIC(5,4) constraint: values must be between -9.9999 and 9.9999
+                'avg_ctr': FloatValidator('avg_ctr', min_value=-9.9999, max_value=9.9999),
+                'avg_cpa': FloatValidator('avg_cpa', min_value=-9.9999, max_value=9.9999),
+                'avg_roas': FloatValidator('avg_roas', min_value=-9.9999, max_value=9.9999),
                 'performance_rank': IntegerValidator('performance_rank', min_value=1),
                 'similarity_vector': CustomValidator('similarity_vector', 
                                                    self._validate_similarity_vector,

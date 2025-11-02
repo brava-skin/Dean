@@ -792,9 +792,15 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                     primary_text = "Experience the difference with our premium selection."
                 
                 # Calculate performance metrics based on ad data
+                # Clamp to NUMERIC(5,4) range (-9.9999 to 9.9999) to prevent database overflow
                 ctr = safe_float(ad_data.get('ctr', 0))
                 cpa = safe_float(ad_data.get('cpa', 0))
                 roas = safe_float(ad_data.get('roas', 0))
+                
+                # Clamp values to fit NUMERIC(5,4) database constraint
+                ctr = min(max(ctr, -9.9999), 9.9999)
+                cpa = min(max(cpa, -9.9999), 9.9999)
+                roas = min(max(roas, -9.9999), 9.9999)
                 
                 # Calculate performance score (0-1 scale)
                 performance_score = 0.5  # Base score
