@@ -1086,15 +1086,25 @@ class XGBoostPredictor:
                         self.logger.info(f"🔧 [ML DEBUG] Using {len(expected_features)} features for feature selection")
                         
                         # Ensure we have the exact number of features the selector expects
-                        if len(expected_features) != feature_selector.n_features_in_:
-                            self.logger.info(f"Feature count mismatch: have {len(expected_features)}, selector expects {feature_selector.n_features_in_}")
+                        # Handle both old and new scikit-learn versions
+                        selector_n_features = getattr(feature_selector, 'n_features_in_', None)
+                        if selector_n_features is None:
+                            # Older scikit-learn version - try to infer from shape
+                            if hasattr(feature_selector, 'n_features_'):
+                                selector_n_features = feature_selector.n_features_
+                            else:
+                                # Last resort: use the feature count we have
+                                selector_n_features = len(expected_features)
+                        
+                        if len(expected_features) != selector_n_features:
+                            self.logger.info(f"Feature count mismatch: have {len(expected_features)}, selector expects {selector_n_features}")
                             # Try to match the expected number by padding or truncating
-                            if len(expected_features) > feature_selector.n_features_in_:
-                                expected_features = expected_features[:feature_selector.n_features_in_]
+                            if len(expected_features) > selector_n_features:
+                                expected_features = expected_features[:selector_n_features]
                                 self.logger.info(f"Truncated to {len(expected_features)} features")
                             else:
                                 # Pad with zeros
-                                while len(expected_features) < feature_selector.n_features_in_:
+                                while len(expected_features) < selector_n_features:
                                     expected_features.append(f"padding_{len(expected_features)}")
                                 self.logger.info(f"Padded to {len(expected_features)} features")
                     except Exception as e:
@@ -1110,7 +1120,8 @@ class XGBoostPredictor:
                         ])
                         
                         self.logger.info(f"🔧 [ML DEBUG] Full feature vector: {len(full_feature_vector)} features")
-                        self.logger.info(f"🔧 [ML DEBUG] Feature selector expects: {feature_selector.n_features_in_} features")
+                        selector_n_features = getattr(feature_selector, 'n_features_in_', getattr(feature_selector, 'n_features_', 'unknown'))
+                        self.logger.info(f"🔧 [ML DEBUG] Feature selector expects: {selector_n_features} features")
                         self.logger.info(f"🔧 [ML DEBUG] Expected features: {len(expected_features)}")
                         
                         # Apply feature selection
@@ -1130,9 +1141,23 @@ class XGBoostPredictor:
                 
                 # FIX: Ensure we have the exact number of features the scaler expects
                 if scaler is not None:
+                    # Handle both old and new scikit-learn versions
+                    scaler_n_features = getattr(scaler, 'n_features_in_', None)
+                    if scaler_n_features is None:
+                        # Older scikit-learn version - try to infer from mean_ or scale_
+                        if hasattr(scaler, 'mean_') and scaler.mean_ is not None:
+                            scaler_n_features = len(scaler.mean_)
+                        elif hasattr(scaler, 'scale_') and scaler.scale_ is not None:
+                            scaler_n_features = len(scaler.scale_)
+                        elif hasattr(scaler, 'n_features_'):
+                            scaler_n_features = scaler.n_features_
+                        else:
+                            # Last resort: use the feature count we have
+                            scaler_n_features = len(feature_vector)
+                    
                     # Check if feature vector matches scaler's expected size
-                    if len(feature_vector) != scaler.n_features_in_:
-                        self.logger.warning(f"Feature mismatch: have {len(feature_vector)} features, scaler expects {scaler.n_features_in_}")
+                    if len(feature_vector) != scaler_n_features:
+                        self.logger.warning(f"Feature mismatch: have {len(feature_vector)} features, scaler expects {scaler_n_features}")
                         
                         # Try to match features by name if possible
                         if hasattr(scaler, 'feature_names_in_'):
@@ -1148,12 +1173,12 @@ class XGBoostPredictor:
                             self.logger.info(f"🔧 [ML DEBUG] Reordered features to match scaler: {len(feature_vector)} features")
                         else:
                             # Fallback: pad or truncate to match scaler size
-                            if len(feature_vector) > scaler.n_features_in_:
-                                feature_vector = feature_vector[:scaler.n_features_in_]
+                            if len(feature_vector) > scaler_n_features:
+                                feature_vector = feature_vector[:scaler_n_features]
                                 self.logger.info(f"🔧 [ML DEBUG] Truncated features to {len(feature_vector)}")
-                            elif len(feature_vector) < scaler.n_features_in_:
+                            elif len(feature_vector) < scaler_n_features:
                                 # Pad with zeros
-                                feature_vector = np.pad(feature_vector, (0, scaler.n_features_in_ - len(feature_vector)), 'constant')
+                                feature_vector = np.pad(feature_vector, (0, scaler_n_features - len(feature_vector)), 'constant')
                                 self.logger.info(f"🔧 [ML DEBUG] Padded features to {len(feature_vector)}")
                     
                     try:
@@ -1452,23 +1477,56 @@ class XGBoostPredictor:
                         clean_hex = model_data_hex
                     
                     # Check if this is double-encoded hex (Supabase converts hex strings to hex again)
-                    # If the hex string contains only hex characters, it's likely double-encoded
-                    if all(c in '0123456789abcdefABCDEF' for c in clean_hex):
-                        # This is double-encoded, convert back to original bytes
-                        # The stored data is: hex(hex(original_bytes))
-                        # So we need to: hex_to_bytes(stored_data) -> hex_string -> hex_to_bytes(hex_string) -> original_bytes
+                    # Supabase stores hex strings as text, then retrieves them as hex-encoded text
+                    # Strategy: Try both methods and see which produces valid pickle data
+                    model_bytes = None
+                    decode_error = None
+                    
+                    # Try double-decode first (most common case with Supabase)
+                    try:
+                        # First decode: hex string to bytes (which should be ASCII text of original hex)
+                        intermediate_bytes = bytes.fromhex(clean_hex)
+                        
+                        # Try to decode as ASCII to get original hex string
                         try:
-                            # First decode: hex string back to original hex string
-                            original_hex = bytes.fromhex(clean_hex).decode('ascii')
+                            original_hex = intermediate_bytes.decode('ascii')
                             # Second decode: original hex string to original bytes
-                            model_bytes = bytes.fromhex(original_hex)
-                        except Exception as e:
-                            # If double-decode fails, try single decode
-                            self.logger.warning(f"Double-decode failed, trying single decode: {e}")
-                            model_bytes = bytes.fromhex(clean_hex)
-                    else:
-                        # This is regular hex, convert normally
-                        model_bytes = bytes.fromhex(clean_hex)
+                            test_bytes = bytes.fromhex(original_hex)
+                            # Validate it looks like pickle data
+                            if test_bytes and len(test_bytes) > 100 and test_bytes[0] in [0x80, 0x71, 0x63, 0x2e, 0x28]:
+                                model_bytes = test_bytes
+                                self.logger.debug(f"Double-decode successful for {model_key}")
+                        except (UnicodeDecodeError, ValueError) as e:
+                            decode_error = e
+                            # If intermediate bytes aren't ASCII, it's not double-encoded
+                            pass
+                    except ValueError as e:
+                        decode_error = e
+                    
+                    # If double-decode didn't work, try single-decode
+                    if model_bytes is None:
+                        try:
+                            test_bytes = bytes.fromhex(clean_hex)
+                            # Validate it looks like pickle data
+                            if test_bytes and len(test_bytes) > 100 and test_bytes[0] in [0x80, 0x71, 0x63, 0x2e, 0x28]:
+                                model_bytes = test_bytes
+                                self.logger.debug(f"Single-decode successful for {model_key}")
+                            else:
+                                # Doesn't look like pickle, might still be double-encoded but with non-ASCII bytes
+                                # Try treating intermediate bytes as hex again
+                                if 'intermediate_bytes' in locals():
+                                    try:
+                                        # The intermediate bytes might be the actual hex string representation
+                                        model_bytes = intermediate_bytes
+                                        self.logger.debug(f"Using intermediate bytes directly for {model_key}")
+                                    except:
+                                        pass
+                        except ValueError as e:
+                            if not decode_error:
+                                decode_error = e
+                    
+                    if model_bytes is None:
+                        raise ValueError(f"Could not decode model data for {model_key}: {decode_error}")
                 else:
                     model_bytes = bytes.fromhex(str(model_data_hex))
                 
