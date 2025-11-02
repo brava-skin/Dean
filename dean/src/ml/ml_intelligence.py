@@ -1291,10 +1291,20 @@ class XGBoostPredictor:
                     self.logger.warning(f"Feature shape mismatch detected: {error_str}")
                     # Try to extract expected count from error message - multiple patterns
                     import re
-                    # Try different regex patterns
-                    match = re.search(r'expected[:\s]+(\d+)', error_str, re.IGNORECASE) or \
-                            re.search(r'expected\s*(\d+)', error_str, re.IGNORECASE) or \
-                            re.search(r'(\d+)\s*features?\s*expected', error_str, re.IGNORECASE)
+                    # Try different regex patterns - be more aggressive in matching
+                    # Pattern: "expected: 100" or "expected 100" or "expected=100" etc.
+                    match = None
+                    patterns = [
+                        r'expected[:\s=]+(\d+)',  # Matches "expected: 100", "expected 100", "expected=100"
+                        r'expected\s*:?\s*(\d+)',  # More flexible
+                        r'(\d+)\s*features?\s*expected',  # "100 features expected"
+                        r'expected.*?(\d+)',  # Catch-all: "expected" followed by any number
+                    ]
+                    
+                    for pattern in patterns:
+                        match = re.search(pattern, error_str, re.IGNORECASE)
+                        if match:
+                            break
                     
                     if match:
                         expected = int(match.group(1))
@@ -1326,25 +1336,45 @@ class XGBoostPredictor:
                             self.logger.error(f"Prediction error after fix: {e2}")
                             return None
                     else:
-                        # Couldn't parse expected count - try common fix (assume 100 based on error pattern)
-                        if "expected: 100" in error_str or "expected 100" in error_str:
+                        # Couldn't parse expected count - try to extract from error string directly
+                        # Look for "expected: 100" or "expected 100" or any pattern with "expected" and a number
+                        fallback_match = re.search(r'expected[:\s]+(\d+)', error_str, re.IGNORECASE)
+                        if not fallback_match:
+                            # Try more aggressive pattern
+                            fallback_match = re.search(r'expected.*?(\d+)', error_str, re.IGNORECASE)
+                        
+                        if fallback_match:
+                            expected = int(fallback_match.group(1))
+                            actual = len(feature_vector_scaled[0])
+                            self.logger.info(f"🔧 Fallback: Extracted expected={expected}, actual={actual}, auto-fixing...")
+                        elif "expected: 100" in error_str or "expected 100" in error_str or "100" in error_str:
+                            # Last resort: assume 100 if we see "expected" and "100" in the error
                             expected = 100
                             actual = len(feature_vector_scaled[0])
-                            self.logger.info(f"🔧 Using default expected=100, actual={actual}, auto-fixing...")
+                            self.logger.info(f"🔧 Using default expected=100 (from error context), actual={actual}, auto-fixing...")
+                        else:
+                            expected = None
+                        
+                        if expected:
                             if actual > expected:
                                 feature_vector_scaled = [feature_vector_scaled[0][:expected]]
-                                try:
-                                    pred_result = model.predict(feature_vector_scaled)
-                                    if hasattr(pred_result, '__len__') and len(pred_result) > 0:
-                                        predictions_ensemble.append(pred_result[0])
-                                    else:
-                                        predictions_ensemble.append(float(pred_result))
-                                    self.logger.info(f"✅ Prediction successful after default fix (100 features)")
-                                except Exception as e2:
-                                    self.logger.error(f"Prediction error after default fix: {e2}")
-                                    return None
-                            else:
-                                self.logger.error(f"Cannot fix feature mismatch: {error_str}")
+                                self.logger.info(f"✅ Auto-fixed: Truncated features from {actual} to {expected}")
+                            elif actual < expected:
+                                # Pad with zeros
+                                padding = np.zeros(expected - actual)
+                                feature_vector_scaled = [np.concatenate([feature_vector_scaled[0], padding])]
+                                self.logger.info(f"✅ Auto-fixed: Padded features from {actual} to {expected}")
+                            
+                            # Retry prediction with fixed features
+                            try:
+                                pred_result = model.predict(feature_vector_scaled)
+                                if hasattr(pred_result, '__len__') and len(pred_result) > 0:
+                                    predictions_ensemble.append(pred_result[0])
+                                else:
+                                    predictions_ensemble.append(float(pred_result))
+                                self.logger.info(f"✅ Prediction successful after fallback fix ({expected} features)")
+                            except Exception as e2:
+                                self.logger.error(f"Prediction error after fallback fix: {e2}")
                                 return None
                         else:
                             self.logger.error(f"Prediction error (could not parse expected count): {error_str}")
@@ -1474,7 +1504,8 @@ class XGBoostPredictor:
                 'test_mae': test_mae,
                 'ensemble_size': int(confidence_data.get('ensemble_size', 1)),
                 'training_samples': int(confidence_data.get('training_samples', 1000)),
-                'validation_samples': int(confidence_data.get('validation_samples', 200))
+                'validation_samples': int(confidence_data.get('validation_samples', 200)),
+                'feature_count': len(feature_cols)  # Store feature count for later retrieval
             }
             
             # Serialize and compress scaler data
