@@ -1885,9 +1885,9 @@ class XGBoostPredictor:
                         self.logger.warning(f"Failed to disable corrupted model: {disable_error}")
                 return False
             
-            # Load scaler if available
+            # Load scaler if available (can be None, empty string, or 'null', that's OK)
             scaler_data = model_data.get('scaler_data')
-            if scaler_data:
+            if scaler_data and scaler_data != 'null' and scaler_data != '' and scaler_data is not None:
                 try:
                     import gzip
                     if isinstance(scaler_data, bytes):
