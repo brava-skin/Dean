@@ -1342,6 +1342,7 @@ class XGBoostPredictor:
                             return None
                     else:
                         # Couldn't parse expected count - try to extract from error string directly
+                        self.logger.warning(f"🔧 Primary regex failed, trying fallback patterns for: {error_str}")
                         # Look for "expected: 100" or "expected 100" or any pattern with "expected" and a number
                         fallback_match = re.search(r'expected[:\s]+(\d+)', error_str, re.IGNORECASE)
                         if not fallback_match:
@@ -1352,13 +1353,19 @@ class XGBoostPredictor:
                             expected = int(fallback_match.group(1))
                             actual = len(feature_vector_scaled[0])
                             self.logger.info(f"🔧 Fallback: Extracted expected={expected}, actual={actual}, auto-fixing...")
-                        elif "expected: 100" in error_str or "expected 100" in error_str or "100" in error_str:
+                        elif "expected: 100" in error_str or "expected 100" in error_str or ("100" in error_str and "expected" in error_str.lower()):
                             # Last resort: assume 100 if we see "expected" and "100" in the error
                             expected = 100
                             actual = len(feature_vector_scaled[0])
                             self.logger.info(f"🔧 Using default expected=100 (from error context), actual={actual}, auto-fixing...")
+                        elif "got 119" in error_str or "got 120" in error_str:
+                            # If we see "got 119" or "got 120", assume model expects 100 (common pattern)
+                            expected = 100
+                            actual = len(feature_vector_scaled[0])
+                            self.logger.info(f"🔧 Detected 'got {actual}', assuming expected=100, auto-fixing...")
                         else:
                             expected = None
+                            self.logger.error(f"❌ Could not extract expected feature count from error: {error_str}")
                         
                         if expected:
                             if actual > expected:
