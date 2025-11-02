@@ -1188,8 +1188,12 @@ class XGBoostPredictor:
                                 self.logger.info(f"🔧 [ML DEBUG] Padded features to {len(feature_vector)}")
                     
                     try:
-                        feature_vector_scaled = scaler.transform([feature_vector])
-                        self.logger.info(f"🔧 [ML DEBUG] Successfully scaled features")
+                        # Check if scaler is fitted before using it
+                        if hasattr(scaler, 'mean_') and scaler.mean_ is not None:
+                            feature_vector_scaled = scaler.transform([feature_vector])
+                            self.logger.info(f"🔧 [ML DEBUG] Successfully scaled features")
+                        else:
+                            raise ValueError("Scaler is not fitted")
                     except (ValueError, AttributeError) as e:
                         self.logger.error(f"Scaler transform failed: {e}, using unscaled features")
                         feature_vector_scaled = [feature_vector]
@@ -1202,6 +1206,61 @@ class XGBoostPredictor:
                     feature_vector_scaled = [feature_vector]
                     self.logger.info(f"🔧 [ML DEBUG] Using unscaled features (no scaler)")
                 
+                # CRITICAL FIX: Ensure feature vector matches model's expected input shape
+                # Get expected feature count from model or metadata
+                expected_model_features = None
+                
+                # Try multiple ways to get feature count
+                if hasattr(model, 'n_features_in_'):
+                    expected_model_features = model.n_features_in_
+                elif hasattr(model, 'n_features_'):
+                    expected_model_features = model.n_features_
+                elif hasattr(model, 'get_booster'):
+                    # XGBoost specific - get feature count from booster
+                    try:
+                        booster = model.get_booster()
+                        expected_model_features = booster.num_feature()
+                    except:
+                        pass
+                elif hasattr(model, 'model') and hasattr(model.model, 'get_booster'):
+                    # XGBoostWrapper
+                    try:
+                        booster = model.model.get_booster()
+                        expected_model_features = booster.num_feature()
+                    except:
+                        pass
+                elif hasattr(model, 'coef_'):
+                    # Linear models - use coefficient shape
+                    if len(model.coef_.shape) > 0:
+                        expected_model_features = model.coef_.shape[0]
+                
+                # If still don't know, try to infer from model metadata
+                if expected_model_features is None:
+                    model_key_meta = f"{model_key}_confidence"
+                    if model_key_meta in self.feature_importance:
+                        # Try to get from feature importance dict size
+                        feature_imp = self.feature_importance.get(model_key, {})
+                        if feature_imp:
+                            expected_model_features = len(feature_imp)
+                
+                if expected_model_features is not None and len(feature_vector_scaled[0]) != expected_model_features:
+                    actual_count = len(feature_vector_scaled[0])
+                    self.logger.warning(f"⚠️ Feature count mismatch: model expects {expected_model_features}, got {actual_count}")
+                    
+                    # Truncate or pad to match
+                    if actual_count > expected_model_features:
+                        # Truncate excess features
+                        feature_vector_scaled = [feature_vector_scaled[0][:expected_model_features]]
+                        self.logger.info(f"Truncated features from {actual_count} to {expected_model_features}")
+                    elif actual_count < expected_model_features:
+                        # Pad with zeros
+                        padding = np.zeros(expected_model_features - actual_count)
+                        feature_vector_scaled = [np.concatenate([feature_vector_scaled[0], padding])]
+                        self.logger.info(f"Padded features from {actual_count} to {expected_model_features}")
+                elif expected_model_features is None:
+                    # If we can't determine expected features, try prediction and catch error
+                    self.logger.debug(f"Could not determine expected feature count for {model_key}, will try prediction")
+                
             except (AttributeError, KeyError) as e:
                 self.logger.error(f"Feature preparation error: {e}")
                 return None
@@ -1209,7 +1268,43 @@ class XGBoostPredictor:
             # Make prediction with ensemble if available
             predictions_ensemble = []
             try:
-                predictions_ensemble.append(model.predict(feature_vector_scaled)[0])
+                pred_result = model.predict(feature_vector_scaled)
+                # Handle both array and scalar results
+                if hasattr(pred_result, '__len__') and len(pred_result) > 0:
+                    predictions_ensemble.append(pred_result[0])
+                else:
+                    predictions_ensemble.append(float(pred_result))
+            except ValueError as ve:
+                # Feature shape mismatch - try to fix and retry
+                if "Feature shape mismatch" in str(ve) or "expected" in str(ve).lower():
+                    self.logger.warning(f"Feature shape mismatch detected: {ve}")
+                    # Try to extract expected count from error message
+                    import re
+                    match = re.search(r'expected[:\s]+(\d+)', str(ve), re.IGNORECASE)
+                    if match:
+                        expected = int(match.group(1))
+                        actual = len(feature_vector_scaled[0])
+                        self.logger.info(f"Extracted expected={expected}, actual={actual}, adjusting...")
+                        if actual > expected:
+                            feature_vector_scaled = [feature_vector_scaled[0][:expected]]
+                            try:
+                                pred_result = model.predict(feature_vector_scaled)
+                                if hasattr(pred_result, '__len__') and len(pred_result) > 0:
+                                    predictions_ensemble.append(pred_result[0])
+                                else:
+                                    predictions_ensemble.append(float(pred_result))
+                            except Exception as e2:
+                                self.logger.error(f"Prediction error after fix: {e2}")
+                                return None
+                        else:
+                            self.logger.error(f"Cannot fix feature mismatch: {ve}")
+                            return None
+                    else:
+                        self.logger.error(f"Prediction error (could not parse): {ve}")
+                        return None
+                else:
+                    self.logger.error(f"Prediction error: {ve}")
+                    return None
             except Exception as e:
                 self.logger.error(f"Prediction error: {e}")
                 return None
