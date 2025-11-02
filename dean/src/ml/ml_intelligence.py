@@ -1902,13 +1902,21 @@ class XGBoostPredictor:
                         scaler_bytes = scaler_bytes_raw
                     
                     scaler = pickle.loads(scaler_bytes)
-                    self.scalers[model_key] = scaler
-                    self.logger.info(f"✅ Loaded scaler for {model_key}")
+                    # Verify scaler is fitted before storing
+                    if hasattr(scaler, 'mean_') and scaler.mean_ is not None:
+                        self.scalers[model_key] = scaler
+                        self.logger.info(f"✅ Loaded scaler for {model_key} (n_features={len(scaler.mean_)})")
+                    else:
+                        self.logger.warning(f"Scaler for {model_key} is not fitted, will not use it")
+                        self.scalers[model_key] = None
                 except Exception as e:
                     self.logger.warning(f"Failed to load scaler for {model_key}: {e}")
                     # Don't create an unfitted scaler - will cause issues
                     # Instead, mark that we need a scaler but can't use it yet
                     self.scalers[model_key] = None
+                    # Try to extract feature count from error if possible for later reference
+                    import traceback
+                    self.logger.debug(f"Scaler load error details: {traceback.format_exc()}")
             else:
                 # No scaler in database - will be created during next training
                 self.scalers[model_key] = None
