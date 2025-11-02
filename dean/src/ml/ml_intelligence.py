@@ -1236,12 +1236,20 @@ class XGBoostPredictor:
                 
                 # If still don't know, try to infer from model metadata
                 if expected_model_features is None:
-                    model_key_meta = f"{model_key}_confidence"
-                    if model_key_meta in self.feature_importance:
-                        # Try to get from feature importance dict size
+                    # First try stored feature count from metadata
+                    feature_count_key = f"{model_key}_feature_count"
+                    if feature_count_key in self.feature_importance:
+                        expected_model_features = int(self.feature_importance[feature_count_key])
+                        self.logger.debug(f"Got expected feature count {expected_model_features} from stored metadata")
+                    
+                    # If still None, try feature importance dict size
+                    if expected_model_features is None:
                         feature_imp = self.feature_importance.get(model_key, {})
-                        if feature_imp:
-                            expected_model_features = len(feature_imp)
+                        # Remove metadata keys
+                        feature_imp_clean = {k: v for k, v in feature_imp.items() if not k.endswith('_feature_count') and not k.endswith('_confidence')}
+                        if feature_imp_clean:
+                            expected_model_features = len(feature_imp_clean)
+                            self.logger.debug(f"Got expected feature count {expected_model_features} from feature importance dict")
                 
                 # Always check and fix feature count BEFORE prediction attempt
                 if expected_model_features is not None:
@@ -1683,6 +1691,24 @@ class XGBoostPredictor:
                     raise ValueError("Model missing predict method")
                 
                 self.models[model_key] = model
+                
+                # Try to store feature count in metadata for later use
+                model_metadata = model_data.get('model_metadata', {})
+                if isinstance(model_metadata, str):
+                    import json
+                    try:
+                        model_metadata = json.loads(model_metadata)
+                    except:
+                        model_metadata = {}
+                
+                # Store feature count from metadata if available
+                feature_count = model_metadata.get('feature_count')
+                if feature_count:
+                    # Store in a way we can retrieve later
+                    if model_key not in self.feature_importance:
+                        self.feature_importance[model_key] = {}
+                    self.feature_importance[f"{model_key}_feature_count"] = feature_count
+                
                 self.logger.info(f"✅ Loaded {model_key} from database")
                 
             except Exception as e:
@@ -1990,9 +2016,10 @@ class CrossStageLearner:
                 'fatigue_risk': latest_performance.get('fatigue_index', 0)
             }
             
-            # Create learning event
+            # Create learning event - use 'model_training' as it's a valid event type
+            # 'stage_transition' may not be in the allowed list, so use a more generic type
             learning_event = LearningEvent(
-                event_type='stage_transition',  # Changed from 'cross_stage_transfer' to valid 'stage_transition'
+                event_type='model_training',  # Use valid event type - model_training is confirmed to work
                 ad_id=ad_id,
                 lifecycle_id=latest_performance.get('lifecycle_id', ''),
                 stage=to_stage,
