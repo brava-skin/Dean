@@ -1058,6 +1058,7 @@ class XGBoostPredictor:
             if model_key not in self.models:
                 self.logger.warning(f"Model {model_key} not found, attempting to load from Supabase")
                 if not self.load_model_from_supabase(model_type, stage):
+                    self.logger.warning(f"Failed to load model {model_key} from Supabase, prediction cannot be made")
                     return None
             
             model = self.models[model_key]
@@ -1103,10 +1104,14 @@ class XGBoostPredictor:
                                 expected_features = expected_features[:selector_n_features]
                                 self.logger.info(f"Truncated to {len(expected_features)} features")
                             else:
-                                # Pad with zeros
-                                while len(expected_features) < selector_n_features:
-                                    expected_features.append(f"padding_{len(expected_features)}")
-                                self.logger.info(f"Padded to {len(expected_features)} features")
+                                # Pad with zeros - add missing features to the dict, not just the list
+                                needed = selector_n_features - len(expected_features)
+                                for i in range(needed):
+                                    pad_key = f"_pad_{i}"
+                                    if pad_key not in features:
+                                        features[pad_key] = 0.0
+                                expected_features = [str(k) for k in features.keys()][:selector_n_features]
+                                self.logger.info(f"Padded features dict, now have {len(expected_features)} features")
                     except Exception as e:
                         self.logger.warning(f"Could not get original feature names: {e}")
                         expected_features = [str(k) for k in features.keys()]
@@ -1152,7 +1157,8 @@ class XGBoostPredictor:
                         elif hasattr(scaler, 'n_features_'):
                             scaler_n_features = scaler.n_features_
                         else:
-                            # Last resort: use the feature count we have
+                            # If we can't determine, log warning and use feature count we have
+                            self.logger.warning(f"Could not determine scaler feature count for {model_key}, using current feature count: {len(feature_vector)}")
                             scaler_n_features = len(feature_vector)
                     
                     # Check if feature vector matches scaler's expected size
@@ -1184,9 +1190,13 @@ class XGBoostPredictor:
                     try:
                         feature_vector_scaled = scaler.transform([feature_vector])
                         self.logger.info(f"🔧 [ML DEBUG] Successfully scaled features")
-                    except ValueError as e:
+                    except (ValueError, AttributeError) as e:
                         self.logger.error(f"Scaler transform failed: {e}, using unscaled features")
                         feature_vector_scaled = [feature_vector]
+                elif scaler is None:
+                    # Scaler not loaded - use unscaled features but warn
+                    self.logger.warning(f"⚠️ No scaler available for {model_key}, using unscaled features (may affect prediction quality)")
+                    feature_vector_scaled = [feature_vector]
                 else:
                     # No scaler available, use features as-is
                     feature_vector_scaled = [feature_vector]
@@ -1603,22 +1613,37 @@ class XGBoostPredictor:
             scaler_data = model_data.get('scaler_data')
             if scaler_data:
                 try:
+                    import gzip
                     if isinstance(scaler_data, bytes):
-                        scaler_bytes = scaler_data
-                    elif isinstance(scaler_data, str) and scaler_data.startswith('\\x'):
-                        clean_hex = scaler_data[2:]
-                        scaler_bytes = bytes.fromhex(clean_hex)
+                        scaler_bytes_raw = scaler_data
+                    elif isinstance(scaler_data, str):
+                        # Handle hex-encoded scaler data
+                        if scaler_data.startswith('\\x'):
+                            clean_hex = scaler_data[2:]
+                        else:
+                            clean_hex = scaler_data
+                        scaler_bytes_raw = bytes.fromhex(clean_hex)
                     else:
-                        scaler_bytes = bytes.fromhex(scaler_data)
+                        scaler_bytes_raw = bytes.fromhex(str(scaler_data))
+                    
+                    # Try to decompress (scaler is saved with gzip)
+                    try:
+                        scaler_bytes = gzip.decompress(scaler_bytes_raw)
+                    except (gzip.BadGzipFile, OSError):
+                        # If decompression fails, try using raw bytes (maybe not compressed)
+                        scaler_bytes = scaler_bytes_raw
+                    
                     scaler = pickle.loads(scaler_bytes)
                     self.scalers[model_key] = scaler
+                    self.logger.info(f"✅ Loaded scaler for {model_key}")
                 except Exception as e:
                     self.logger.warning(f"Failed to load scaler for {model_key}: {e}")
-                    from sklearn.preprocessing import StandardScaler
-                    self.scalers[model_key] = StandardScaler()
+                    # Don't create an unfitted scaler - will cause issues
+                    # Instead, mark that we need a scaler but can't use it yet
+                    self.scalers[model_key] = None
             else:
-                from sklearn.preprocessing import StandardScaler
-                self.scalers[model_key] = StandardScaler()
+                # No scaler in database - will be created during next training
+                self.scalers[model_key] = None
             
             return True
             
@@ -2037,16 +2062,32 @@ class MLIntelligenceSystem:
                     if model_response.data and len(model_response.data) > 0:
                         model_id = model_response.data[0].get('id')
                     
-                    if model_id:
-                        # Save prediction to database
-                        self.supabase.save_prediction(
-                            cpa_prediction, ad_id, features.get('lifecycle_id', ''), stage,
-                            model_id, features, None
-                        )
+                    # Get lifecycle_id
+                    lifecycle_id = features.get('lifecycle_id', f"lifecycle_{ad_id}")
+                    try:
+                        lifecycle_response = self.supabase.client.table('ad_lifecycle').select('lifecycle_id').eq(
+                            'ad_id', ad_id
+                        ).eq('stage', stage).order('updated_at', desc=True).limit(1).execute()
+                        
+                        if lifecycle_response.data and len(lifecycle_response.data) > 0:
+                            lifecycle_id = lifecycle_response.data[0].get('lifecycle_id', lifecycle_id)
+                    except:
+                        pass  # Use default if lookup fails
+                    
+                    # Save prediction - works even if model_id is None
+                    prediction_id = self.supabase.save_prediction(
+                        cpa_prediction, ad_id, lifecycle_id, stage,
+                        model_id or '', features,
+                        self.predictor.feature_importance.get(f"performance_predictor_{stage}", {})
+                    )
+                    if prediction_id:
+                        self.logger.info(f"✅ Saved prediction for ad {ad_id} in stage {stage}")
                     else:
-                        self.logger.warning(f"No active model found for performance_predictor_{stage}, skipping prediction save")
+                        self.logger.warning(f"Failed to save prediction for ad {ad_id} in stage {stage}")
                 except Exception as e:
                     self.logger.error(f"Failed to save prediction: {e}")
+                    import traceback
+                    self.logger.error(f"Prediction save error traceback: {traceback.format_exc()}")
                     # Continue execution even if save fails
             
             return cpa_prediction
@@ -2085,38 +2126,38 @@ class MLIntelligenceSystem:
             # Get historical data for proper feature engineering
             historical_df = self.supabase.get_performance_data(ad_ids=[ad_id], stages=[stage], days_back=30)
             
+            # Always try to engineer features even with minimal data
             if not historical_df.empty and len(historical_df) >= 1:
-                # Apply full feature engineering pipeline (same as training)
-                df_features = self.predictor.feature_engineer.create_rolling_features(
-                    historical_df, ['ad_id'], ['ctr', 'cpa', 'roas', 'spend', 'purchases']
-                )
-                df_features = self.predictor.feature_engineer.create_interaction_features(df_features)
-                df_features = self.predictor.feature_engineer.create_temporal_features(df_features)
-                df_features = self.predictor.feature_engineer.create_advanced_features(df_features)
-                
-                # Get the latest row with all engineered features
-                latest_features = df_features.iloc[-1].to_dict()
-                
-                # Remove non-feature columns
-                exclude_cols = ['ad_id', 'id', 'date_start', 'date_end', 'created_at', 'lifecycle_id']
-                features = {k: float(v) if isinstance(v, (int, float)) and not (pd.isna(v) if hasattr(pd, 'isna') else False) else 0.0 
-                           for k, v in latest_features.items() 
-                           if k not in exclude_cols and isinstance(v, (int, float, np.number))}
-                
-                self.logger.info(f"🔧 [ML DEBUG] Generated {len(features)} features for prediction")
+                try:
+                    # Apply full feature engineering pipeline (same as training)
+                    df_features = self.predictor.feature_engineer.create_rolling_features(
+                        historical_df, ['ad_id'], ['ctr', 'cpa', 'roas', 'spend', 'purchases']
+                    )
+                    df_features = self.predictor.feature_engineer.create_interaction_features(df_features)
+                    df_features = self.predictor.feature_engineer.create_temporal_features(df_features)
+                    df_features = self.predictor.feature_engineer.create_advanced_features(df_features)
+                    
+                    # Get the latest row with all engineered features
+                    latest_features = df_features.iloc[-1].to_dict()
+                    
+                    # Remove non-feature columns
+                    exclude_cols = ['ad_id', 'id', 'date_start', 'date_end', 'created_at', 'lifecycle_id']
+                    features = {k: float(v) if isinstance(v, (int, float)) and not (pd.isna(v) if hasattr(pd, 'isna') else False) else 0.0 
+                               for k, v in latest_features.items() 
+                               if k not in exclude_cols and isinstance(v, (int, float, np.number))}
+                    
+                    self.logger.info(f"🔧 [ML DEBUG] Generated {len(features)} engineered features for prediction")
+                except Exception as e:
+                    self.logger.warning(f"Feature engineering failed for {ad_id}: {e}, falling back to basic features")
+                    # Fallback to basic features if engineering fails
+                    features = self._create_basic_features(latest)
             else:
-                # Fallback to basic features if no historical data
-                self.logger.warning(f"🔧 [ML DEBUG] No historical data for {ad_id}, using basic features")
-                features = {
-                    'ctr': float(latest.get('ctr', 0)),
-                    'cpa': float(latest.get('cpa', 0)),
-                    'roas': float(latest.get('roas', 0)),
-                    'spend': float(latest.get('spend', 0)),
-                    'purchases': float(latest.get('purchases', 0)),
-                    'performance_quality_score': float(latest.get('performance_quality_score', 0)),
-                    'stability_score': float(latest.get('stability_score', 0)),
-                    'fatigue_index': float(latest.get('fatigue_index', 0)),
-                }
+                # No historical data - create basic features but warn
+                self.logger.warning(f"🔧 [ML DEBUG] No historical data for {ad_id}, using basic features (may cause feature mismatch)")
+                features = self._create_basic_features(latest)
+            
+            # Ensure features match what models expect (fill missing with zeros)
+            features = self._normalize_features_for_prediction(features, stage, model_type='performance_predictor')
             
             predictions = self.predict_performance(ad_id, stage, features)
             
@@ -2134,6 +2175,48 @@ class MLIntelligenceSystem:
         except Exception as e:
             self.logger.error(f"Error analyzing ad intelligence: {e}")
             return {}
+    
+    def _create_basic_features(self, latest: pd.Series) -> Dict[str, float]:
+        """Create basic feature set from latest performance data."""
+        return {
+            'ctr': float(latest.get('ctr', 0)),
+            'cpa': float(latest.get('cpa', 0)),
+            'roas': float(latest.get('roas', 0)),
+            'spend': float(latest.get('spend', 0)),
+            'purchases': float(latest.get('purchases', 0)),
+            'impressions': float(latest.get('impressions', 0)),
+            'clicks': float(latest.get('clicks', 0)),
+            'performance_quality_score': float(latest.get('performance_quality_score', 0)),
+            'stability_score': float(latest.get('stability_score', 0)),
+            'momentum_score': float(latest.get('momentum_score', 0)),
+            'fatigue_index': float(latest.get('fatigue_index', 0)),
+            'cpm': float(latest.get('cpm', 0)),
+            'cpc': float(latest.get('cpc', 0)),
+        }
+    
+    def _normalize_features_for_prediction(self, features: Dict[str, float], stage: str, model_type: str) -> Dict[str, float]:
+        """Normalize features to match what the model expects."""
+        model_key = f"{model_type}_{stage}"
+        
+        # If model is loaded, check what features it was trained with
+        if model_key in self.predictor.models:
+            # Try to get expected features from feature importance or metadata
+            feature_importance = self.predictor.feature_importance.get(model_key, {})
+            expected_features = list(feature_importance.keys())
+            
+            # Remove metadata keys
+            if f"{model_key}_confidence" in expected_features:
+                expected_features.remove(f"{model_key}_confidence")
+            
+            # Add any missing features with zeros
+            for feat_name in expected_features:
+                if feat_name not in features:
+                    features[feat_name] = 0.0
+            
+            # Remove extra features that model doesn't expect (optional - could keep them)
+            # For now, keep all features and let model/scaler handle it
+        
+        return features
     
     def calculate_intelligence_score(self, performance: pd.Series, 
                                    trends: Dict[str, Any], 
