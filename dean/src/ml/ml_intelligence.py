@@ -1675,12 +1675,16 @@ class XGBoostPredictor:
     def load_model_from_supabase(self, model_type: str, stage: str) -> bool:
         """Load trained model from Supabase with graceful fallback."""
         try:
-            response = self.supabase.client.table('ml_models').select('*').eq(
-                'model_type', model_type
-            ).eq('stage', stage).eq('is_active', True).execute()
+            try:
+                response = self.supabase.client.table('ml_models').select('*').eq(
+                    'model_type', model_type
+                ).eq('stage', stage).eq('is_active', True).order('trained_at', desc=True).limit(1).execute()
+            except Exception as query_error:
+                self.logger.warning(f"Failed to query ml_models table for {model_type}_{stage}: {query_error}")
+                return False
             
-            if not response.data:
-                self.logger.info(f"No model found for {model_type}_{stage}")
+            if not response.data or len(response.data) == 0:
+                self.logger.info(f"No active model found for {model_type}_{stage} (checked {len(response.data) if hasattr(response, 'data') else 0} rows)")
                 return False
             
             model_data = response.data[0]
@@ -2472,8 +2476,9 @@ class MLIntelligenceSystem:
             return {}
     
     def _create_basic_features(self, latest: pd.Series) -> Dict[str, float]:
-        """Create basic feature set from latest performance data."""
-        return {
+        """Create basic feature set from latest performance data - ALWAYS normalized to exactly 100 features."""
+        # Create core features
+        core_features = {
             'ctr': float(latest.get('ctr', 0)),
             'cpa': float(latest.get('cpa', 0)),
             'roas': float(latest.get('roas', 0)),
@@ -2488,28 +2493,33 @@ class MLIntelligenceSystem:
             'cpm': float(latest.get('cpm', 0)),
             'cpc': float(latest.get('cpc', 0)),
         }
+        
+        # ALWAYS pad to exactly 100 features to match model training
+        # This ensures consistency even when feature engineering fails
+        while len(core_features) < 100:
+            pad_idx = len(core_features)
+            core_features[f"_pad_feature_{pad_idx}"] = 0.0
+        
+        return core_features
     
     def _normalize_features_for_prediction(self, features: Dict[str, float], stage: str, model_type: str) -> Dict[str, float]:
-        """Normalize features to match what the model expects."""
+        """Normalize features to match what the model expects - ALWAYS ensure exactly 100 features."""
         model_key = f"{model_type}_{stage}"
         
-        # If model is loaded, check what features it was trained with
-        if model_key in self.predictor.models:
-            # Try to get expected features from feature importance or metadata
-            feature_importance = self.predictor.feature_importance.get(model_key, {})
-            expected_features = list(feature_importance.keys())
-            
-            # Remove metadata keys
-            if f"{model_key}_confidence" in expected_features:
-                expected_features.remove(f"{model_key}_confidence")
-            
-            # Add any missing features with zeros
-            for feat_name in expected_features:
-                if feat_name not in features:
-                    features[feat_name] = 0.0
-            
-            # Remove extra features that model doesn't expect (optional - could keep them)
-            # For now, keep all features and let model/scaler handle it
+        # ALWAYS normalize to exactly 100 features to match training
+        # Models are trained with feature selection that results in 100 features (max_features=100)
+        current_count = len(features)
+        if current_count > 100:
+            # Truncate to 100 (keep first 100 alphabetically for consistency)
+            sorted_keys = sorted(features.keys())[:100]
+            features = {k: features[k] for k in sorted_keys}
+            self.logger.info(f"🔧 Normalized features for {model_key}: truncated from {current_count} to 100")
+        elif current_count < 100:
+            # Pad to 100
+            needed = 100 - current_count
+            for i in range(needed):
+                features[f"_pad_feature_{current_count + i}"] = 0.0
+            self.logger.info(f"🔧 Normalized features for {model_key}: padded from {current_count} to 100")
         
         return features
     
