@@ -1038,6 +1038,12 @@ class XGBoostPredictor:
             save_success = self.save_model_to_supabase(model_type, stage, primary_model, scaler, feature_cols, feature_importance)
             if save_success:
                 self.logger.info(f"✅ Successfully saved {model_type}_{stage} model to Supabase")
+                # Load the model immediately after saving to ensure it's available for predictions
+                try:
+                    if self.load_model_from_supabase(model_type, stage):
+                        self.logger.info(f"✅ Verified {model_type}_{stage} model loads correctly after save")
+                except Exception as load_error:
+                    self.logger.warning(f"⚠️ Model saved but failed to verify load: {load_error}")
                 return True
             else:
                 self.logger.error(f"❌ Failed to save {model_type}_{stage} model to Supabase")
