@@ -1287,6 +1287,7 @@ class XGBoostPredictor:
             except ValueError as ve:
                 # Feature shape mismatch - try to fix and retry
                 error_str = str(ve)
+                self.logger.debug(f"🔍 Caught ValueError: {error_str}")
                 if "Feature shape mismatch" in error_str or "expected" in error_str.lower():
                     self.logger.warning(f"Feature shape mismatch detected: {error_str}")
                     # Try to extract expected count from error message - multiple patterns
@@ -1301,10 +1302,14 @@ class XGBoostPredictor:
                         r'expected.*?(\d+)',  # Catch-all: "expected" followed by any number
                     ]
                     
-                    for pattern in patterns:
+                    self.logger.debug(f"🔍 Trying {len(patterns)} regex patterns on: {error_str}")
+                    for i, pattern in enumerate(patterns):
                         match = re.search(pattern, error_str, re.IGNORECASE)
                         if match:
+                            self.logger.debug(f"🔍 Pattern {i+1} matched: {pattern} -> {match.group(1)}")
                             break
+                        else:
+                            self.logger.debug(f"🔍 Pattern {i+1} did not match: {pattern}")
                     
                     if match:
                         expected = int(match.group(1))
