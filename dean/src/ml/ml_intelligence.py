@@ -1243,20 +1243,22 @@ class XGBoostPredictor:
                         if feature_imp:
                             expected_model_features = len(feature_imp)
                 
-                if expected_model_features is not None and len(feature_vector_scaled[0]) != expected_model_features:
+                # Always check and fix feature count BEFORE prediction attempt
+                if expected_model_features is not None:
                     actual_count = len(feature_vector_scaled[0])
-                    self.logger.warning(f"⚠️ Feature count mismatch: model expects {expected_model_features}, got {actual_count}")
-                    
-                    # Truncate or pad to match
-                    if actual_count > expected_model_features:
-                        # Truncate excess features
-                        feature_vector_scaled = [feature_vector_scaled[0][:expected_model_features]]
-                        self.logger.info(f"Truncated features from {actual_count} to {expected_model_features}")
-                    elif actual_count < expected_model_features:
-                        # Pad with zeros
-                        padding = np.zeros(expected_model_features - actual_count)
-                        feature_vector_scaled = [np.concatenate([feature_vector_scaled[0], padding])]
-                        self.logger.info(f"Padded features from {actual_count} to {expected_model_features}")
+                    if actual_count != expected_model_features:
+                        self.logger.warning(f"⚠️ Feature count mismatch: model expects {expected_model_features}, got {actual_count}")
+                        
+                        # Truncate or pad to match
+                        if actual_count > expected_model_features:
+                            # Truncate excess features
+                            feature_vector_scaled = [feature_vector_scaled[0][:expected_model_features]]
+                            self.logger.info(f"✅ Truncated features from {actual_count} to {expected_model_features}")
+                        elif actual_count < expected_model_features:
+                            # Pad with zeros
+                            padding = np.zeros(expected_model_features - actual_count)
+                            feature_vector_scaled = [np.concatenate([feature_vector_scaled[0], padding])]
+                            self.logger.info(f"✅ Padded features from {actual_count} to {expected_model_features}")
                 elif expected_model_features is None:
                     # If we can't determine expected features, try prediction and catch error
                     self.logger.debug(f"Could not determine expected feature count for {model_key}, will try prediction")
@@ -1990,7 +1992,7 @@ class CrossStageLearner:
             
             # Create learning event
             learning_event = LearningEvent(
-                event_type='cross_stage_transfer',
+                event_type='stage_transition',  # Changed from 'cross_stage_transfer' to valid 'stage_transition'
                 ad_id=ad_id,
                 lifecycle_id=latest_performance.get('lifecycle_id', ''),
                 stage=to_stage,
