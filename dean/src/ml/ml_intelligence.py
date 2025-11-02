@@ -1969,13 +1969,27 @@ class MLIntelligenceSystem:
             cpa_prediction = self.predictor.predict('performance_predictor', stage, ad_id, features)
             
             if cpa_prediction:
-                # Save prediction to database (skip for now to avoid UUID errors)
-                # TODO: Fix model_id to use actual UUID from ml_models table
-                # self.supabase.save_prediction(
-                #     cpa_prediction, ad_id, features.get('lifecycle_id', ''), stage,
-                #     f"performance_predictor_{stage}"
-                # )
-                pass
+                # Get model_id from ml_models table
+                try:
+                    model_response = self.supabase.client.table('ml_models').select('id').eq(
+                        'model_type', 'performance_predictor'
+                    ).eq('stage', stage).eq('is_active', True).limit(1).execute()
+                    
+                    model_id = None
+                    if model_response.data and len(model_response.data) > 0:
+                        model_id = model_response.data[0].get('id')
+                    
+                    if model_id:
+                        # Save prediction to database
+                        self.supabase.save_prediction(
+                            cpa_prediction, ad_id, features.get('lifecycle_id', ''), stage,
+                            model_id, features, None
+                        )
+                    else:
+                        self.logger.warning(f"No active model found for performance_predictor_{stage}, skipping prediction save")
+                except Exception as e:
+                    self.logger.error(f"Failed to save prediction: {e}")
+                    # Continue execution even if save fails
             
             return cpa_prediction
             
