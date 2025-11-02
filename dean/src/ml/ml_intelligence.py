@@ -1495,7 +1495,7 @@ class XGBoostPredictor:
             training_data_hash = hashlib.md5(str(feature_cols).encode()).hexdigest()
             
             performance_metrics = {
-                'feature_count': int(len(feature_cols)),
+                'feature_count': int(len(feature_cols)),  # Store feature count for later retrieval
                 'model_size_bytes': int(len(compressed_model)),
                 'original_size_bytes': int(len(model_data)),
                 'compression_ratio': len(compressed_model) / len(model_data) if len(model_data) > 0 else 1.0,
@@ -1504,8 +1504,7 @@ class XGBoostPredictor:
                 'test_mae': test_mae,
                 'ensemble_size': int(confidence_data.get('ensemble_size', 1)),
                 'training_samples': int(confidence_data.get('training_samples', 1000)),
-                'validation_samples': int(confidence_data.get('validation_samples', 200)),
-                'feature_count': len(feature_cols)  # Store feature count for later retrieval
+                'validation_samples': int(confidence_data.get('validation_samples', 200))
             }
             
             # Serialize and compress scaler data
