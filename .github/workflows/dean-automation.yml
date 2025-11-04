@@ -1,9 +1,10 @@
 name: Dean
 
 on:
-  schedule:
-    # Run every 30 minutes
-    - cron: '*/30 * * * *'
+  # PAUSED: Automation temporarily disabled - ads are not currently running
+  # schedule:
+  #   # Run every 30 minutes
+  #   - cron: '*/30 * * * *'
   workflow_dispatch: # Allow manual runs
 
 jobs:
