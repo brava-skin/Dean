@@ -1033,7 +1033,7 @@ def _determine_message_type(text: str, topic: str) -> str:
     else:
         return 'info'
 
-def alert_kill(stage: str, entity_name: str, reason: str, metrics: Dict[str, Any], link: Optional[str] = None) -> None:
+def alert_kill(stage: str = "ASC+", entity_name: str = "", reason: str = "", metrics: Optional[Dict[str, Any]] = None, link: Optional[str] = None) -> None:
     """
     Human pause/kill message.
     """
@@ -1203,9 +1203,10 @@ def build_ads_snapshot(rows_today: List[Dict[str, Any]], rows_lifetime: List[Dic
 
 def alert_queue_empty() -> None:
     """
-    Alert when creative queue is empty.
+    Alert when creative queue is empty (legacy - ASC+ generates creatives dynamically).
+    This function is kept for backward compatibility but should not be called for ASC+ campaigns.
     """
-    text = "🚨 URGENT: No more creatives in the queue!\nNeed to upload new videos ASAP or we'll run out of tests"
+    text = "🚨 URGENT: No more creatives in the queue!\nASC+ generates creatives dynamically - this alert should not appear"
     
     msg = SlackMessage(
         text=text,

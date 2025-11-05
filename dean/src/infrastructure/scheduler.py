@@ -21,9 +21,7 @@ from integrations.slack import (
 )
 # Note: MetaClient imported lazily to avoid circular imports
 from .utils import now_local, getenv_f, getenv_i, getenv_b, cfg, cfg_or_env_f, cfg_or_env_i, cfg_or_env_b, cfg_or_env_list, safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name
-from stages.testing import run_testing_tick
-from stages.validation import run_validation_tick
-from stages.scaling import run_scaling_tick
+from stages.asc_plus import run_asc_plus_tick
 from rules.rules import AdvancedRuleEngine as RuleEngine
 
 
@@ -137,47 +135,19 @@ class BackgroundScheduler:
                 queue_path = (self.settings.get("queue") or {}).get("path", "data/creatives_queue.csv")
                 queue_df = load_queue(queue_path)
             
-            # Run stages
+            # Run ASC+ stage
             stage_summaries = []
             
-            # Testing stage
-            testing_result = self._run_stage_safely(
-                run_testing_tick,
-                "TESTING",
-                self.client,
-                self.settings,
-                self.engine,
-                self.store,
-                queue_df,
-                set_supabase_status if 'set_supabase_status' in locals() else None,
-                placements=["facebook", "instagram"],
-                instagram_actor_id=os.getenv("IG_ACTOR_ID"),
-            )
-            if testing_result:
-                stage_summaries.append({"stage": "TEST", "counts": testing_result})
-            
-            # Validation stage
-            validation_result = self._run_stage_safely(
-                run_validation_tick,
-                "VALIDATION",
-                self.client,
-                self.settings,
-                self.engine,
-                self.store,
-            )
-            if validation_result:
-                stage_summaries.append({"stage": "VALID", "counts": validation_result})
-            
-            # Scaling stage
-            scaling_result = self._run_stage_safely(
-                run_scaling_tick,
-                "SCALING",
+            # ASC+ stage
+            asc_plus_result = self._run_stage_safely(
+                run_asc_plus_tick,
+                "ASC+",
                 self.client,
                 self.settings,
                 self.store,
             )
-            if scaling_result:
-                stage_summaries.append({"stage": "SCALE", "counts": scaling_result})
+            if asc_plus_result:
+                stage_summaries.append({"stage": "ASC+", "counts": asc_plus_result})
             
             # Check for critical alerts
             self._check_critical_alerts()

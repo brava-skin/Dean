@@ -1,263 +1,94 @@
 # =====================================================
-# DEAN BUSINESS RULES - UPDATED FOR 10-CREATIVE ANDROMEDA SYSTEM
-# Based on 2-week performance analysis (Oct 9-22, 2025)
+# DEAN BUSINESS RULES - SIMPLIFIED FOR ASC+ CAMPAIGN
+# Single Advantage+ Shopping Campaign with 5 creatives
 # =====================================================
 
-version: 2.3
+version: 3.0
 env: prod
 
 # ── Performance Thresholds ───────────────────────────
 thresholds:
   ctr:
-    testing_floor: 0.008      # Minimum CTR to continue testing (based on your 1.07-2.37% range)
-    validation_floor: 0.010   # Minimum CTR in validation
-  
-  cpa:  # EUR - Based on your performance data
-    testing_max: 30           # Max CPA before kill in testing (aggressive)
-    validation_max: 35        # Max CPA before kill in validation
-    scaling_kill_max: 40      # Max CPA before kill in scaling
-  
+    asc_plus_floor: 0.008      # Minimum CTR to keep creative alive
+  cpa:  # EUR
+    asc_plus_max: 40          # Max CPA before kill
   roas:
-    testing_min: 1.0          # Min ROAS to promote from testing (lowered for faster promotion)
-    validation_min: 1.2       # Min ROAS to promote from validation
-    scaling_kill_min: 1.0     # Min ROAS to keep in scaling
+    asc_plus_min: 1.0         # Min ROAS to keep creative
 
 # ── Minimum Requirements ──────────────────────────────
 minimums:
-  impressions: 150      # Lowered for 4-day testing
-  clicks: 3             # Lowered for 4-day testing
-  spend_eur: 15        # Lowered for 4-day testing
+  impressions: 200
+  clicks: 5
+  spend_eur: 20
 
-# ── Testing Stage Rules ───────────────────────────────
-# 7-DAY ANDROMEDA TESTING SYSTEM (10 CREATIVES)
-# Based on Andromeda requirements: More creatives, longer learning window
-testing:
-  # 7-DAY MAXIMUM TESTING WINDOW (Extended for Andromeda learning)
-  max_testing_days: 7
-  
+# ── ASC+ Campaign Rules ───────────────────────────────
+# Simple rules for ASC+ campaign - always 5 creatives live
+asc_plus:
   minimums:
-    min_impressions: 150
-    min_spend_eur: 15
-    min_clicks: 3
+    min_impressions: 200
+    min_spend_eur: 20
+    min_clicks: 5
   
   kill:
-    # DAY 1-2: EARLY PERFORMANCE INDICATORS
-    # Zero performance - immediate kill
-    - {type: "zero_performance_quick_kill", spend_gte: 20, ctr_lt: 0.001}
+    # Early performance indicators
+    - {type: "zero_performance_quick_kill", spend_gte: 25, ctr_lt: 0.001}
     
-    # CPM management - based on your data showing CPM explosion
-    - {type: "cpm_above", cpm_above: 120, spend_gte: 25}          # Kill if CPM >€120 after €25 (less aggressive for cold pixel)
-    - {type: "cpm_above", cpm_above: 100, spend_gte: 25}          # Kill if CPM >€100 after €25
-    - {type: "cpm_increase", cpm_increase_pct: 80, spend_gte: 20}  # Kill if CPM increases 80%+
-    - {type: "cpm_spike", cpm_spike_pct: 100, spend_gte: 15}       # Kill if CPM doubles
-    
-    # DAY 2-3: PERFORMANCE VALIDATION
-    # Poor CTR - based on your 1.07-2.37% CTR range
-    - {type: "ctr_below", ctr_lt: 0.008, spend_gte: 20}           # Kill if CTR <0.8% after €20
-    - {type: "ctr_below", ctr_lt: 0.010, spend_gte: 30}           # Kill if CTR <1.0% after €30
-    
-    # No engagement after reasonable spend
-    - {type: "spend_no_purchase", spend_gte: 40}                   # Kill if no purchase after €40
-    - {type: "spend_no_atc", spend_gte: 35}                       # Kill if no ATC after €35
-    
-    # DAY 3-4: FINAL DECISION WINDOW
-    # Still no purchase after 3 days
-    - {type: "spend_no_purchase", spend_gte: 50}                   # Kill if no purchase after €50
-    - {type: "atc_no_purchase", atc_gte: 1, spend_gte: 40, days: 3} # Kill if ATC but no purchase after 3 days
-    
-    # CPM still high - based on your €90+ CPM in week 2
-    - {type: "cpm_above", cpm_above: 90, spend_gte: 40}           # Kill if CPM >€90 after €40
-    
-    # METRIC-BASED PERFORMANCE RULES
-    # CTR Performance
-    - {type: "ctr_below", ctr_lt: 0.008, spend_gte: 20}           # Kill if CTR <0.8% after €20 spend
-    
-    # ATC Performance
-    - {type: "atc_rate_below", atc_rate_lt: 0.005, spend_gte: 40, clicks_gte: 50}  # Kill if ATC rate <0.5% after €40 spend AND ≥50 clicks
-    - {type: "cost_per_atc_above", cost_per_atc_gte: 15, spend_gte: 30} # Kill if cost per ATC >€15
-    - {type: "atc_no_purchase", atc_gte: 1, spend_gte: 40, days: 3} # Kill if ATC but no purchase after 3 days
-    - {type: "atc_rate_drop", atc_rate_drop_pct: 30, days: 2}     # Kill if ATC rate drops 30%+ for 2 days
-    
-    # Impression Performance
-    - {type: "impression_drop", impression_drop_pct: 30, days: 2}  # Kill if impressions drop 30%+ for 2 days
-    
-    # ATC Conversion Rules
-    - {type: "atc_no_ic", atc_gte: 2, ic_lt: 1, spend_gte: 40}    # Kill if >2 ATC but no IC
-    
-    # DAY 7: MANDATORY KILL (Extended for Andromeda)
-    # Kill after 7 days if not promoted - no exceptions
-    - {type: "max_runtime", days: 7, action: "kill"}              # Kill after 7 days if not promoted
-    - {type: "mandatory_kill_after_days", days: 7}               # Kill after 7 days regardless of minimums
-  
-  # FAST-TRACK PROMOTION (Based on your data showing winners emerge quickly)
-  advance:
-    operator: "any"
-    rules:
-      # Immediate promotion for strong signals
-      - {type: "purchase_gte", purchases_gte: 1}                  # Any purchase = promote
-      - {type: "atc_gte", atc_gte: 2, spend_gte: 30}              # 2+ ATC after €30 = promote
-      - {type: "ctr_gte", ctr_gte: 0.025, spend_gte: 25}          # CTR >2.5% after €25 = promote
-      - {type: "cpm_lte", cpm_lte: 60, spend_gte: 30, ctr_gte: 0.015} # Low CPM + good CTR = promote
-  
-  # Engine configuration for 4-day testing
-  engine:
-    consecutive_ticks_required: 2                                  # Keep 2 ticks for stability
-    
-    fairness:
-      min_spend_before_kill_eur: 15
-      min_runtime_hours: 6                                         # Shorter minimum runtime
-    
-    learning:
-      max_learning_budget_eur: 60                                  # Lower max budget for 4-day testing
-    
-    tripwires:
-      lifetime_spend_no_purchase_eur: 50                           # Lower tripwire for 4-day testing
-    
-    bayes:
-      prior_a: 1.5                                                 # More aggressive priors
-      prior_b: 200.0
-      sample_count: 16                                             # Smaller sample size for 4-day testing
-      kill_prob: 0.85                                              # Higher kill probability
-    
-    adaptive_ctr:
-      floor_min: 0.010                                             # Higher CTR floor
-      floor_scale: 0.80
-      min_impressions: 150
-    
-    fatigue:
-      ewma_alpha: 0.40                                             # More sensitive to fatigue
-      drop_pct: 0.25
-    
-    promotion:
-      pause_after_promotion: true
-      validation_budget_eur: 60                                    # Higher validation budget
-      placements: ["facebook", "instagram"]
-    
-    queue:
-      max_launches_per_tick: 10                                    # Keep exactly 10 creatives alive (Andromeda)
-      ugc_priority_boost: 2.0                                      # Higher UGC priority
-      max_ugc_tests_per_tick: 10                                   # Maintain 10 UGC tests always
-      maintain_creative_count: 10                                   # Always keep 10 creatives running
-    
-    attribution_windows: ["7d_click", "1d_view"]
-
-# ── Validation Stage Rules ────────────────────────────
-# 7-DAY VALIDATION WINDOW
-# Based on your data showing validation should be shorter
-validation:
-  max_validation_days: 7
-  
-  minimums:
-    min_impressions: 300
-    min_clicks: 15
-    min_spend_eur: 40
-  
-  kill:
-    # CPM management for validation
-    - {type: "cpm_above", cpm_above: 100, spend_gte: 30}          # Kill if CPM >€100 after €30
-    - {type: "cpm_above", cpm_above: 80, spend_gte: 50}           # Kill if CPM >€80 after €50
-    - {type: "cpm_increase", cpm_increase_pct: 60, spend_gte: 40} # Kill if CPM increases 60%+
+    # CPM management
+    - {type: "cpm_above", cpm_above: 120, spend_gte: 30}
+    - {type: "cpm_above", cpm_above: 100, spend_gte: 40}
+    - {type: "cpm_increase", cpm_increase_pct: 80, spend_gte: 25}
     
     # Performance validation
-    - {type: "ctr_below", ctr_lt: 0.010, spend_gte: 40}           # Kill if CTR <1.0% after €40
-    - {type: "spend_no_purchase", spend_gte: 80}                   # Kill if no purchase after €80
-    - {type: "atc_no_purchase", atc_gte: 1, spend_gte: 60, days: 5} # Kill if ATC but no purchase after 5 days
+    - {type: "ctr_below", ctr_lt: 0.008, spend_gte: 30}
+    - {type: "spend_no_purchase", spend_gte: 60}
+    - {type: "atc_no_purchase", atc_gte: 1, spend_gte: 50, days: 3}
     
     # CPA validation
-    - {type: "cpa_gte", cpa_gte: 35}                              # Kill if CPA >€35
-    - {type: "roas_below", roas_lt: 0.8, spend_gte: 60}           # Kill if ROAS <0.8 after €60
-  
-  # Promotion to scaling (faster promotion)
-  advance:
-    operator: "any"
-    rules:
-      - {type: "purchase_gte", purchases_gte: 2}                   # 2+ purchases = promote
-      - {type: "atc_gte", atc_gte: 3, spend_gte: 50}             # 3+ ATC after €50 = promote
-      - {type: "ctr_gte", ctr_gte: 0.020, spend_gte: 40}          # CTR >2.0% after €40 = promote
-      - {type: "cpm_lte", cpm_lte: 70, spend_gte: 50, ctr_gte: 0.015} # Low CPM + good CTR = promote
+    - {type: "cpa_gte", cpa_gte: 40}
+    - {type: "roas_below", roas_lt: 0.8, spend_gte: 50}
+    
+    # ATC Performance
+    - {type: "atc_rate_below", atc_rate_lt: 0.005, spend_gte: 50, clicks_gte: 50}
+    - {type: "cost_per_atc_above", cost_per_atc_gte: 15, spend_gte: 40}
   
   # Engine configuration
   engine:
     consecutive_ticks_required: 2
+    
     fairness:
-      min_spend_before_kill_eur: 40
-    tripwires:
-      lifetime_spend_no_purchase_eur: 80
-    promotion:
-      pause_after_promotion: true
-      cooldown_hours: 12                                           # Shorter cooldown
-      allow_create_on_promo_check: false
-    soft_pass:
-      max_budget_eur: 60
-      max_cpa_eur: 35
-      min_roas: 1.0
-      min_ctr: 0.010
-      cooldown_hours: 12
+      min_spend_before_kill_eur: 20
+      min_runtime_hours: 12
     
-    attribution_windows: ["7d_click", "1d_view"]
-    min_days_with_purchase: 1                                      # Shorter requirement
-
-# ── Scaling Stage Rules ───────────────────────────────
-# OPTIMIZED FOR CONSISTENT SALES
-scaling:
-  minimums:
-    min_spend_eur: 60
-    min_impressions: 800
-    min_clicks: 20
-  
-  kill:
-    # CPM management for scaling
-    - {type: "cpm_above", cpm_above: 90, spend_gte: 50}           # Kill if CPM >€90 after €50
-    - {type: "cpm_above", cpm_above: 80, spend_gte: 70}          # Kill if CPM >€80 after €70
-    - {type: "cpm_increase", cpm_increase_pct: 50, spend_gte: 60} # Kill if CPM increases 50%+
+    learning:
+      max_learning_budget_eur: 60
     
-    # Performance management
-    - {type: "cpa_gte_consecutive_days", cpa_gte: 40, days: 2}    # Kill if CPA >€40 for 2 days
-    - {type: "roas_below_consecutive_days", roas_lt: 1.0, days: 3} # Kill if ROAS <1.0 for 3 days
-    - {type: "spend_no_purchase", spend_gte: 120}                 # Kill if no purchase after €120
-    - {type: "atc_no_purchase", atc_gte: 2, spend_gte: 100, days: 4} # Kill if 2+ ATC but no purchase after 4 days
-  
-  # Scale up conditions
-  scale_up:
-    - {type: "roas_gte", roas_gte: 1.8, days: 2}                 # Scale if ROAS >1.8 for 2 days
-    - {type: "cpa_lte", cpa_lte: 25, days: 2}                   # Scale if CPA <€25 for 2 days
-    - {type: "stable_performance", days: 3}                      # Scale if stable for 3 days
-  
-  # Scale down conditions
-  scale_down:
-    - {type: "roas_declining", decline_pct: 25, days: 2}         # Scale down if ROAS drops 25% for 2 days
-    - {type: "cpa_increasing", increase_pct: 40, days: 2}        # Scale down if CPA increases 40% for 2 days
-  
-  # Creative refresh
-  refresh_winner:
-    enabled: true
-    after_good_days: 5                                           # Refresh after 5 good days
-    cpa_max_eur: 25
-    roas_min: 2.0
-  
-  # Engine configuration
-  engine:
-    consecutive_ticks_required: 2
-    kill:
-      cpa_threshold_eur: 40
-      cpa_days: 2
-      roas_min: 1.0
-      roas_days: 3
     tripwires:
-      lifetime_spend_no_purchase_eur: 150
-    budget:
-      scale_up_pct: 50
-      scale_down_pct: 25
-      max_increase_per_day_pct: 100
-    duplication:
-      enabled: true
-      min_roas: 2.0
-      min_days_stable: 3
+      lifetime_spend_no_purchase_eur: 60
+    
+    bayes:
+      prior_a: 1.5
+      prior_b: 200.0
+      sample_count: 16
+      kill_prob: 0.85
+    
+    adaptive_ctr:
+      floor_min: 0.008
+      floor_scale: 0.80
+      min_impressions: 200
+    
+    fatigue:
+      ewma_alpha: 0.40
+      drop_pct: 0.25
+    
+    queue:
+      max_launches_per_tick: 5
+      maintain_creative_count: 5  # Always keep 5 creatives alive
+    
     attribution_windows: ["7d_click", "1d_view"]
 
 # ── Global Settings ───────────────────────────────────
 stability:
-  consecutive_ticks: 2                                           # Keep 2 ticks for stability
+  consecutive_ticks: 2
   smoothing_epsilon: 0.0
 
 attribution:
@@ -271,43 +102,26 @@ windows:
   day_7: {days: 7}
   last_48h: {hours: 48}
 
-# ── UGC CREATIVE MANAGEMENT ──────────────────────────
-ugc_creative_rules:
-  # Global UGC rotation settings (Updated for 10-creative Andromeda system)
-  global_rotation:
-    max_runtime_days: 7                # Force rotation every 7 days (Andromeda learning)
-    min_testing_budget_eur: 5.0        # €50 budget / 10 creatives = €5 per creative
-    max_concurrent_ugc_tests: 10       # Keep exactly 10 UGC tests running (€50 budget spread)
-    maintain_count: 10                 # Always keep 10 creatives alive
-    budget_per_creative_eur: 5.0       # €5 per creative (€50 total / 10)
+# ── ML System Configuration ──────────────────────────
+ml_system:
+  enabled: true
+  track_ad_copy: true
+  track_creative_performance: true
+  track_scaling_decisions: true
+  learn_from_asc_plus: true
   
-  # CPM-based UGC switching
-  cpm_ugc_switching:
-    high_cpm_threshold: 100            # Switch UGC if CPM above €100
-    cpm_increase_threshold: 60         # Switch if CPM increases 60%+
-    cpm_spike_threshold: 80            # Switch if CPM spikes 80%+
+  # Data tracking
+  track_metrics:
+    - "ad_copy"
+    - "creative_text"
+    - "ad_performance"
+    - "creative_performance"
+    - "scaling_opportunities"
   
-  # Creative fatigue detection
-  fatigue_detection:
-    ctr_drop_threshold: 20             # Switch if CTR drops 20%+
-    impression_drop_threshold: 30     # Switch if impressions drop 30%+
-    performance_plateau_days: 3         # Switch if performance plateaus for 3 days
-    engagement_drop_threshold: 25     # Switch if engagement drops 25%+
-  
-  # UGC testing priorities
-  testing_priorities:
-    new_ugc_priority: 2.0             # Boost new UGC in testing
-    untested_variations_priority: 1.5  # Boost untested variations
-    high_performing_priority: 1.3      # Boost high-performing creatives
-  
-  # Creative categories for UGC
-  creative_categories:
-    - "hook_variations"                # Different opening hooks
-    - "product_highlights"            # Product feature showcases
-    - "benefits_focused"              # Benefit-driven content
-    - "social_proof"                  # Customer testimonials
-    - "problem_solution"              # Problem-solution format
-    - "lifestyle_usage"               # Lifestyle and usage scenarios
+  # Learning parameters
+  learning_rate: 0.01
+  confidence_threshold: 0.7
+  min_samples_for_learning: 10
 
 # ── Economics ─────────────────────────────────────────
 economics:

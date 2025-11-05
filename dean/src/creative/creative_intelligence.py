@@ -34,7 +34,7 @@ except ImportError:
 
 # Import validated Supabase client
 try:
-    from infrastructure.validated_supabase import get_validated_supabase_client
+    from infrastructure.supabase_storage import get_validated_supabase_client
     VALIDATED_SUPABASE_AVAILABLE = True
 except ImportError:
     VALIDATED_SUPABASE_AVAILABLE = False

@@ -3,12 +3,13 @@ Comprehensive Data Validation System for Supabase
 ================================================
 This module provides field-level validation for all Supabase table operations.
 Prevents invalid data from being stored by validating every field before insertion.
+Includes date validation and correction utilities.
 """
 
 import re
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Any, Optional, Union, Callable
 from dataclasses import dataclass
 from enum import Enum
@@ -412,7 +413,7 @@ class SupabaseDataValidator:
                 'ad_id': StringValidator('ad_id', required=True, max_length=100),
                 'lifecycle_id': StringValidator('lifecycle_id', max_length=100),
                 'stage': StringValidator('stage', required=True,
-                                       allowed_values=['testing', 'validation', 'scaling']),
+                                       allowed_values=['asc_plus']),
                 'window_type': StringValidator('window_type', required=True, 
                                              allowed_values=['1d', '7d', '30d']),
                 'date_start': DateValidator('date_start', required=True),
@@ -451,14 +452,14 @@ class SupabaseDataValidator:
                 'campaign_id': StringValidator('campaign_id', max_length=100),
                 'adset_id': StringValidator('adset_id', max_length=100),
                 'stage': StringValidator('stage', required=True, 
-                                       allowed_values=['testing', 'validation', 'scaling', 'completed']),
+                                       allowed_values=['asc_plus', 'completed']),
                 'status': StringValidator('status', required=True, 
                                         allowed_values=['active', 'paused', 'completed', 'failed']),
                 'lifecycle_id': StringValidator('lifecycle_id', max_length=100),
                 'metadata': JSONValidator('metadata'),
                 'stage_duration_hours': FloatValidator('stage_duration_hours', min_value=0),
                 'previous_stage': StringValidator('previous_stage', 
-                                                 allowed_values=['created', 'testing', 'validation', 'scaling']),
+                                                 allowed_values=['created', 'asc_plus']),
                 'stage_performance': JSONValidator('stage_performance'),
                 'transition_reason': StringValidator('transition_reason', max_length=200),
             }),
@@ -468,14 +469,13 @@ class SupabaseDataValidator:
                 'ad_id': StringValidator('ad_id', required=True, max_length=100),
                 'creative_type': StringValidator('creative_type', required=True,
                                                 allowed_values=['image', 'video', 'carousel', 'collection', 'story', 'reels']),
-                'duration_seconds': IntegerValidator('duration_seconds', min_value=0, max_value=3600),
+                # Static image fields (duration_seconds, music_present, voice_over removed - not applicable for images)
                 'aspect_ratio': StringValidator('aspect_ratio', pattern=r'^\d+:\d+$'),
                 'file_size_mb': FloatValidator('file_size_mb', min_value=0, max_value=1000),
                 'resolution': StringValidator('resolution', pattern=r'^\d+x\d+$'),
                 'color_palette': JSONValidator('color_palette'),
                 'text_overlay': BooleanValidator('text_overlay'),
-                'music_present': BooleanValidator('music_present'),
-                'voice_over': BooleanValidator('voice_over'),
+                # music_present and voice_over removed - not applicable for static images
                 # NUMERIC(5,4) constraint: values must be between -9.9999 and 9.9999
                 'avg_ctr': FloatValidator('avg_ctr', min_value=-9.9999, max_value=9.9999),
                 'avg_cpa': FloatValidator('avg_cpa', min_value=-9.9999, max_value=9.9999),
@@ -490,9 +490,12 @@ class SupabaseDataValidator:
                 'headline': StringValidator('headline', max_length=200),
                 'lifecycle_id': StringValidator('lifecycle_id', max_length=100),
                 'stage': StringValidator('stage', 
-                                       allowed_values=['testing', 'validation', 'scaling', 'completed']),
+                                       allowed_values=['asc_plus', 'testing', 'validation', 'scaling', 'completed']),
                 'primary_text': StringValidator('primary_text', max_length=1000),
                 'performance_score': FloatValidator('performance_score', min_value=0, max_value=1),
+                'supabase_storage_url': StringValidator('supabase_storage_url', max_length=500),
+                'image_prompt': StringValidator('image_prompt', max_length=2000),
+                'text_overlay_content': StringValidator('text_overlay_content', max_length=200),
             }),
             
             'creative_library': TableValidator('creative_library', {
@@ -539,7 +542,7 @@ class SupabaseDataValidator:
             'ml_models': TableValidator('ml_models', {
                 'model_type': StringValidator('model_type', required=True, max_length=100),
                 'stage': StringValidator('stage', required=True,
-                                       allowed_values=['testing', 'validation', 'scaling']),
+                                       allowed_values=['asc_plus']),
                 'version': IntegerValidator('version', required=True, min_value=1),
                 'model_name': StringValidator('model_name', required=True, max_length=255),
                 'model_data': CustomValidator('model_data', 
@@ -558,7 +561,7 @@ class SupabaseDataValidator:
                 'ad_id': StringValidator('ad_id', required=True, max_length=100),
                 'lifecycle_id': StringValidator('lifecycle_id', max_length=100),
                 'stage': StringValidator('stage', required=True,
-                                       allowed_values=['testing', 'validation', 'scaling']),
+                                       allowed_values=['asc_plus']),
                 'metric_name': StringValidator('metric_name', required=True, max_length=100),
                 'metric_value': FloatValidator('metric_value', required=True),
                 'ts_iso': DateValidator('ts_iso', date_format="%Y-%m-%dT%H:%M:%S"),
@@ -569,7 +572,7 @@ class SupabaseDataValidator:
                 'ad_id': StringValidator('ad_id', required=True, max_length=100),
                 'lifecycle_id': StringValidator('lifecycle_id', max_length=100),
                 'stage': StringValidator('stage', required=True,
-                                       allowed_values=['testing', 'validation', 'scaling']),
+                                       allowed_values=['asc_plus']),
                 'metric_name': StringValidator('metric_name', required=True, max_length=100),
                 'metric_value': FloatValidator('metric_value', required=True),
                 'timestamp': DateValidator('timestamp', date_format="%Y-%m-%dT%H:%M:%S"),
@@ -578,7 +581,7 @@ class SupabaseDataValidator:
             'ad_creation_times': TableValidator('ad_creation_times', {
                 'ad_id': StringValidator('ad_id', required=True, max_length=100),
                 'stage': StringValidator('stage', required=True,
-                                       allowed_values=['testing', 'validation', 'scaling']),
+                                       allowed_values=['asc_plus']),
                 'created_at_iso': DateValidator('created_at_iso', date_format="%Y-%m-%dT%H:%M:%S"),
                 'created_at_epoch': IntegerValidator('created_at_epoch', min_value=0),
             }),
@@ -588,7 +591,7 @@ class SupabaseDataValidator:
                 'lifecycle_id': StringValidator('lifecycle_id', max_length=100),
                 'model_id': StringValidator('model_id', max_length=100),
                 'stage': StringValidator('stage', required=True,
-                                       allowed_values=['testing', 'validation', 'scaling']),
+                                       allowed_values=['asc_plus']),
                 'prediction_type': StringValidator('prediction_type', max_length=100),
                 'predicted_value': FloatValidator('predicted_value'),
                 'prediction_value': FloatValidator('prediction_value'),
@@ -608,9 +611,9 @@ class SupabaseDataValidator:
                 'ad_id': StringValidator('ad_id', max_length=100),
                 'lifecycle_id': StringValidator('lifecycle_id', max_length=100),
                 'from_stage': StringValidator('from_stage', max_length=50,
-                                            allowed_values=['testing', 'validation', 'scaling']),
+                                            allowed_values=['asc_plus']),
                 'to_stage': StringValidator('to_stage', max_length=50,
-                                          allowed_values=['testing', 'validation', 'scaling']),
+                                          allowed_values=['asc_plus']),
                 'learning_data': JSONValidator('learning_data'),
                 'confidence_score': FloatValidator('confidence_score'),
                 'impact_score': FloatValidator('impact_score'),
@@ -618,7 +621,7 @@ class SupabaseDataValidator:
                 'model_name': StringValidator('model_name', max_length=100),
                 'event_data': JSONValidator('event_data'),
                 'stage': StringValidator('stage', required=True,
-                                       allowed_values=['testing', 'validation', 'scaling']),
+                                       allowed_values=['asc_plus']),
                 'timestamp': DateValidator('timestamp', date_format="%Y-%m-%dT%H:%M:%S"),
             }),
         }
@@ -812,3 +815,155 @@ def validate_and_sanitize_data(table_name: str, data: Dict[str, Any]) -> Dict[st
         raise ValidationError(f"Data validation failed: {', '.join(result.errors)}")
     
     return result.sanitized_data
+
+
+# =====================================================
+# DATE VALIDATION UTILITIES
+# =====================================================
+
+class DateValidationUtility:
+    """Centralized date validation and correction utility."""
+    
+    def __init__(self):
+        self.logger = logging.getLogger(f"{__name__}.DateValidationUtility")
+        self.min_valid_date = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        self.max_future_offset = timedelta(hours=1)
+        
+    def get_current_timestamp(self) -> datetime:
+        """Get current UTC timestamp."""
+        return datetime.now(timezone.utc)
+    
+    def validate_and_correct_date(self, 
+                                date_value: Any, 
+                                field_name: str = "timestamp",
+                                allow_future: bool = False,
+                                max_future_hours: int = 1) -> datetime:
+        """Validate and correct a date value to ensure it's current and valid."""
+        now = self.get_current_timestamp()
+        
+        if date_value is None or date_value == "":
+            self.logger.debug(f"Empty {field_name}, using current timestamp")
+            return now
+        
+        if isinstance(date_value, str):
+            try:
+                if ('*' in date_value or '***' in date_value or 
+                    len(date_value) < 8 or
+                    date_value.count('-') < 2 or
+                    not any(c.isdigit() for c in date_value)):
+                    self.logger.warning(f"Malformed date {field_name} '{date_value}', using current timestamp")
+                    return now
+                    
+                if 'T' in date_value:
+                    parsed_date = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
+                else:
+                    try:
+                        parsed_date = datetime.strptime(date_value, '%Y-%m-%d')
+                    except ValueError:
+                        parsed_date = datetime.strptime(date_value, '%Y-%m-%d %H:%M:%S%z')
+            except (ValueError, TypeError):
+                self.logger.warning(f"Failed to parse {field_name} '{date_value}', using current timestamp")
+                return now
+                
+        elif isinstance(date_value, (int, float)):
+            try:
+                if date_value > 1e10:  # Milliseconds
+                    parsed_date = datetime.fromtimestamp(date_value / 1000, tz=timezone.utc)
+                else:  # Seconds
+                    parsed_date = datetime.fromtimestamp(date_value, tz=timezone.utc)
+            except (ValueError, OSError):
+                self.logger.warning(f"Invalid epoch timestamp {field_name} '{date_value}', using current timestamp")
+                return now
+                
+        elif isinstance(date_value, datetime):
+            parsed_date = date_value
+            if parsed_date.tzinfo is None:
+                parsed_date = parsed_date.replace(tzinfo=timezone.utc)
+        else:
+            self.logger.warning(f"Unsupported date type {field_name} '{type(date_value)}', using current timestamp")
+            return now
+        
+        if parsed_date.tzinfo is None:
+            parsed_date = parsed_date.replace(tzinfo=timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        if self.min_valid_date.tzinfo is None:
+            self.min_valid_date = self.min_valid_date.replace(tzinfo=timezone.utc)
+        
+        try:
+            _ = parsed_date < now
+        except TypeError as tz_error:
+            self.logger.warning(f"Timezone comparison error for {field_name}: {tz_error}, using current timestamp")
+            return now
+            
+        if parsed_date < self.min_valid_date:
+            self.logger.warning(f"{field_name} too old ({parsed_date}), using current timestamp")
+            return now
+            
+        if not allow_future and parsed_date > now + self.max_future_offset:
+            self.logger.warning(f"{field_name} in future ({parsed_date}), using current timestamp")
+            return now
+            
+        if allow_future and parsed_date > now + timedelta(hours=max_future_hours):
+            self.logger.warning(f"{field_name} too far in future ({parsed_date}), using current timestamp")
+            return now
+        
+        self.logger.debug(f"{field_name} validated: {parsed_date}")
+        return parsed_date
+    
+    def validate_data_timestamps(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate all timestamp fields in a data dictionary."""
+        timestamp_fields = [
+            'created_at', 'updated_at', 'timestamp', 'expires_at',
+            'date_start', 'date_end', 'trained_at', 'recorded_at'
+        ]
+        
+        for field in timestamp_fields:
+            if field in data and data[field] is not None:
+                try:
+                    validated_date = self.validate_and_correct_date(
+                        data[field], 
+                        field
+                    )
+                    data[field] = validated_date.isoformat()
+                except Exception as e:
+                    self.logger.error(f"Error validating {field}: {e}")
+                    data[field] = self.get_current_timestamp().isoformat()
+        
+        return data
+
+
+# Global instance for easy access
+date_validator = DateValidationUtility()
+
+def get_validated_timestamp(date_value: Any = None, field_name: str = "timestamp") -> datetime:
+    """Convenience function to get a validated timestamp."""
+    return date_validator.validate_and_correct_date(date_value, field_name)
+
+def add_current_timestamps(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Convenience function to add current timestamps to data."""
+    now = date_validator.get_current_timestamp()
+    if 'created_at' not in data or data['created_at'] is None:
+        data['created_at'] = now.isoformat()
+    if 'updated_at' not in data or data['updated_at'] is None:
+        data['updated_at'] = now.isoformat()
+    if 'timestamp' not in data or data['timestamp'] is None:
+        data['timestamp'] = now.isoformat()
+    return data
+
+def validate_all_timestamps(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Convenience function to validate all timestamps in data."""
+    return date_validator.validate_data_timestamps(data)
+
+
+__all__ = [
+    "ValidationError",
+    "ValidationResult",
+    "validate_supabase_data",
+    "validate_and_sanitize_data",
+    "DateValidationUtility",
+    "date_validator",
+    "get_validated_timestamp",
+    "add_current_timestamps",
+    "validate_all_timestamps",
+]

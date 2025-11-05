@@ -1,10 +1,9 @@
-name: Dean
+name: Dean ASC+ Campaign Automation
 
 on:
-  # PAUSED: Automation temporarily disabled - ads are not currently running
-  # schedule:
-  #   # Run every 30 minutes
-  #   - cron: '*/30 * * * *'
+  schedule:
+    # Run every 30 minutes for ASC+ campaign monitoring
+    - cron: '*/30 * * * *'
   workflow_dispatch: # Allow manual runs
 
 jobs:
@@ -36,6 +35,14 @@ jobs:
         pip install --cache-dir ~/.cache/pip -r dean/requirements.txt
         echo "✅ Dependencies installed successfully"
         
+    - name: Install ffmpeg
+      run: |
+        echo "📹 Installing ffmpeg for text overlay generation..."
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+        ffmpeg -version
+        echo "✅ ffmpeg installed successfully"
+        
     - name: Run Dean
       env:
         # Meta Ads API Configuration
@@ -51,9 +58,11 @@ jobs:
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         SUPABASE_TABLE: ${{ secrets.SUPABASE_TABLE }}
+        CREATIVE_STORAGE_BUCKET: creatives
         
-        # Creative Intelligence System Configuration
+        # Creative Generation Configuration
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        FLUX_API_KEY: ${{ secrets.FLUX_API_KEY }}
         
         # Business Configuration
         STORE_URL: ${{ secrets.STORE_URL }}
@@ -78,15 +87,22 @@ jobs:
         TZ: Europe/Amsterdam
         
       run: |
-        echo "🚀 Starting Dean..."
+        echo "🚀 Starting Dean ASC+ Campaign Automation..."
+        echo ""
+        echo "📋 Campaign Configuration:"
+        echo "   - Campaign Type: Advantage+ Shopping Campaign (ASC+)"
+        echo "   - Budget: €50/day"
+        echo "   - Target: Men aged 18-54 in United States"
+        echo "   - Creative Type: Static images with text overlays"
         echo ""
         
         # Change to dean directory where config files are located
         cd dean
         
-        # Run Dean with production profile
-        python src/main.py --profile production
+        # Run Dean ASC+ automation
+        python src/main.py
         
         echo ""
-        echo "✅ Dean automation cycle completed"
-        echo "📊 Next run in 30 minutes"
+        echo "✅ Dean ASC+ automation cycle completed"
+        echo "📊 Next run scheduled in 30 minutes"
+        echo "🎨 Creative generation: Flux API + ChatGPT-5 + ffmpeg"

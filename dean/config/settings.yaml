@@ -18,18 +18,19 @@ copy_bank:
   strategy: "round_robin"
 
 # Campaign & AdSet IDs (root level for backward compatibility)
+# Single ASC+ Campaign Setup
 ids:
-  testing_campaign_id: "120231838265440160"
-  testing_adset_id: "120231838265460160"
-  validation_campaign_id: "120231838417260160"
-  scaling_campaign_id: "120231838441470160"
+  asc_plus_campaign_id: "120233669753230160"  # ASC+ Campaign ID
+  asc_plus_adset_id: "120233669753240160"    # ASC+ Ad Set ID
+  # Legacy IDs removed - system now uses only ASC+ campaign
 
 # ── Meta API Defaults ────────────────────────────────
 meta:
   objective: "SALES"
   conversion_location: "website"
   pixel_event: "Purchase"
-  bid_strategy: "lowest_cost"
+  bid_strategy: "lowest_cost"  # No manual bid caps
+  campaign_type: "SHOPPING"  # Advantage+ Shopping Campaign (ASC)
   
   attribution:
     click_days: 7
@@ -44,13 +45,14 @@ meta:
     gender: "male"
     age_min: 18
     age_max: 54
-    exclude_purchasers_days: 60
+    # No interests, no exclusions
   
   creative:
     dynamic_creative: false
     cta: "SHOP_NOW"
     link_url_env: "STORE_URL"
     instagram_actor_id_env: "IG_ACTOR_ID"
+    creative_type: "static_image"  # Static images instead of UGC videos
 
 # ── Placements ───────────────────────────────────────
 placements:
@@ -62,83 +64,56 @@ placements:
     messenger_positions: []
     audience_network_positions: []
   
-  testing:
+  # ASC+ Campaign uses Advantage+ Placements only
+  asc_plus:
+    advantage_plus_placements: true  # Use Advantage+ Placements
     publisher_platforms: ["facebook", "instagram"]
-    facebook_positions: ["feed", "video_feeds"]
-    instagram_positions: ["feed", "story", "reels"]
-  
-  advantage_plus: true  # Use Advantage+ placement
 
-# ── Stage Configurations ─────────────────────────────
-testing:
+# ── ASC+ Campaign Configuration ──────────────────────
+asc_plus:
   daily_budget_eur: 50
-  keep_ads_live: 10
-  max_active_ads: 10
-  target_active_ads: 10                  # NEW: Always maintain 10 creatives
-  max_testing_days: 7                    # Extended for Andromeda learning
+  keep_ads_live: 5
+  max_active_ads: 5
+  target_active_ads: 5                     # Always maintain 5 creatives
   optimization_goal: "PURCHASE"
-  naming_prefix: "[TEST]"
+  naming_prefix: "[ASC+]"
   
-  # Budget allocation for 10 creatives
-  budget_per_creative_eur: 5.0          # NEW: €5 per creative (€50 ÷ 10)
-  min_budget_per_creative_eur: 2.0      # NEW: Minimum budget per creative
-  max_budget_per_creative_eur: 8.0      # NEW: Maximum budget per creative
-  
-  # Andromeda-specific settings
-  creative_rotation_frequency: "weekly"  # NEW: Weekly creative refresh
-  andromeda_optimized: true             # NEW: Flag for Andromeda features
+  # Budget allocation for 5 creatives
+  budget_per_creative_eur: 10.0            # €10 per creative (€50 ÷ 5)
+  min_budget_per_creative_eur: 5.0        # Minimum budget per creative
+  max_budget_per_creative_eur: 15.0        # Maximum budget per creative
   
   queue:
     enable_rotation: true
     refill_on_kill: true
-    max_launches_per_day: 10             # Updated for 10-creative system
-    maintain_creative_count: 10          # Always keep 10 creatives running
+    max_launches_per_day: 5                # Always keep 5 creatives running
+    maintain_creative_count: 5              # Always maintain 5 creatives
     # Creative selection is now random - no diversity checking needed
-
-validation:
-  adset_budget_eur: 40
-  min_days: 2
-  max_days: 7                              # Updated to align with 7-day validation window
-  total_spend_cap_eur: 120
-  optimization_goal: "PURCHASE"
-  naming_prefix: "[VALID]"
   
-  promotion:
-    pause_on_promotion: true
+  # Product information for creative generation
+  product:
+    name: "Brava Product"
+    description: "Luxury product for men"
+    features:
+      - "Premium quality"
+      - "Luxury design"
+      - "Sophisticated"
+    brand_tone: "calm confidence"
+    target_audience: "Men aged 18-54"
 
-scaling:
-  adset_start_budget_eur: 100
-  allow_cbo: true
-  cbo_entry_budget_eur: 400
-  cbo_increment_pct: [50, 100]
-  optimization_goal: "PURCHASE"
-  naming_prefix: "[SCALE]"
-  
-  budget:
-    min_eur: 10
-    max_eur: 5000
-    max_step_pct: 100
-    cooldown_hours: 24
-  
-  reinvestment:
-    enabled: true
-    strategy: "proportional_to_roas"
-    allocate_pct_of_freed: 50
-    min_increment_eur: 10
-
-# ── Queue Management ──────────────────────────────────
+# ── Queue Management (Legacy - Not used by ASC+ which generates creatives dynamically) ──
 queue:
   source: "supabase"  # or "csv"
   table: "meta_creatives"
   
   schema:
-    required_columns: ["video_id"]
-    optional_columns: ["creative_id", "name", "avatar", "visual_style", "script", "filename"]
+    required_columns: []  # ASC+ generates creatives dynamically, no queue needed
+    optional_columns: ["creative_id", "name", "image_url", "image_hash", "primary_text", "headline", "description"]
   
   validation:
-    check_media_exists: true
-    min_duration_sec: 5
-    max_duration_sec: 120
+    check_media_exists: false  # Images are generated on-the-fly
+    min_duration_sec: null     # Not applicable for static images
+    max_duration_sec: null    # Not applicable for static images
   
   dedupe_by: ["creative_id", "name"]
   prioritization: "fifo"
@@ -165,7 +140,7 @@ logging:
   # SQLite for local state (required for fast operations)
   sqlite:
     enabled: true
-    path: "dean/data/state.sqlite"
+    path: "data/state.sqlite"  # Relative to project root (dean/)
   
   # Supabase for ML data (required for ML mode)
   supabase:
@@ -173,10 +148,10 @@ logging:
     table_env: "SUPABASE_TABLE"
   
   # Action logs
-  actions_log: "dean/data/actions.log.jsonl"
+  actions_log: "data/actions.log.jsonl"
   
   # Daily digests
-  digests_dir: "dean/data/digests"
+  digests_dir: "data/digests"
 
 # ── Safety & Compliance ───────────────────────────────
 safety:
@@ -250,11 +225,12 @@ creative_intelligence:
   # AI Generation
   ai_generation:
     enabled: true
-    model: "gpt-5"  # Updated to GPT-5
+    model: "gpt-5"  # ChatGPT-5 only, no fallback
     temperature: 0.7
     max_tokens: 500
     generation_count: 3
     auto_approve: false
+    use_fallback: false  # Only use GPT-5
     
   # Similarity Analysis
   similarity_analysis:

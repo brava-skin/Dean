@@ -40,7 +40,8 @@ faiss-cpu>=1.7.0
 sentence-transformers>=2.2.0
 dask>=2023.0.0
 optuna>=3.4.0
-redis>=5.0.0
+redis>=5.0.0  # Caching infrastructure
+psutil>=5.9.0  # For resource optimization
 alembic>=1.13.0
 
 # ML Experiment Tracking (Optional)
@@ -63,7 +64,10 @@ sentence-transformers>=2.2.0  # Semantic similarity analysis
 transformers>=4.30.0  # Advanced NLP models
 spacy>=3.6.0  # Advanced NLP
 nltk>=3.8.0  # Natural language processing
-Pillow>=9.0.0  # Image processing for creative analysis
+Pillow>=10.0.0  # Image processing for creative analysis and optimization
 opencv-python>=4.8.0  # Image processing
 textblob>=0.17.0  # Text analysis
 vaderSentiment>=3.3.0  # Sentiment analysis
+
+# Image Generation & Processing
+ffmpeg-python>=0.2.0  # ffmpeg wrapper for text overlay

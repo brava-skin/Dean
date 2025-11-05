@@ -16,6 +16,19 @@ import requests
 
 # Import moved to avoid circular dependency - will import locally when needed
 from .slack import notify
+from infrastructure.error_handling import (
+    retry_with_backoff,
+    enhanced_retry_with_backoff,
+    with_circuit_breaker,
+    circuit_breaker_manager,
+)
+
+# Import rate limit manager
+try:
+    from infrastructure.rate_limit_manager import get_rate_limit_manager, RateLimitType
+    RATE_LIMIT_MANAGER_AVAILABLE = True
+except ImportError:
+    RATE_LIMIT_MANAGER_AVAILABLE = False
 
 USE_SDK = False
 try:
@@ -637,7 +650,8 @@ class MetaClient:
         if self.store:
             try:
                 self.store.log("account", self.ad_account_id_act, "META_API_ERROR", f"{key}", level="error", stage="ACCOUNT", reason=str(last_exc)[:300] if last_exc else key)
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
+                # Store logging failed - non-critical
                 pass
         raise last_exc if last_exc else RuntimeError("Meta API error")
 
@@ -1173,6 +1187,9 @@ class MetaClient:
         """
         Creates a Page video creative. If instagram_actor_id is provided (or IG_ACTOR_ID env is set),
         the creative will be eligible for Instagram placement.
+        
+        NOTE: Legacy function - ASC+ campaigns use static images via create_image_creative().
+        Kept for backward compatibility only.
         """
         self._check_names(ad=_s(name))
         bad = _contains_forbidden([primary_text, headline, description])
@@ -1257,6 +1274,165 @@ class MetaClient:
             raise RuntimeError(f"Video creative verification failed: video mismatch (expected={vid_id!r}, got={attached!r})")
 
         return creative
+
+    def create_image_creative(
+        self,
+        page_id: Optional[str],
+        name: str,
+        *,
+        image_url: Optional[str] = None,
+        image_path: Optional[str] = None,  # Local file path - will use Supabase Storage
+        supabase_storage_url: Optional[str] = None,  # Supabase Storage URL (preferred)
+        primary_text: str,
+        headline: str,
+        description: str = "",
+        call_to_action: str = "SHOP_NOW",
+        link_url: Optional[str] = None,
+        utm_params: Optional[str] = None,
+        instagram_actor_id: Optional[str] = None,
+        creative_id: Optional[str] = None,  # Creative ID for tracking
+    ) -> Dict[str, Any]:
+        """
+        Creates a static image creative for Meta Ads.
+        Uses Supabase Storage URL if provided, otherwise falls back to local upload.
+        """
+        self._check_names(ad=_s(name))
+        bad = _contains_forbidden([primary_text, headline, description])
+        if bad:
+            raise ValueError(f"Creative text contains forbidden term: {bad}")
+
+        pid = _s(page_id or os.getenv("FB_PAGE_ID"))
+        if not pid:
+            raise ValueError("Page ID is required (set FB_PAGE_ID or pass page_id).")
+
+        # Priority: supabase_storage_url > image_url > image_path
+        final_image_url = _s(supabase_storage_url or image_url).strip()
+        
+        if not final_image_url and image_path:
+            # Try to get Supabase Storage URL for this creative
+            if creative_id:
+                try:
+                    from infrastructure.creative_storage import create_creative_storage_manager
+                    from infrastructure.supabase_storage import get_validated_supabase_client
+                    
+                    supabase_client = get_validated_supabase_client()
+                    if supabase_client:
+                        storage_manager = create_creative_storage_manager(supabase_client)
+                        if storage_manager:
+                            storage_url = storage_manager.get_creative_url(creative_id)
+                            if storage_url:
+                                final_image_url = storage_url
+                                # Update usage
+                                storage_manager.update_usage(creative_id)
+                            else:
+                                # Upload if not in storage
+                                final_image_url = storage_manager.upload_creative(
+                                    creative_id=creative_id,
+                                    image_path=image_path,
+                                )
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning(f"Failed to get/create Supabase Storage URL: {e}")
+            
+            # Fallback: upload to Meta's ad image library (legacy)
+            if not final_image_url:
+                try:
+                    uploaded_image = self._upload_ad_image(image_path, name)
+                    if uploaded_image and uploaded_image.get("hash"):
+                        final_image_url = uploaded_image.get("hash")
+                    elif uploaded_image and uploaded_image.get("url"):
+                        final_image_url = uploaded_image.get("url")
+                except Exception as e:
+                    notify(f"⚠️ Failed to upload image, using path as URL: {e}")
+                    final_image_url = f"file://{image_path}"
+
+        if not final_image_url:
+            raise ValueError("Either supabase_storage_url, image_url, or image_path must be provided.")
+
+        final_link = _clean_story_link(link_url, utm_params)
+        ig_id = instagram_actor_id or os.getenv("IG_ACTOR_ID") or None
+
+        if self.dry_run or not USE_SDK or not self.cfg.enable_creative_uploads:
+            payload_preview = {
+                "page_id": pid,
+                "image_url": final_image_url,
+                "instagram_actor_id": ig_id or "",
+            }
+            return {
+                "id": f"CR_{abs(hash(_s(name))) % 10_000_000}",
+                "name": _s(name),
+                "mock": True,
+                **payload_preview,
+            }
+
+        self._init_sdk_if_needed()
+        self._cooldown()
+
+        image_data: Dict[str, Any] = {
+            "message": _s(primary_text),
+        }
+        
+        # Use image_hash if it's a hash, otherwise use image_url
+        if final_image_url.startswith("http"):
+            image_data["image_url"] = _s(final_image_url)
+        else:
+            image_data["image_hash"] = _s(final_image_url)
+        
+        if headline:
+            image_data["link_description"] = _s(headline)[:100]
+        if description:
+            image_data["description"] = _s(description)[:150]
+        if final_link:
+            image_data["call_to_action"] = {"type": _s(call_to_action or "SHOP_NOW"), "value": {"link": _s(final_link)}}
+
+        story_spec: Dict[str, Any] = {"page_id": pid, "link_data": image_data}
+        if ig_id:
+            story_spec["instagram_actor_id"] = ig_id
+
+        params = {
+            "name": _s(name),
+            "object_story_spec": story_spec,
+        }
+
+        # HTTP-first; SDK fallback
+        try:
+            creative = self._graph_post("adcreatives", params)
+        except Exception:
+            def _create_sdk():
+                return AdAccount(self.ad_account_id_act).create_ad_creative(fields=[], params=_sanitize(params))
+            creative = dict(self._retry("create_creative", _create_sdk))
+
+        return creative
+
+    def _upload_ad_image(self, image_path: str, name: str) -> Dict[str, Any]:
+        """
+        Upload an image to Meta's Ad Image library.
+        Returns the uploaded image hash or URL.
+        """
+        if self.dry_run or not USE_SDK:
+            return {"hash": f"MOCK_{abs(hash(image_path)) % 10_000_000}", "mock": True}
+
+        self._init_sdk_if_needed()
+        self._cooldown()
+
+        try:
+            # Read image file
+            with open(image_path, "rb") as f:
+                image_data = f.read()
+
+            # Upload using AdAccount.create_ad_image
+            def _upload():
+                return AdAccount(self.ad_account_id_act).create_ad_image(
+                    files={"file": image_data},
+                    params={"name": _s(name)}
+                )
+            
+            result = self._retry("upload_image", _upload)
+            return dict(result) if hasattr(result, "__dict__") else result
+            
+        except Exception as e:
+            notify(f"❌ Failed to upload image: {e}")
+            raise
 
     def create_ad(self, adset_id: str, name: str, creative_id: str, status: str = "PAUSED", *, original_ad_id: Optional[str] = None) -> Dict[str, Any]:
         self._check_names(ad=_s(name))

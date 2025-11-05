@@ -485,3 +485,291 @@ def create_seasonality_detector() -> SeasonalityDetector:
 def create_shap_explainer() -> SHAPExplainer:
     """Create SHAP explainer."""
     return SHAPExplainer()
+
+# =====================================================
+# MULTI-ARMED BANDIT & GENETIC ALGORITHMS
+# =====================================================
+
+@dataclass
+class BanditArm:
+    """Arm in multi-armed bandit."""
+    id: str
+    reward_sum: float = 0.0
+    pull_count: int = 0
+    alpha: float = 1.0  # Beta distribution alpha
+    beta: float = 1.0   # Beta distribution beta
+
+
+class MultiArmedBandit:
+    """Multi-armed bandit with Thompson Sampling."""
+    
+    def __init__(self, arms: List[str]):
+        self.arms = {arm_id: BanditArm(id=arm_id) for arm_id in arms}
+    
+    def select_arm(self) -> str:
+        """Select arm using Thompson Sampling."""
+        samples = {}
+        for arm_id, arm in self.arms.items():
+            # Sample from beta distribution
+            sample = np.random.beta(arm.alpha, arm.beta)
+            samples[arm_id] = sample
+        
+        # Select arm with highest sample
+        return max(samples.items(), key=lambda x: x[1])[0]
+    
+    def update(self, arm_id: str, reward: float):
+        """Update arm with reward."""
+        if arm_id not in self.arms:
+            return
+        
+        arm = self.arms[arm_id]
+        arm.pull_count += 1
+        arm.reward_sum += reward
+        
+        # Update beta distribution parameters
+        if reward > 0:
+            arm.alpha += reward
+        else:
+            arm.beta += abs(reward)
+    
+    def get_expected_reward(self, arm_id: str) -> float:
+        """Get expected reward for arm."""
+        if arm_id not in self.arms:
+            return 0.0
+        
+        arm = self.arms[arm_id]
+        if arm.alpha + arm.beta == 0:
+            return 0.0
+        
+        return arm.alpha / (arm.alpha + arm.beta)
+
+
+class ReinforcementLearningAgent:
+    """Reinforcement Learning agent for budget allocation (simplified version)."""
+    
+    def __init__(self, state_size: int, action_size: int):
+        self.state_size = state_size
+        self.action_size = action_size
+        self.q_table: Dict[Tuple, float] = {}
+        self.learning_rate = 0.1
+        self.discount_factor = 0.95
+        self.epsilon = 0.1  # Exploration rate
+    
+    def get_state_key(self, state: np.ndarray) -> Tuple:
+        """Convert state to hashable key."""
+        # Discretize state for Q-table
+        return tuple(np.round(state, 2))
+    
+    def select_action(self, state: np.ndarray, training: bool = True) -> int:
+        """Select action using epsilon-greedy policy."""
+        state_key = self.get_state_key(state)
+        
+        if training and np.random.random() < self.epsilon:
+            # Explore
+            return np.random.randint(0, self.action_size)
+        
+        # Exploit
+        q_values = [
+            self.q_table.get((state_key, action), 0.0)
+            for action in range(self.action_size)
+        ]
+        
+        return np.argmax(q_values) if q_values else 0
+    
+    def update(self, state: np.ndarray, action: int, reward: float, next_state: np.ndarray):
+        """Update Q-table using Q-learning."""
+        state_key = self.get_state_key(state)
+        next_state_key = self.get_state_key(next_state)
+        
+        # Current Q-value
+        current_q = self.q_table.get((state_key, action), 0.0)
+        
+        # Next Q-value
+        next_q_values = [
+            self.q_table.get((next_state_key, a), 0.0)
+            for a in range(self.action_size)
+        ]
+        max_next_q = max(next_q_values) if next_q_values else 0.0
+        
+        # Q-learning update
+        new_q = current_q + self.learning_rate * (
+            reward + self.discount_factor * max_next_q - current_q
+        )
+        
+        self.q_table[(state_key, action)] = new_q
+
+
+class GeneticAlgorithm:
+    """Genetic algorithm for optimization."""
+    
+    def __init__(
+        self,
+        population_size: int = 50,
+        mutation_rate: float = 0.1,
+        crossover_rate: float = 0.7,
+    ):
+        self.population_size = population_size
+        self.mutation_rate = mutation_rate
+        self.crossover_rate = crossover_rate
+        self.population: List[Dict[str, Any]] = []
+    
+    def initialize_population(self, gene_template: Dict[str, Any]):
+        """Initialize population."""
+        self.population = []
+        for _ in range(self.population_size):
+            individual = {}
+            for key, value in gene_template.items():
+                if isinstance(value, (int, float)):
+                    individual[key] = value * np.random.uniform(0.8, 1.2)
+                elif isinstance(value, list):
+                    individual[key] = value.copy()
+                else:
+                    individual[key] = value
+            self.population.append(individual)
+    
+    def evaluate(self, individual: Dict[str, Any], fitness_func: callable) -> float:
+        """Evaluate fitness of individual."""
+        return fitness_func(individual)
+    
+    def select(self, fitness_scores: List[float]) -> List[Dict[str, Any]]:
+        """Select parents using tournament selection."""
+        selected = []
+        for _ in range(self.population_size):
+            # Tournament of size 2
+            idx1, idx2 = np.random.choice(len(self.population), 2, replace=False)
+            winner = idx1 if fitness_scores[idx1] > fitness_scores[idx2] else idx2
+            selected.append(self.population[winner].copy())
+        return selected
+    
+    def crossover(self, parent1: Dict[str, Any], parent2: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Crossover two parents."""
+        if np.random.random() > self.crossover_rate:
+            return parent1.copy(), parent2.copy()
+        
+        child1 = {}
+        child2 = {}
+        
+        for key in parent1.keys():
+            if np.random.random() < 0.5:
+                child1[key] = parent1[key]
+                child2[key] = parent2[key]
+            else:
+                child1[key] = parent2[key]
+                child2[key] = parent1[key]
+        
+        return child1, child2
+    
+    def mutate(self, individual: Dict[str, Any]):
+        """Mutate individual."""
+        for key, value in individual.items():
+            if np.random.random() < self.mutation_rate:
+                if isinstance(value, (int, float)):
+                    individual[key] = value * np.random.uniform(0.9, 1.1)
+                elif isinstance(value, list) and value:
+                    # Mutate list
+                    idx = np.random.randint(0, len(value))
+                    if isinstance(value[idx], (int, float)):
+                        value[idx] = value[idx] * np.random.uniform(0.9, 1.1)
+    
+    def evolve(self, fitness_func: callable, generations: int = 10):
+        """Evolve population."""
+        for generation in range(generations):
+            # Evaluate
+            fitness_scores = [
+                self.evaluate(ind, fitness_func)
+                for ind in self.population
+            ]
+            
+            # Select
+            selected = self.select(fitness_scores)
+            
+            # Crossover and mutate
+            new_population = []
+            for i in range(0, len(selected), 2):
+                if i + 1 < len(selected):
+                    child1, child2 = self.crossover(selected[i], selected[i + 1])
+                    self.mutate(child1)
+                    self.mutate(child2)
+                    new_population.extend([child1, child2])
+                else:
+                    new_population.append(selected[i])
+            
+            self.population = new_population[:self.population_size]
+            
+            best_fitness = max(fitness_scores)
+            logger.info(f"Generation {generation}: Best fitness = {best_fitness}")
+        
+        return self.population[np.argmax(fitness_scores)]
+
+
+if TORCH_AVAILABLE:
+    class VisionTransformer(nn.Module):
+        """Simplified Vision Transformer for creative analysis."""
+        
+        def __init__(self, embed_dim: int = 768, num_heads: int = 12):
+            super().__init__()
+            self.embed_dim = embed_dim
+            self.num_heads = num_heads
+            
+            # Simplified architecture
+            self.conv = nn.Conv2d(3, embed_dim, kernel_size=16, stride=16)
+            self.transformer = nn.TransformerEncoder(
+                nn.TransformerEncoderLayer(
+                    d_model=embed_dim,
+                    nhead=num_heads,
+                    batch_first=True,
+                ),
+                num_layers=6,
+            )
+            self.classifier = nn.Linear(embed_dim, 1)
+        
+        def forward(self, x):
+            # Simplified forward pass
+            x = self.conv(x)
+            x = x.flatten(2).transpose(1, 2)
+            x = self.transformer(x)
+            x = x.mean(dim=1)
+            return self.classifier(x)
+
+
+def create_bandit(arms: List[str]) -> MultiArmedBandit:
+    """Create multi-armed bandit."""
+    return MultiArmedBandit(arms)
+
+
+def create_rl_agent(state_size: int, action_size: int) -> ReinforcementLearningAgent:
+    """Create RL agent."""
+    return ReinforcementLearningAgent(state_size, action_size)
+
+
+def create_genetic_algorithm(**kwargs) -> GeneticAlgorithm:
+    """Create genetic algorithm."""
+    return GeneticAlgorithm(**kwargs)
+
+
+__all__ = [
+    "QLearningAgent",
+    "RLState",
+    "RLAction",
+    "LSTMPredictor",
+    "AutoFeatureEngineer",
+    "BayesianOptimizer",
+    "PortfolioOptimizer",
+    "SeasonalityDetector",
+    "SHAPExplainer",
+    "MultiArmedBandit",
+    "BanditArm",
+    "ReinforcementLearningAgent",
+    "GeneticAlgorithm",
+    "VisionTransformer",
+    "create_ql_agent",
+    "create_lstm_predictor",
+    "create_auto_feature_engineer",
+    "create_bayesian_optimizer",
+    "create_portfolio_optimizer",
+    "create_seasonality_detector",
+    "create_shap_explainer",
+    "create_bandit",
+    "create_rl_agent",
+    "create_genetic_algorithm",
+]

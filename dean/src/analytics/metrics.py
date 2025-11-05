@@ -203,7 +203,7 @@ class Metrics:
     add_to_cart: float = 0.0
     initiate_checkout: float = 0.0
     revenue: float = 0.0
-    three_sec_views: Optional[float] = None
+    # Video metrics removed - not applicable for static image creatives
 
     ctr: float = 0.0
     ctr_wilson_lo: Optional[float] = None
@@ -226,7 +226,7 @@ class Metrics:
     aov: Optional[float] = None
     cpa: Optional[float] = None
     roas: float = 0.0
-    thumbstop_rate: Optional[float] = None
+    # thumbstop_rate removed - not applicable for static image creatives
 
     profit: Optional[float] = None
     poas: Optional[float] = None
@@ -289,13 +289,8 @@ def metrics_from_row(
                 used_val.setdefault("purchase", c)
                 break
 
-    three_sec_views: Optional[float] = None
-    if isinstance(row.get("video_3_sec_views"), (int, float, str)):
-        v = _to_float(row.get("video_3_sec_views"))
-        three_sec_views = v if v > 0 else None
-    elif isinstance(row.get("video_play_actions"), list):
-        s = _sum_field_in_list_of_dicts(row["video_play_actions"])
-        three_sec_views = s if s > 0 else None
+    # Video metrics removed - not applicable for static image creatives
+    # three_sec_views, video_3_sec_views, video_play_actions are not available for static images
 
     denom_imps = imps if imps > 0 else (imps + (eps or 0.0))
     denom_clicks = clicks if clicks > 0 else (clicks + (eps or 0.0))
@@ -331,7 +326,7 @@ def metrics_from_row(
             if roas_field > 0:
                 roas = roas_field
 
-    thumbstop_rate = _safe_div(three_sec_views or 0.0, denom_imps, None) if three_sec_views is not None else None
+    # thumbstop_rate removed - not applicable for static image creatives
 
     profit = poas = None
     if cogs_per_purchase is not None:
@@ -348,7 +343,7 @@ def metrics_from_row(
         purchases=purchases,
         add_to_cart=atc,
         revenue=revenue,
-        three_sec_views=three_sec_views,
+        # three_sec_views removed - not applicable for static images
         ctr=ctr,
         ctr_wilson_lo=ctr_lo,
         ctr_wilson_hi=ctr_hi,
@@ -367,7 +362,7 @@ def metrics_from_row(
         aov=aov,
         cpa=cpa,
         roas=roas or 0.0,
-        thumbstop_rate=thumbstop_rate,
+        # thumbstop_rate removed - not applicable for static images
         profit=profit,
         poas=poas,
     )
@@ -421,7 +416,7 @@ def aggregate_rows(
         revenue += m.revenue
         uniq_clicks_sum += (m.unique_clicks or 0.0)
         reach_sum += (m.reach or 0.0)
-        three_sec_sum += (m.three_sec_views or 0.0)
+        # three_sec_sum removed - video metrics not applicable for static images
         ctr_clicks_sum += m.clicks
         ctr_imps_sum += m.impressions
         cvr_purch_sum += m.purchases
@@ -450,7 +445,7 @@ def aggregate_rows(
     aov = _safe_div(revenue, purchases, None) if purchases > 0 else None
     cpa = _safe_div(spend, purchases, None) if purchases > 0 else None
     roas = _safe_div(revenue, spend, 0.0) if spend > 0 else 0.0
-    thumb = _safe_div(three_sec_sum, denom_imps, None) if three_sec_sum > 0 else None
+    # thumb/thumbstop_rate removed - video metrics not applicable for static images
 
     profit = poas = None
     if cogs_per_purchase is not None:
@@ -467,7 +462,7 @@ def aggregate_rows(
         purchases=purchases,
         add_to_cart=atc,
         revenue=revenue,
-        three_sec_views=three_sec_sum or None,
+        # three_sec_views removed - not applicable for static images
         ctr=ctr,
         ctr_wilson_lo=ctr_lo,
         ctr_wilson_hi=ctr_hi,
@@ -486,7 +481,7 @@ def aggregate_rows(
         aov=aov,
         cpa=cpa,
         roas=roas or 0.0,
-        thumbstop_rate=thumb,
+        # thumbstop_rate removed - not applicable for static images
         profit=profit,
         poas=poas,
     )

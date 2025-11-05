@@ -20,7 +20,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 import warnings
-from infrastructure.date_validation import date_validator, validate_all_timestamps
+from infrastructure.data_validation import date_validator, validate_all_timestamps
 
 import numpy as np
 import pandas as pd
@@ -41,7 +41,7 @@ import joblib
 
 # Import validated Supabase client
 try:
-    from infrastructure.validated_supabase import get_validated_supabase_client
+    from infrastructure.supabase_storage import get_validated_supabase_client
     VALIDATED_SUPABASE_AVAILABLE = True
 except ImportError:
     VALIDATED_SUPABASE_AVAILABLE = False
@@ -218,11 +218,14 @@ class SupabaseMLClient:
             self.logger.info(f"🔧 DataFrame created with {len(df)} rows, columns: {list(df.columns)}")
             
             # Convert types
+            # Note: purchases, add_to_cart, initiate_checkout, revenue are extracted from actions/action_values arrays
+            # cpa, roas, ctr, cpc, cpm are computed from available fields
+            # Video metrics removed - not applicable for static image creatives
             numeric_columns = [
-                'spend', 'impressions', 'clicks', 'purchases', 'add_to_cart',
-                'initiate_checkout', 'revenue', 'ctr', 'cpm', 'cpc', 'cpa',
-                'roas', 'aov', 'three_sec_views', 'video_views', 'watch_time',
-                'dwell_time', 'frequency', 'atc_rate', 'ic_rate', 'purchase_rate',
+                'spend', 'impressions', 'clicks', 'reach', 'unique_clicks',
+                'purchases', 'add_to_cart', 'initiate_checkout', 'revenue',
+                'ctr', 'cpm', 'cpc', 'cpa', 'roas', 'aov',
+                'frequency', 'atc_rate', 'ic_rate', 'purchase_rate',
                 'atc_to_ic_rate', 'ic_to_purchase_rate', 'performance_quality_score',
                 'stability_score', 'momentum_score', 'fatigue_index'
             ]
@@ -2585,3 +2588,283 @@ def predict_ad_cpa(ml_system: MLIntelligenceSystem,
     """Predict ad CPA using ML models."""
     prediction = ml_system.predict_performance(ad_id, stage, features)
     return prediction.predicted_value if prediction else None
+
+# =====================================================
+# ASC+ CAMPAIGN TRACKING METHODS
+# =====================================================
+
+def track_asc_plus_creative_data(
+    ml_system: MLIntelligenceSystem,
+    ad_id: str,
+    creative_data: Dict[str, Any],
+    performance_data: Dict[str, Any],
+) -> None:
+    """Track ASC+ creative data for ML learning."""
+    try:
+        # Track ad copy performance
+        ad_copy = creative_data.get("ad_copy", {})
+        if ad_copy:
+            ml_system.save_learning_event(
+                event=LearningEvent(
+                    event_type="creative_created",
+                    stage="asc_plus",
+                    ad_id=ad_id,
+                    metadata={
+                        "ad_copy": ad_copy,
+                        "text_overlay": creative_data.get("text_overlay"),
+                        "image_prompt": creative_data.get("image_prompt"),
+                        "scenario_description": creative_data.get("scenario_description"),  # Track scenario for ML learning
+                        "creative_type": "static_image",
+                    },
+                    timestamp=now_utc(),
+                ),
+                ad_id=ad_id,
+            )
+        
+        # Track performance data
+        if performance_data:
+            ml_system.supabase.upsert_performance_data(
+                ad_id=ad_id,
+                stage="asc_plus",
+                performance_data=performance_data,
+            )
+            
+    except Exception as e:
+        logger.error(f"Error tracking ASC+ creative data: {e}")
+
+def track_asc_plus_creative_kill(
+    ml_system: MLIntelligenceSystem,
+    ad_id: str,
+    reason: str,
+    performance_data: Dict[str, Any],
+) -> None:
+    """Track ASC+ creative kill for ML learning."""
+    try:
+        ml_system.save_learning_event(
+            event=LearningEvent(
+                event_type="creative_killed",
+                stage="asc_plus",
+                ad_id=ad_id,
+                metadata={
+                    "kill_reason": reason,
+                    "performance_at_kill": performance_data,
+                },
+                timestamp=now_utc(),
+            ),
+            ad_id=ad_id,
+        )
+        
+        # Update performance data with kill status
+        if performance_data:
+            performance_data["status"] = "killed"
+            ml_system.supabase.upsert_performance_data(
+                ad_id=ad_id,
+                stage="asc_plus",
+                performance_data=performance_data,
+            )
+            
+    except Exception as e:
+        logger.error(f"Error tracking ASC+ creative kill: {e}")
+
+# Add methods to MLIntelligenceSystem class
+def _add_asc_plus_tracking_methods():
+    """Add ASC+ tracking methods to MLIntelligenceSystem."""
+    def record_creative_creation(self, ad_id: str, creative_data: Dict[str, Any], performance_data: Dict[str, Any]):
+        """Record creative creation for ASC+ campaign."""
+        track_asc_plus_creative_data(self, ad_id, creative_data, performance_data)
+    
+    def record_creative_kill(self, ad_id: str, reason: str, performance_data: Dict[str, Any]):
+        """Record creative kill for ASC+ campaign."""
+        track_asc_plus_creative_kill(self, ad_id, reason, performance_data)
+    
+    def record_creative_generation_failure(self, reason: str, product_info: Dict[str, Any]):
+        """Record creative generation failure for ML learning."""
+        try:
+            self.save_learning_event(
+                event=LearningEvent(
+                    event_type="creative_generation_failed",
+                    stage="asc_plus",
+                    metadata={
+                        "failure_reason": reason,
+                        "product_info": product_info,
+                    },
+                    timestamp=now_utc(),
+                ),
+                ad_id="",
+            )
+        except Exception as e:
+            logger.error(f"Error tracking creative generation failure: {e}")
+    
+    def get_creative_insights(self) -> Dict[str, Any]:
+        """Get ML insights about top performing creatives for creative generation."""
+        try:
+            if not self.supabase_client:
+                return {}
+            
+            # Get top performing creatives from last 30 days
+            cutoff_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+            
+            # Query for top performing creatives by ROAS
+            query = self.supabase_client.table('creative_performance').select(
+                'creative_id,ad_copy,text_overlay,image_prompt,roas,ctr,purchases'
+            ).eq('stage', 'asc_plus').gte('date_start', cutoff_date).order('roas', desc=True).limit(5).execute()
+            
+            if not query.data:
+                return {}
+            
+            # Get scenario descriptions from creative_intelligence table
+            creative_ids = [c.get("creative_id") for c in query.data if c.get("creative_id")]
+            scenarios_map = {}
+            if creative_ids:
+                try:
+                    scenario_query = self.supabase_client.table('creative_intelligence').select(
+                        'creative_id,metadata'
+                    ).in_('creative_id', creative_ids).execute()
+                    
+                    for item in scenario_query.data or []:
+                        metadata = item.get("metadata") or {}
+                        if isinstance(metadata, dict):
+                            scenario = metadata.get("scenario_description")
+                            if scenario:
+                                scenarios_map[item.get("creative_id")] = scenario
+                except Exception as e:
+                    logger.warning(f"Error fetching scenarios: {e}")
+            
+            # Extract scenarios for each creative
+            best_scenarios = []
+            worst_scenarios = []
+            for creative in query.data:
+                creative_id = creative.get("creative_id")
+                scenario = scenarios_map.get(creative_id)
+                if scenario:
+                    best_scenarios.append(scenario)
+            
+            # Get worst performing scenarios (low ROAS)
+            try:
+                worst_query = self.supabase_client.table('creative_performance').select(
+                    'creative_id,roas'
+                ).eq('stage', 'asc_plus').gte('date_start', cutoff_date).order('roas', desc=False).limit(3).execute()
+                
+                worst_creative_ids = [c.get("creative_id") for c in worst_query.data if c.get("creative_id")]
+                if worst_creative_ids:
+                    worst_scenario_query = self.supabase_client.table('creative_intelligence').select(
+                        'creative_id,metadata'
+                    ).in_('creative_id', worst_creative_ids).execute()
+                    
+                    for item in worst_scenario_query.data or []:
+                        metadata = item.get("metadata") or {}
+                        if isinstance(metadata, dict):
+                            scenario = metadata.get("scenario_description")
+                            if scenario:
+                                worst_scenarios.append(scenario)
+            except Exception as e:
+                logger.warning(f"Error fetching worst scenarios: {e}")
+            
+            # Get best and worst text overlays
+            best_text_overlays = []
+            worst_text_overlays = []
+            
+            try:
+                # Get text overlays from creative_intelligence
+                text_query = self.supabase_client.table('creative_intelligence').select(
+                    'creative_id,text_overlay_content'
+                ).in_('creative_id', creative_ids).not_.is_('text_overlay_content', 'null').execute()
+                
+                text_map = {item.get("creative_id"): item.get("text_overlay_content") 
+                           for item in text_query.data or [] if item.get("text_overlay_content")}
+                
+                # Match with performance data
+                for creative in query.data:
+                    creative_id = creative.get("creative_id")
+                    text_overlay = text_map.get(creative_id)
+                    if text_overlay and text_overlay not in best_text_overlays:
+                        best_text_overlays.append(text_overlay)
+                
+                # Get worst performing text overlays
+                worst_text_query = self.supabase_client.table('creative_intelligence').select(
+                    'creative_id,text_overlay_content'
+                ).in_('creative_id', worst_creative_ids if worst_creative_ids else []).not_.is_('text_overlay_content', 'null').execute()
+                
+                worst_text_map = {item.get("creative_id"): item.get("text_overlay_content") 
+                                 for item in worst_text_query.data or [] if item.get("text_overlay_content")}
+                
+                for creative in worst_query.data if worst_query.data else []:
+                    creative_id = creative.get("creative_id")
+                    text_overlay = worst_text_map.get(creative_id)
+                    if text_overlay and text_overlay not in worst_text_overlays:
+                        worst_text_overlays.append(text_overlay)
+            except Exception as e:
+                logger.warning(f"Error fetching text overlays: {e}")
+            
+            # Get best and worst ad copy
+            best_ad_copy_list = []
+            worst_ad_copy_list = []
+            
+            try:
+                # Get ad copy from creative_intelligence metadata or ad_copy field
+                ad_copy_query = self.supabase_client.table('creative_intelligence').select(
+                    'creative_id,metadata,headline,primary_text'
+                ).in_('creative_id', creative_ids).execute()
+                
+                for item in ad_copy_query.data or []:
+                    metadata = item.get("metadata") or {}
+                    if isinstance(metadata, dict):
+                        ad_copy_data = metadata.get("ad_copy")
+                        if ad_copy_data and isinstance(ad_copy_data, dict):
+                            if ad_copy_data not in best_ad_copy_list:
+                                best_ad_copy_list.append(ad_copy_data)
+                        elif item.get("headline") or item.get("primary_text"):
+                            copy_dict = {
+                                "headline": item.get("headline", ""),
+                                "primary_text": item.get("primary_text", ""),
+                            }
+                            if copy_dict not in best_ad_copy_list:
+                                best_ad_copy_list.append(copy_dict)
+                
+                # Get worst ad copy
+                worst_ad_copy_query = self.supabase_client.table('creative_intelligence').select(
+                    'creative_id,metadata,headline,primary_text'
+                ).in_('creative_id', worst_creative_ids if worst_creative_ids else []).execute()
+                
+                for item in worst_ad_copy_query.data or []:
+                    metadata = item.get("metadata") or {}
+                    if isinstance(metadata, dict):
+                        ad_copy_data = metadata.get("ad_copy")
+                        if ad_copy_data and isinstance(ad_copy_data, dict):
+                            if ad_copy_data not in worst_ad_copy_list:
+                                worst_ad_copy_list.append(ad_copy_data)
+                        elif item.get("headline") or item.get("primary_text"):
+                            copy_dict = {
+                                "headline": item.get("headline", ""),
+                                "primary_text": item.get("primary_text", ""),
+                            }
+                            if copy_dict not in worst_ad_copy_list:
+                                worst_ad_copy_list.append(copy_dict)
+            except Exception as e:
+                logger.warning(f"Error fetching ad copy: {e}")
+            
+            insights = {
+                "top_performing_creatives": query.data,
+                "best_prompts": [c.get("image_prompt") for c in query.data if c.get("image_prompt")],
+                "best_text_overlays": best_text_overlays,  # Top performing text overlays
+                "worst_text_overlays": worst_text_overlays,  # Worst performing text overlays
+                "best_ad_copy": best_ad_copy_list,  # Top performing ad copy (structured)
+                "worst_ad_copy": worst_ad_copy_list,  # Worst performing ad copy (structured)
+                "best_scenarios": best_scenarios,  # Top performing scenarios
+                "worst_scenarios": worst_scenarios,  # Worst performing scenarios
+            }
+            
+            return insights
+            
+        except Exception as e:
+            logger.error(f"Error getting creative insights: {e}")
+            return {}
+    
+    # Add methods to MLIntelligenceSystem class
+    MLIntelligenceSystem.record_creative_creation = record_creative_creation
+    MLIntelligenceSystem.record_creative_kill = record_creative_kill
+    MLIntelligenceSystem.record_creative_generation_failure = record_creative_generation_failure
+    MLIntelligenceSystem.get_creative_insights = get_creative_insights
+
+# Initialize tracking methods
+_add_asc_plus_tracking_methods()

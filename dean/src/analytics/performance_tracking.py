@@ -52,9 +52,8 @@ class PerformanceMetrics:
     aov: float
     
     # Engagement metrics
-    three_sec_views: int
-    video_views: int
-    watch_time: float
+    # Video metrics removed - not applicable for static image creatives
+    # three_sec_views, video_views, watch_time removed
     dwell_time: float
     frequency: float
     
@@ -119,10 +118,11 @@ class SupabasePerformanceClient:
             df = pd.DataFrame(response.data)
             
             # Convert types
+            # Video metrics removed - not applicable for static image creatives
             numeric_columns = [
-                'spend', 'impressions', 'clicks', 'purchases', 'add_to_cart',
-                'initiate_checkout', 'revenue', 'ctr', 'cpm', 'cpc', 'cpa',
-                'roas', 'aov', 'three_sec_views', 'video_views', 'watch_time',
+                'spend', 'impressions', 'clicks', 'reach', 'unique_clicks',
+                'purchases', 'add_to_cart', 'initiate_checkout', 'revenue',
+                'ctr', 'cpm', 'cpc', 'cpa', 'roas', 'aov',
                 'dwell_time', 'frequency', 'atc_rate', 'ic_rate', 'purchase_rate',
                 'atc_to_ic_rate', 'ic_to_purchase_rate', 'performance_quality_score',
                 'stability_score', 'momentum_score', 'fatigue_index'
@@ -403,7 +403,7 @@ class FatigueDetector:
     def _detect_engagement_fatigue(self, df: pd.DataFrame) -> Dict[str, Any]:
         """Detect engagement-based fatigue."""
         try:
-            engagement_metrics = ['atc_rate', 'purchase_rate', 'three_sec_views']
+            engagement_metrics = ['atc_rate', 'purchase_rate']  # three_sec_views removed - not applicable for static images
             fatigue_signals = {}
             
             for metric in engagement_metrics:

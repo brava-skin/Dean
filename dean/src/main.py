@@ -12,26 +12,43 @@ This is the completely overhauled main runner that integrates:
 - Comprehensive Supabase backend for ML data storage
 - Predictive reporting and transparency system
 
-The system continuously learns from campaign data across Testing → Validation → Scaling,
+The system continuously learns from ASC+ campaign data,
 identifies signals that predict purchases, and dynamically adjusts all rules to
-keep CPA consistently below €27.50 while scaling safely and profitably.
+optimize performance and scale intelligently.
 """
 
 import argparse
 import json
+import logging
 import os
 import re
 import sys
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation, getcontext
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import yaml
 from dotenv import load_dotenv
+
+# Import constants
+from config.constants import (
+    DB_NUMERIC_MIN, DB_NUMERIC_MAX, DB_CTR_MAX, DB_CPC_MAX, DB_CPM_MAX,
+    DB_ROAS_MAX, DB_CPA_MAX, DB_DWELL_TIME_MAX, DB_FREQUENCY_MAX, DB_RATE_MAX,
+    DB_GLOBAL_FLOAT_MAX,
+    ASC_PLUS_BUDGET_MIN, ASC_PLUS_BUDGET_MAX, ASC_PLUS_MIN_BUDGET_PER_CREATIVE,
+    MAX_AD_AGE_DAYS, MAX_STAGE_DURATION_HOURS, DEFAULT_SAFE_FLOAT_MAX,
+    ML_TRAINING_DELAY_SECONDS
+)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Optional Supabase client
 try:
@@ -59,8 +76,8 @@ try:
     )
     ML_AVAILABLE = True
 except ImportError as e:
-    print(f"⚠️ ML system not available: {e}")
-    print("   System will run in standard mode")
+    logger.warning(f"ML system not available: {e}")
+    logger.info("System will run in standard mode")
     ML_AVAILABLE = False
     # Create dummy classes for compatibility
     class SimpleMLIntelligenceSystem: pass
@@ -93,13 +110,11 @@ except ImportError as e:
 # Legacy modules (updated for ML integration)
 from infrastructure import Store
 from infrastructure.supabase_storage import create_supabase_storage
-from infrastructure.date_validation import date_validator, validate_all_timestamps
+from infrastructure.data_validation import date_validator, validate_all_timestamps
 from integrations import notify, post_run_header_and_get_thread_ts, post_thread_ads_snapshot, prettify_ad_name, fmt_eur, fmt_pct, fmt_roas, fmt_int
 from integrations import MetaClient, AccountAuth, ClientConfig
 from rules.rules import AdvancedRuleEngine as RuleEngine
-from stages.testing import run_testing_tick
-from stages.validation import run_validation_tick
-from stages.scaling import run_scaling_tick
+from stages.asc_plus import run_asc_plus_tick
 from infrastructure import now_local, getenv_f, getenv_i, getenv_b, cfg, cfg_or_env_f, cfg_or_env_i, cfg_or_env_b, cfg_or_env_list, safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name
 from infrastructure import start_background_scheduler, stop_background_scheduler, get_scheduler
 
@@ -115,10 +130,8 @@ REQUIRED_ENVS = [
     "IG_ACTOR_ID",
 ]
 REQUIRED_IDS = [
-    ("ids", "testing_campaign_id"),
-    ("ids", "testing_adset_id"),
-    ("ids", "validation_campaign_id"),
-    ("ids", "scaling_campaign_id"),
+    ("ids", "asc_plus_campaign_id"),
+    ("ids", "asc_plus_adset_id"),
 ]
 # Default account/reporting timezone now uses Europe/Amsterdam
 DEFAULT_TZ = "Europe/Amsterdam"
@@ -140,7 +153,7 @@ def load_yaml(path: str) -> Dict[str, Any]:
     try:
         with open(path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
-    except Exception:
+    except (FileNotFoundError, yaml.YAMLError, IOError, OSError):
         return {}
 
 
@@ -176,12 +189,11 @@ def _normalize_video_id_cell(v: Any) -> str:
     if m:
         return m.group(1)
 
-    # scientific notation -> Decimal to full integer string
+    # scientific notation -> float to full integer string
     if re.fullmatch(r"\d+(\.\d+)?[eE]\+\d+", s):
         try:
-            getcontext().prec = 50
-            return str(int(Decimal(s)))
-        except (InvalidOperation, ValueError):
+            return str(int(float(s)))
+        except (ValueError, OverflowError):
             return ""
 
     # last resort: keep only digits if that yields something plausible
@@ -233,14 +245,14 @@ def load_queue(path: str) -> pd.DataFrame:
                     dtype=str,
                     keep_default_na=False,
                 )
-            except Exception:
+            except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError):
                 df = pd.read_csv(
                     path,
                     dtype=str,
                     keep_default_na=False,
                     encoding="utf-8-sig",
                 )
-    except Exception:
+    except (FileNotFoundError, IOError, OSError, pd.errors.ParserError):
         return pd.DataFrame(columns=cols)
 
     # Ensure all expected columns exist
@@ -253,8 +265,10 @@ def load_queue(path: str) -> pd.DataFrame:
 
     # Normalize video_id for CSV (read_csv converters are not applied like read_excel ones)
     try:
-        df["video_id"] = df["video_id"].map(_normalize_video_id_cell)
-    except Exception:
+        if "video_id" in df.columns:
+            df["video_id"] = df["video_id"].map(_normalize_video_id_cell)
+    except (KeyError, AttributeError, TypeError):
+        # video_id column may not exist or may not be mappable - not critical
         pass
 
     return df
@@ -271,11 +285,12 @@ def digest_path_for_today() -> str:
 
 
 def append_digest(record: Dict[str, Any]) -> None:
+    """Append a record to the daily digest file."""
     try:
         with open(digest_path_for_today(), "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+    except (IOError, OSError, TypeError) as e:
+        logger.debug(f"Failed to append to digest: {e}")
 
 
 # --------------------------- Supabase queue --------------------------------
@@ -293,7 +308,8 @@ def _get_supabase():
         return None
     try:
         return create_client(url, key)
-    except Exception:
+    except (TypeError, ValueError, AttributeError):
+        # Supabase client creation failed - return None to degrade gracefully
         return None
 
 def _get_validated_supabase():
@@ -302,16 +318,19 @@ def _get_validated_supabase():
     This client automatically validates all data before insertion.
     """
     try:
-        from infrastructure.validated_supabase import get_validated_supabase_client
+        from infrastructure.supabase_storage import get_validated_supabase_client
         return get_validated_supabase_client(enable_validation=True)
     except ImportError:
         # Fallback to regular client if validation system not available
         return _get_supabase()
-    except Exception:
+    except (TypeError, ValueError, AttributeError):
+        # Validation system unavailable - return None to degrade gracefully
         return None
 
 # Helper function to safely convert and bound numeric values
-def safe_float(value, max_val=999999.99):
+def safe_float(value, max_val=None):
+    if max_val is None:
+        max_val = DEFAULT_SAFE_FLOAT_MAX
     try:
         val = float(value or 0)
         # Handle infinity and NaN
@@ -373,8 +392,8 @@ def _calculate_performance_quality_score(ad_data: Dict[str, Any]) -> int:
         
         return min(max(int(quality_score), 0), 100)
         
-    except Exception as e:
-        print(f"Error calculating performance quality score: {e}")
+    except (ValueError, TypeError, KeyError) as e:
+        logger.error(f"Error calculating performance quality score: {e}", exc_info=True)
         return 0
 
 
@@ -405,8 +424,8 @@ def _calculate_stability_score(ad_data: Dict[str, Any]) -> float:
         else:
             return 0.0  # No stability
             
-    except Exception as e:
-        print(f"Error calculating stability score: {e}")
+    except (ValueError, TypeError, KeyError) as e:
+        logger.error(f"Error calculating stability score: {e}", exc_info=True)
         return 0.0
 
 
@@ -454,8 +473,8 @@ def _calculate_momentum_score(ad_data: Dict[str, Any]) -> float:
         
         return min(momentum, 9.9999)
         
-    except Exception as e:
-        print(f"Error calculating momentum score: {e}")
+    except (ValueError, TypeError, KeyError) as e:
+        logger.error(f"Error calculating momentum score: {e}", exc_info=True)
         return 0.0
 
 
@@ -506,19 +525,15 @@ def _calculate_fatigue_index(ad_data: Dict[str, Any]) -> float:
         
         return min(fatigue, 9.9999)
         
-    except Exception as e:
-        print(f"Error calculating fatigue index: {e}")
+    except (ValueError, TypeError, KeyError) as e:
+        logger.error(f"Error calculating fatigue index: {e}", exc_info=True)
         return 0.0
 
 
 def _get_next_stage(current_stage: str) -> str:
-    """Get the next stage in the lifecycle."""
-    stage_flow = {
-        'testing': 'validation',
-        'validation': 'scaling',
-        'scaling': 'scaling'  # Scaling is the final stage
-    }
-    return stage_flow.get(current_stage, 'testing')
+    """Get the next stage in the lifecycle - ASC+ only."""
+    # ASC+ is the only stage - no transitions
+    return 'asc_plus'
 
 
 def _calculate_stage_duration_hours(ad_id: str, current_stage: str) -> float:
@@ -533,20 +548,17 @@ def _calculate_stage_duration_hours(ad_id: str, current_stage: str) -> float:
             age_days = storage.get_ad_age_days(ad_id)
             if age_days:
                 # Convert days to hours and estimate stage duration
-                return min(age_days * 24, 168)  # Cap at 1 week
+                return min(age_days * 24, MAX_STAGE_DURATION_HOURS)
         return 0.0
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
+        # Age calculation failed - return 0
         return 0.0
 
 
 def _get_previous_stage(ad_id: str, current_stage: str) -> str:
-    """Get the previous stage in the lifecycle."""
-    stage_flow = {
-        'validation': 'testing',
-        'scaling': 'validation',
-        'testing': 'testing'  # Testing is the first stage
-    }
-    return stage_flow.get(current_stage, 'testing')
+    """Get the previous stage in the lifecycle - ASC+ only."""
+    # ASC+ is the only stage - no previous stage
+    return 'asc_plus'
 
 
 def _get_stage_performance(ad_data: Dict[str, Any], stage: str) -> Dict[str, Any]:
@@ -560,56 +572,52 @@ def _get_stage_performance(ad_data: Dict[str, Any], stage: str) -> Dict[str, Any
             'purchases': int(ad_data.get('purchases', 0)),
             'stage': stage
         }
-    except Exception as e:
-        print(f"Error getting stage performance: {e}")
+    except (ValueError, TypeError, KeyError) as e:
+        logger.error(f"Error getting stage performance: {e}", exc_info=True)
         return {'stage': stage}
 
 
 def _get_transition_reason(ad_data: Dict[str, Any], stage: str) -> str:
-    """Get the reason for stage transition."""
+    """Get the reason for stage transition - ASC+ only."""
     try:
         ctr = safe_float(ad_data.get('ctr', 0))
         cpa = safe_float(ad_data.get('cpa', 0))
         roas = safe_float(ad_data.get('roas', 0))
         
-        if stage == 'validation':
-            if ctr >= 1.0 and cpa <= 30:
-                return 'High CTR and low CPA - ready for validation'
+        if stage == 'asc_plus':
+            if ctr >= 1.0 and cpa <= 30 and roas >= 1.0:
+                return 'ASC+ campaign performing well'
             else:
-                return 'Testing phase - monitoring performance'
-        elif stage == 'scaling':
-            if ctr >= 1.5 and cpa <= 25 and roas >= 2.0:
-                return 'Excellent performance - ready for scaling'
-            else:
-                return 'Validation phase - optimizing performance'
+                return 'ASC+ campaign - monitoring performance'
         else:
-            return 'Initial testing phase'
-    except Exception:
-        return 'Stage transition'
+            return 'ASC+ campaign'
+    except (KeyError, ValueError, TypeError):
+        # Fallback to default reason
+        return 'ASC+ campaign'
 
 
 def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any], stage: str, ml_system=None) -> None:
     """Store performance data in Supabase for ML system with automatic validation."""
     if not supabase_client:
-        print("⚠️ No Supabase client available")
+        logger.warning("No Supabase client available")
         return
     
     try:
         # Get validated Supabase client for automatic validation
         validated_client = _get_validated_supabase()
         if not validated_client:
-            print("⚠️ No validated Supabase client available, falling back to regular client")
+            logger.warning("No validated Supabase client available, falling back to regular client")
             validated_client = supabase_client
         
         # Test Supabase connection first
         try:
             test_result = validated_client.select('performance_metrics').limit(1).execute()
-        except Exception as e:
+        except (AttributeError, TypeError, ValueError) as e:
+            logger.error(f"Supabase connection test failed: {e}", exc_info=True)
             notify(f"❌ Supabase connection failed: {e}")
             return
         
         # Calculate day_of_week, is_weekend, hour_of_day from current date
-        from datetime import datetime
         current_date = datetime.now().strftime('%Y-%m-%d')
         date_start = current_date  # Facebook API doesn't return date_start, use current date
         date_end = current_date    # Facebook API doesn't return date_end, use current date
@@ -627,7 +635,7 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                 storage = SupabaseStorage(validated_client)
                 age = storage.get_ad_age_days(ad_id)
                 if age is not None and age > 0:
-                    ad_age_days = min(max(0, age), 365)  # Cap at 365 days (1 year max)
+                    ad_age_days = min(max(0, age), MAX_AD_AGE_DAYS)
         except Exception:
             pass  # Fallback to 0 if calculation fails
         
@@ -637,7 +645,7 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         
         # Debug logging
         if not lifecycle_id or lifecycle_id == f"lifecycle_":
-            print(f"⚠️ DEBUG: ad_id='{ad_id}', lifecycle_id='{lifecycle_id}', ad_data keys: {list(ad_data.keys())}")
+            logger.debug(f"Missing lifecycle_id: ad_id='{ad_id}', lifecycle_id='{lifecycle_id}', ad_data keys: {list(ad_data.keys())}")
         
         # Calculate performance scores
         quality_score = _calculate_performance_quality_score(ad_data)
@@ -646,7 +654,7 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         fatigue_index = _calculate_fatigue_index(ad_data)
         
         # Debug logging for performance calculations
-        print(f"🔍 DEBUG: Ad {ad_id} - CTR: {safe_float(ad_data.get('ctr', 0)):.2f}%, Quality: {quality_score}, Stability: {stability_score:.2f}, Momentum: {momentum_score:.2f}, Fatigue: {fatigue_index:.2f}")
+        logger.debug(f"Ad {ad_id} - CTR: {safe_float(ad_data.get('ctr', 0)):.2f}%, Quality: {quality_score}, Stability: {stability_score:.2f}, Momentum: {momentum_score:.2f}, Fatigue: {fatigue_index:.2f}")
         
         performance_data = {
             'ad_id': ad_id,
@@ -661,18 +669,18 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             'purchases': int(ad_data.get('purchases', 0)),
             'add_to_cart': int(ad_data.get('atc', 0)),
             'initiate_checkout': int(ad_data.get('ic', 0)),
-            'ctr': safe_float(ad_data.get('ctr', 0), 99.9999),  # Cap at 99.9999% CTR
-            'cpc': safe_float(ad_data.get('cpc', 0), 9999.9999),  # Cap at 9999.9999 CPC
-            'cpm': safe_float(ad_data.get('cpm', 0), 9999.9999),  # Cap at 9999.9999 CPM
-            'roas': safe_float(ad_data.get('roas', 0), 9999.9999),  # Cap at 9999.9999 ROAS
-            'cpa': safe_float(ad_data.get('cpa', 0), 9999.9999) if ad_data.get('cpa') is not None else None,  # Cap at 9999.9999 CPA
-            'dwell_time': safe_float(ad_data.get('dwell_time', 0), 999999.99),
-            'frequency': safe_float(ad_data.get('frequency', 0), 999.99),
-            'atc_rate': safe_float(ad_data.get('atc_rate', 0), 99.9999),  # Cap at 99.9999%
-            'ic_rate': safe_float(ad_data.get('ic_rate', 0), 99.9999),  # Cap at 99.9999%
-            'purchase_rate': safe_float(ad_data.get('purchase_rate', 0), 99.9999),  # Cap at 99.9999%
-            'atc_to_ic_rate': safe_float(ad_data.get('atc_to_ic_rate', 0), 99.9999),  # Cap at 99.9999%
-            'ic_to_purchase_rate': safe_float(ad_data.get('ic_to_purchase_rate', 0), 99.9999),  # Cap at 99.9999%
+            'ctr': safe_float(ad_data.get('ctr', 0), DB_CTR_MAX),  # Cap at max CTR
+            'cpc': safe_float(ad_data.get('cpc', 0), DB_CPC_MAX),  # Cap at max CPC
+            'cpm': safe_float(ad_data.get('cpm', 0), DB_CPM_MAX),  # Cap at max CPM
+            'roas': safe_float(ad_data.get('roas', 0), DB_ROAS_MAX),
+            'cpa': safe_float(ad_data.get('cpa', 0), DB_CPA_MAX) if ad_data.get('cpa') is not None else None,
+            'dwell_time': safe_float(ad_data.get('dwell_time', 0), DB_DWELL_TIME_MAX),
+            'frequency': safe_float(ad_data.get('frequency', 0), DB_FREQUENCY_MAX),
+            'atc_rate': safe_float(ad_data.get('atc_rate', 0), DB_RATE_MAX),
+            'ic_rate': safe_float(ad_data.get('ic_rate', 0), DB_RATE_MAX),
+            'purchase_rate': safe_float(ad_data.get('purchase_rate', 0), DB_RATE_MAX),
+            'atc_to_ic_rate': safe_float(ad_data.get('atc_to_ic_rate', 0), DB_RATE_MAX),
+            'ic_to_purchase_rate': safe_float(ad_data.get('ic_to_purchase_rate', 0), DB_RATE_MAX),
             'performance_quality_score': quality_score,
             'stability_score': stability_score,
             'momentum_score': momentum_score,
@@ -699,7 +707,8 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                 on_conflict='ad_id,window_type,date_start'
             )
             notify(f"✅ Performance data validated and inserted: {result}")
-        except Exception as e:
+        except (KeyError, ValueError, TypeError, AttributeError) as e:
+            logger.error(f"Performance data validation/insertion failed: {e}", exc_info=True)
             notify(f"❌ Performance data validation/insertion failed: {e}")
             return
         
@@ -736,20 +745,18 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             
             if not existing_check.data:
                 creative_id = ad_data.get('creative_id') or f'creative_{ad_data.get("ad_id", "")}'
-                creative_type = ad_data.get('creative_type', 'video')
+                creative_type = ad_data.get('creative_type', 'image')
                 if creative_type not in ['image', 'video', 'carousel', 'collection', 'story', 'reels']:
-                    creative_type = 'video'  # Map invalid values to 'video' for UGC campaigns
+                    creative_type = 'image'  # Default to 'image' for ASC+ static image campaigns
                 
                 # Generate realistic creative details
                 import random
-                import json
-                
-                # Creative technical details
-                duration_seconds = random.randint(15, 60) if creative_type == 'video' else None
-                aspect_ratios = ['16:9', '9:16', '1:1', '4:5', '3:4']
+                # Creative technical details for static images
+                duration_seconds = None  # Static images don't have duration
+                aspect_ratios = ['1:1', '4:5', '9:16', '16:9']  # Common ad image ratios
                 aspect_ratio = random.choice(aspect_ratios)
-                file_size_mb = round(random.uniform(2.0, 50.0), 2)
-                resolutions = ['1920x1080', '1080x1920', '1080x1080', '1200x1500', '1080x1350']
+                file_size_mb = round(random.uniform(0.5, 5.0), 2)  # Smaller for images
+                resolutions = ['1024x1024', '1080x1080', '1200x1500', '1080x1920', '1920x1080']
                 resolution = random.choice(resolutions)
                 
                 # Color palette (generate realistic colors)
@@ -761,14 +768,13 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                 ]
                 color_palette = json.dumps(random.choice(color_palettes))
                 
-                # Creative content features
-                text_overlay = random.choice([True, False])
-                music_present = random.choice([True, False]) if creative_type == 'video' else False
-                voice_over = random.choice([True, False]) if creative_type == 'video' else False
+                # Creative content features for static images
+                text_overlay = True  # ASC+ creatives always have text overlay
+                music_present = False  # Static images don't have audio
+                voice_over = False  # Static images don't have audio
                 
                 # Load creative content from copy bank
                 try:
-                    import json
                     copy_bank_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'copy_bank.json')
                     with open(copy_bank_path, 'r') as f:
                         copy_bank = json.load(f)
@@ -784,8 +790,8 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                     headline = random.choice(headlines) if headlines else "Quality You Can Trust"
                     primary_text = random.choice(primary_texts) if primary_texts else "Experience the difference with our premium selection."
                     
-                except Exception as e:
-                    print(f"⚠️ Failed to load copy bank: {e}")
+                except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
+                    logger.warning(f"Failed to load copy bank: {e}")
                     # Fallback to basic content
                     description = "Premium quality product"
                     headline = "Quality You Can Trust"
@@ -798,9 +804,9 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                 roas = safe_float(ad_data.get('roas', 0))
                 
                 # Clamp values to fit NUMERIC(5,4) database constraint
-                ctr = min(max(ctr, -9.9999), 9.9999)
-                cpa = min(max(cpa, -9.9999), 9.9999)
-                roas = min(max(roas, -9.9999), 9.9999)
+                ctr = min(max(ctr, DB_NUMERIC_MIN), DB_NUMERIC_MAX)
+                cpa = min(max(cpa, DB_NUMERIC_MIN), DB_NUMERIC_MAX)
+                roas = min(max(roas, DB_NUMERIC_MIN), DB_NUMERIC_MAX)
                 
                 # Calculate performance score (0-1 scale)
                 performance_score = 0.5  # Base score
@@ -876,9 +882,9 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                 # Insert creative intelligence data with automatic validation
                 result = validated_client.insert('creative_intelligence', creative_data)
                 if result:
-                    print(f"✅ Creative intelligence validated and inserted: {creative_id} for ad {ad_data.get('ad_id')}")
-        except Exception as e:
-            print(f"⚠️ Failed to store creative intelligence for {ad_data.get('ad_id')}: {e}")
+                    logger.info(f"Creative intelligence validated and inserted: {creative_id} for ad {ad_data.get('ad_id')}")
+        except (KeyError, ValueError, TypeError) as e:
+            logger.error(f"Failed to store creative intelligence for {ad_data.get('ad_id')}: {e}", exc_info=True)
         
         # Make ML predictions for this ad after data is stored
         if ml_system:
@@ -887,19 +893,14 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                 if ad_id:
                     # Get ML intelligence analysis (this will make predictions and save them)
                     ml_analysis = ml_system.analyze_ad_intelligence(ad_id, stage)
-                    if ml_analysis:
-                        # Store ML insights in creative_intelligence if needed
-                        if ml_analysis.get('predictions'):
-                            # Insights are already saved by analyze_ad_intelligence
-                            pass
-            except Exception as e:
+                    # Insights are already saved by analyze_ad_intelligence, no additional action needed
+            except (AttributeError, ValueError, TypeError) as e:
                 # Don't fail the entire function if ML prediction fails
-                print(f"⚠️ Failed to make ML predictions for ad {ad_data.get('ad_id', 'unknown')}: {e}")
+                logger.warning(f"Failed to make ML predictions for ad {ad_data.get('ad_id', 'unknown')}: {e}", exc_info=True)
         
-    except Exception as e:
+    except (KeyError, ValueError, TypeError, AttributeError) as e:
+        logger.error(f"Failed to store performance data in Supabase: {e}", exc_info=True)
         notify(f"❌ Failed to store performance data in Supabase: {e}")
-        import traceback
-        traceback.print_exc()
 
 def store_ml_insights_in_supabase(supabase_client, ad_id: str, insights: Dict[str, Any]) -> None:
     """Store ML insights in Supabase with automatic validation."""
@@ -913,9 +914,9 @@ def store_ml_insights_in_supabase(supabase_client, ad_id: str, insights: Dict[st
             validated_client = supabase_client
         
         # Store creative intelligence data with validation
-        creative_type = insights.get('creative_type', 'video')
+        creative_type = insights.get('creative_type', 'image')
         if creative_type not in ['image', 'video', 'carousel', 'collection', 'story', 'reels']:
-            creative_type = 'video'  # Default to video for UGC campaigns
+            creative_type = 'image'  # Default to image for ASC+ static image campaigns
         
         creative_data = {
             'creative_id': insights.get('creative_id', f'creative_{ad_id}'),
@@ -930,12 +931,14 @@ def store_ml_insights_in_supabase(supabase_client, ad_id: str, insights: Dict[st
         # Upsert with automatic validation
         validated_client.upsert('creative_intelligence', creative_data, on_conflict='creative_id,ad_id')
         
-    except Exception as e:
-        print(f"⚠️ Failed to store ML insights in Supabase: {e}")
+    except (KeyError, ValueError, TypeError) as e:
+        logger.error(f"Failed to store ML insights in Supabase: {e}", exc_info=True)
 
 
-def safe_float_global(value, max_val=999999999.99):
+def safe_float_global(value, max_val=None):
     """Safely convert value to float with bounds checking (global version)."""
+    if max_val is None:
+        max_val = DB_GLOBAL_FLOAT_MAX
     try:
         val = float(value or 0)
         # Handle infinity and NaN
@@ -1005,7 +1008,7 @@ def store_timeseries_data_in_supabase(supabase_client, ad_id: str, ad_data: Dict
                     'lifecycle_id': ad_data.get('lifecycle_id', ''),
                     'stage': stage,
                     'metric_name': metric_name,
-                    'metric_value': safe_float_global(metric_value, 999999999.99),
+                    'metric_value': safe_float_global(metric_value, DB_GLOBAL_FLOAT_MAX),
                     'timestamp': current_time.isoformat(),
                     'window_type': '1h',  # Hourly window
                     'metadata': {
@@ -1039,8 +1042,8 @@ def store_timeseries_data_in_supabase(supabase_client, ad_id: str, ad_data: Dict
         
         notify(f"📊 Time-series data stored for {ad_id}: {len(metrics_to_track)} metrics with full time series")
         
-    except Exception as e:
-        print(f"⚠️ Failed to store time-series data: {e}")
+    except (KeyError, ValueError, TypeError) as e:
+        logger.error(f"Failed to store time-series data: {e}", exc_info=True)
 
 
 def collect_stage_ad_data(meta_client, settings: Dict[str, Any], stage: str) -> Dict[str, Dict[str, Any]]:
@@ -1049,43 +1052,84 @@ def collect_stage_ad_data(meta_client, settings: Dict[str, Any], stage: str) -> 
     try:
         # Get all active ads from account insights (more reliable than stage-specific adsets)
         insights_data = meta_client.get_ad_insights(level="ad", fields=[
-            "ad_id", "spend", "impressions", "clicks", "ctr", "cpc", "cpm", 
-            "actions", "campaign_name", "adset_name"
+            "ad_id", "spend", "impressions", "clicks", "reach", "unique_clicks",
+            "actions", "action_values", "purchase_roas",
+            "campaign_name", "adset_name", "campaign_id", "adset_id"
         ], date_preset="today")
         
         if insights_data:
             for insight in insights_data:
                 ad_id = insight.get("ad_id")
                 if ad_id:
-                    # Extract actions data
+                    # Extract actions data (these come from the actions array, not direct fields)
                     actions = insight.get("actions", [])
                     add_to_cart = 0
                     initiate_checkout = 0
+                    purchases = 0
                     
                     for action in actions:
-                        if action.get("action_type") == "add_to_cart":
-                            add_to_cart = float(action.get("value", 0))
-                        elif action.get("action_type") == "initiate_checkout":
-                            initiate_checkout = float(action.get("value", 0))
+                        action_type = action.get("action_type", "")
+                        action_value = float(action.get("value", 0))
+                        if action_type == "add_to_cart":
+                            add_to_cart = action_value
+                        elif action_type == "initiate_checkout":
+                            initiate_checkout = action_value
+                        elif action_type == "purchase":
+                            purchases = action_value
+                    
+                    # Extract revenue from action_values array
+                    action_values = insight.get("action_values", [])
+                    revenue = 0.0
+                    for av in action_values:
+                        if av.get("action_type") == "purchase":
+                            revenue += float(av.get("value", 0))
+                    
+                    # Extract ROAS from purchase_roas array (if available)
+                    purchase_roas_list = insight.get("purchase_roas", [])
+                    roas = 0.0
+                    if purchase_roas_list:
+                        roas = float(purchase_roas_list[0].get("value", 0))
+                    elif revenue > 0:
+                        # Compute ROAS if not available: revenue / spend
+                        spend_val = float(insight.get("spend", 0))
+                        roas = (revenue / spend_val) if spend_val > 0 else 0.0
+                    
+                    # Compute metrics from available fields (these are NOT direct API fields)
+                    spend_val = float(insight.get("spend", 0))
+                    impressions_val = int(insight.get("impressions", 0))
+                    clicks_val = int(insight.get("clicks", 0))
+                    
+                    # CTR = (clicks / impressions) * 100
+                    ctr = (clicks_val / impressions_val * 100) if impressions_val > 0 else 0.0
+                    
+                    # CPC = spend / clicks
+                    cpc = (spend_val / clicks_val) if clicks_val > 0 else 0.0
+                    
+                    # CPM = (spend / impressions) * 1000
+                    cpm = (spend_val / impressions_val * 1000) if impressions_val > 0 else 0.0
+                    
+                    # CPA = spend / purchases
+                    cpa = (spend_val / purchases) if purchases > 0 else float('inf')
                     
                     ad_data[ad_id] = {
                         "ad_id": ad_id,
                         "lifecycle_id": f"lifecycle_{ad_id}",
-                        "stage": stage,  # We'll determine the actual stage later if needed
+                        "stage": stage,
                         "status": "active",
-                        "spend": float(insight.get("spend", 0)),
-                        "impressions": int(insight.get("impressions", 0)),
-                        "clicks": int(insight.get("clicks", 0)),
-                        "ctr": float(insight.get("ctr", 0)),
-                        "cpc": float(insight.get("cpc", 0)),
-                        "cpm": float(insight.get("cpm", 0)),
-                        "purchases": float(insight.get("purchases", 0)),
-                        "add_to_cart": add_to_cart,
+                        "spend": spend_val,
+                        "impressions": impressions_val,
+                        "clicks": clicks_val,
+                        "ctr": ctr,  # Computed from clicks/impressions
+                        "cpc": cpc,  # Computed from spend/clicks
+                        "cpm": cpm,  # Computed from spend/impressions
+                        "purchases": purchases,  # Extracted from actions array
+                        "add_to_cart": add_to_cart,  # Extracted from actions array
                         "atc": add_to_cart,  # Alias for compatibility
-                        "ic": initiate_checkout,
+                        "ic": initiate_checkout,  # Extracted from actions array
                         "initiate_checkout": initiate_checkout,
-                        "roas": float(insight.get("roas", 0)),
-                        "cpa": float(insight.get("cpa", 0)) if insight.get("cpa") else 0,
+                        "roas": roas,  # From purchase_roas array or computed
+                        "cpa": cpa,  # Computed from spend/purchases
+                        "revenue": revenue,  # Extracted from action_values array
                         "date_start": datetime.now().strftime("%Y-%m-%d"),
                         "date_end": datetime.now().strftime("%Y-%m-%d"),
                         "campaign_name": insight.get("campaign_name", ""),
@@ -1102,52 +1146,48 @@ def store_creative_data_in_supabase(supabase_client, meta_client, ad_id: str, st
     if not supabase_client or not meta_client:
         return
     
+    # Fetch creative data from Meta API
     try:
-        # Fetch creative data from Meta API
-        try:
-            ad = meta_client.api.call(
-                'GET',
-                (ad_id,),
-                params={'fields': 'creative,name'}
-            )
-            
-            creative_id = ad.get('creative', {}).get('id') if isinstance(ad.get('creative'), dict) else ad.get('creative')
-            
-            if not creative_id:
-                return
-            
-            # Fetch creative details
-            creative = meta_client.api.call(
-                'GET',
-                (creative_id,),
-                params={'fields': 'title,body,image_url,video_id,object_type'}
-            )
-            
-            # Store in creative_intelligence with validation
-            creative_data = {
-                'creative_id': str(creative_id),
-                'ad_id': ad_id,
-                'creative_type': creative.get('object_type', 'video'),
-                'performance_score': 0.5,  # Will be updated by ML
-                'fatigue_index': 0.0,
-                'similarity_vector': None,  # Will be populated by ML later
-                'metadata': {}
-            }
-            
-            # Get validated client for automatic validation
-            validated_client = _get_validated_supabase()
-            if validated_client:
-                validated_client.upsert('creative_intelligence', creative_data, on_conflict='creative_id')
-            else:
-                supabase_client.table('creative_intelligence').upsert(creative_data, on_conflict='creative_id').execute()
-            notify(f"🎨 Creative data validated and stored for {ad_id}")
-            
-        except Exception as e:
-            # Silently fail - creative data is optional
-            pass
+        ad = meta_client.api.call(
+            'GET',
+            (ad_id,),
+            params={'fields': 'creative,name'}
+        )
         
-    except Exception as e:
-        print(f"⚠️ Failed to store creative data: {e}")
+        creative_id = ad.get('creative', {}).get('id') if isinstance(ad.get('creative'), dict) else ad.get('creative')
+        
+        if not creative_id:
+            return
+        
+        # Fetch creative details
+        creative = meta_client.api.call(
+            'GET',
+            (creative_id,),
+            params={'fields': 'title,body,image_url,video_id,object_type'}
+        )
+        
+        # Store in creative_intelligence with validation
+        creative_data = {
+            'creative_id': str(creative_id),
+            'ad_id': ad_id,
+            'creative_type': creative.get('object_type', 'image'),
+            'performance_score': 0.5,  # Will be updated by ML
+            'fatigue_index': 0.0,
+            'similarity_vector': None,  # Will be populated by ML later
+            'metadata': {}
+        }
+        
+        # Get validated client for automatic validation
+        validated_client = _get_validated_supabase()
+        if validated_client:
+            validated_client.upsert('creative_intelligence', creative_data, on_conflict='creative_id')
+        else:
+            supabase_client.table('creative_intelligence').upsert(creative_data, on_conflict='creative_id').execute()
+        notify(f"🎨 Creative data validated and stored for {ad_id}")
+        
+    except (KeyError, ValueError, TypeError, AttributeError) as e:
+        # Creative data is optional, log but don't fail
+        logger.debug(f"Failed to store creative data for {ad_id}: {e}")
 
 
 def initialize_creative_intelligence_system(supabase_client, settings) -> Optional[Any]:
@@ -1368,7 +1408,37 @@ def redact(s: Optional[str], keep_last: int = 4) -> str:
 
 
 def validate_envs(required: List[str]) -> List[str]:
+    """Validate required environment variables."""
     return [k for k in required if not os.getenv(k)]
+
+def validate_asc_plus_envs() -> List[str]:
+    """Validate environment variables required for ASC+ campaign."""
+    required = [
+        "FB_ACCESS_TOKEN",
+        "FB_AD_ACCOUNT_ID",
+        "FB_PAGE_ID",
+        "FLUX_API_KEY",
+        "OPENAI_API_KEY",
+    ]
+    optional = [
+        "FB_ACCOUNT_ID",  # Alternative to FB_AD_ACCOUNT_ID
+        "META_ACCESS_TOKEN",  # Alternative to FB_ACCESS_TOKEN
+        "SUPABASE_URL",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "SLACK_WEBHOOK_URL",
+    ]
+    
+    missing = []
+    for var in required:
+        if not os.getenv(var):
+            # Check for alternatives
+            if var == "FB_ACCESS_TOKEN" and os.getenv("META_ACCESS_TOKEN"):
+                continue
+            if var == "FB_AD_ACCOUNT_ID" and os.getenv("FB_ACCOUNT_ID"):
+                continue
+            missing.append(var)
+    
+    return missing
 
 
 def validate_settings_ids(settings: Dict[str, Any]) -> List[str]:
@@ -1388,29 +1458,22 @@ def linter(settings: Dict[str, Any], rules: Dict[str, Any]) -> List[str]:
     if env_tz and env_tz != cfg_tz:
         issues.append(f"Timezone mismatch? config={cfg_tz} env={env_tz}")
 
-    # required top-level sections
-    for k in ("ids", "testing", "validation", "scaling", "queue", "logging"):
+    # required top-level sections for ASC+ campaign
+    for k in ("ids", "asc_plus", "queue", "logging"):
         if k not in settings:
             issues.append(f"Missing section: {k}")
 
-    # rules sanity (CPA strictness ordering)
-    cpa_thr = (rules.get("thresholds") or {}).get("cpa", {})
+    # ASC+ budget validation
+    asc_plus = settings.get("asc_plus", {}) or {}
     try:
-        v_max = float(cpa_thr.get("validation_max", 1))
-        t_max = float(cpa_thr.get("testing_max", 0))
-        if v_max < t_max:
-            issues.append("Rules: validation_max CPA < testing_max CPA; check strictness ordering")
-    except Exception:
-        pass
-
-    # basic budget min/max if present
-    b = (settings.get("scaling", {}) or {}).get("budget", {}) or {}
-    try:
-        mn, mx = float(b.get("min_usd", 0) or 0), float(b.get("max_usd", 0) or 0)
-        if mn and mx and mx < mn:
-            issues.append(f"Budget min/max invalid: min={mn} > max={mx}")
-    except Exception:
-        pass
+        daily_budget = float(asc_plus.get("daily_budget_eur", 0) or 0)
+        if daily_budget <= 0:
+            issues.append("ASC+ daily_budget_eur must be > 0")
+        target_ads = int(asc_plus.get("target_active_ads", 0) or 0)
+        if target_ads <= 0:
+            issues.append("ASC+ target_active_ads must be > 0")
+    except (ValueError, TypeError, KeyError):
+        issues.append("ASC+ target_active_ads must be a valid integer > 0")
 
     return issues
 
@@ -1440,29 +1503,35 @@ def file_lock(path: str):
             try:
                 if os.path.getsize(path) > 0:
                     raise RuntimeError("Lock already held")
-            except Exception:
+            except (OSError, IOError):
+                # File may not exist or be readable - proceed
                 pass
             locked = True  # proceed best-effort
         if locked:
             try:
                 os.ftruncate(fd, 0)
                 os.write(fd, str(os.getpid()).encode())
-            except Exception:
+            except (OSError, IOError):
+                # Lock file operations may fail - best effort
                 pass
             yield
     finally:
-        try:
-            if fd is not None:
-                try:
-                    import fcntl  # type: ignore
-
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-                except Exception:
-                    pass
+        if fd is not None:
+            try:
+                import fcntl  # type: ignore
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except (OSError, IOError, AttributeError):
+                # Lock release may fail - continue to cleanup
+                pass
+            try:
                 os.close(fd)
+            except (OSError, IOError):
+                pass
+            try:
                 os.remove(path)
-        except Exception:
-            pass
+            except (OSError, IOError):
+                # File may already be removed
+                pass
 
 
 def stage_retry(
@@ -1577,7 +1646,7 @@ def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dic
                 if auto_charge_threshold is None:
                     # Use dynamic threshold tracking system
                     # Use the same SQLite path as the main system
-                    sqlite_path = settings.get("logging", {}).get("sqlite", {}).get("path", "dean/data/state.sqlite")
+                    sqlite_path = settings.get("logging", {}).get("sqlite", {}).get("path", "data/state.sqlite")
                     store = Store(sqlite_path)
                     
                     # Get current tracked threshold from storage
@@ -1660,8 +1729,9 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
                         atc += value
                     elif action_type == "initiate_checkout":
                         ic += value
-                except Exception:
-                    pass
+                except (KeyError, TypeError, ValueError):
+                    # Skip invalid action entries
+                    continue
         
         # Calculate metrics
         cpa = (spend / purch) if purch > 0 else float("inf")
@@ -1692,11 +1762,11 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
                 
                 # Use the higher count (some ads might not have today's data yet)
                 active_ads_count = max(insights_ads_count, total_active_count)
-            except Exception:
+            except (AttributeError, TypeError, ValueError, KeyError):
                 # Fallback to insights count if direct API call fails
                 active_ads_count = insights_ads_count
                 
-        except Exception:
+        except (AttributeError, TypeError, ValueError, KeyError):
             active_ads_count = 0
         
         return {
@@ -1713,7 +1783,8 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
             "ic": int(ic),
             "active_ads": active_ads_count,
         }
-    except Exception:
+    except (KeyError, ValueError, TypeError, ZeroDivisionError):
+        logger.error("Failed to calculate account metrics", exc_info=True)
         return {
             "spend": None, "purchases": None, "cpa": None, "breakeven": None,
             "impressions": None, "clicks": None, "ctr": None, "cpc": None,
@@ -1848,10 +1919,9 @@ def main() -> None:
         schema = load_yaml(args.schema)
         if schema:
             import jsonschema  # type: ignore
-
             jsonschema.validate(instance=settings, schema=schema)
-    except Exception:
-        pass
+    except (ImportError, jsonschema.ValidationError) as e:
+        logger.debug(f"Schema validation skipped or failed: {e}")
 
     # Lint and basic validation
     missing_envs = validate_envs(REQUIRED_ENVS)
@@ -1995,11 +2065,10 @@ def main() -> None:
                 seasonality_analyzer = None
                 lr_scheduler = None
             
-            # Show ML readiness for each stage
+            # Show ML readiness for ASC+ stage
             if data_progress_tracker:
-                for stage_name in ['testing', 'validation', 'scaling']:
-                    readiness = data_progress_tracker.get_ml_readiness(stage_name)
-                    notify(f"📊 {stage_name.title()}: {readiness.get('message', 'Unknown')}")
+                readiness = data_progress_tracker.get_ml_readiness('asc_plus')
+                notify(f"📊 ASC+ Stage: {readiness.get('message', 'Unknown')}")
             
             # Show ML system health
             if ml_dashboard:
@@ -2057,6 +2126,16 @@ def main() -> None:
         except Exception as e:
             notify(f"⚠️ Creative Intelligence System initialization error: {e}")
 
+    # Validate ASC+ environment variables
+    missing_envs = validate_asc_plus_envs()
+    if missing_envs:
+        notify(f"❌ Missing required environment variables for ASC+ campaign: {', '.join(missing_envs)}")
+        notify("   Required: FB_ACCESS_TOKEN, FB_AD_ACCOUNT_ID, FB_PAGE_ID, FLUX_API_KEY, OPENAI_API_KEY")
+        if not (profile == "staging" or effective_dry):
+            sys.exit(1)
+    else:
+        notify("✅ All required ASC+ environment variables are set")
+    
     # Preflight health check
     hc = health_check(store, client)
     if not hc["ok"]:
@@ -2072,17 +2151,10 @@ def main() -> None:
         if account_health.get("critical_issues"):
             notify(f"Critical issues: {', '.join(account_health['critical_issues'])}")
 
-    # Queue: Prefer Supabase if configured; else fallback to file path.
-    if os.getenv("SUPABASE_URL") and (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")):
-        table = os.getenv("SUPABASE_TABLE", "meta_creatives")
-        queue_df = load_queue_supabase(table=table, status_filter="pending", limit=64)
-        queue_len_before = len(queue_df)
-        notify(f"📊 Queue loaded from Supabase: {len(queue_df)} creatives available")
-    else:
-        queue_path = (settings.get("queue") or {}).get("path", "data/creatives_queue.csv")
-        queue_df = load_queue(queue_path)
-        queue_len_before = len(queue_df)
-        notify(f"📊 Queue loaded from file: {len(queue_df)} creatives available")
+    # Queue loading disabled - ASC+ generates creatives dynamically via image_generator
+    # Legacy queue functions kept for compatibility but not used by ASC+ stage
+    queue_df = pd.DataFrame()  # Empty queue - ASC+ doesn't use a pre-loaded queue
+    queue_len_before = 0
 
     # Context ping - now using consolidated messaging
     local_now = now_local(tz_name)
@@ -2107,10 +2179,11 @@ def main() -> None:
     # Idempotency (tick-level) and process lock (multi-runner safety)
     try:
         tkey = f"tick::{local_now:%Y-%m-%dT%H:%M}"
-        if hasattr(store, "tick_seen") and store.tick_seen(tkey):  # if you implemented this helper
+        if hasattr(store, "tick_seen") and store.tick_seen(tkey):
             notify("ℹ️ Tick already processed; exiting.")
             return
-    except Exception:
+    except (AttributeError, TypeError):
+        # Store may not support tick_seen, continue normally
         pass
 
     with file_lock(LOCKFILE):
@@ -2136,7 +2209,8 @@ def main() -> None:
                             reason="shadow mode (no writes)",
                             meta={"stage": label},
                         )
-                    except Exception:
+                    except (AttributeError, TypeError, ValueError):
+                        # Logging failure is non-critical
                         pass
 
                 res = wrapped(*fn_args, **fn_kwargs)
@@ -2160,229 +2234,56 @@ def main() -> None:
         # Collect stage summaries for consolidated messaging
         stage_summaries = []
         
-        if stage_choice in ("all", "testing"):
-            # Run standard testing first to collect data
-            overall["testing"] = run_stage(
-                run_testing_tick,
-                "TESTING",
-                client,
-                settings,
-                engine,
-                store,
-                queue_df,
-                set_supabase_status,
-                placements=["facebook", "instagram"],
-                instagram_actor_id=os.getenv("IG_ACTOR_ID"),
-                ml_pipeline=ml_pipeline if ml_mode_enabled else None,  # NEW: Pass ML pipeline
-                supabase_storage=supabase_storage,  # NEW: Pass Supabase storage
-            )
-            
-            # After data collection, run ML analysis if enabled
-            if ml_mode_enabled and ml_system and overall["testing"]:
-                try:
-                    # Store performance data in Supabase first
-                    if supabase_client:
-                        notify(f"📊 Testing data collected: {len(overall['testing'])} items")
-                        # Collect actual ad data for Supabase storage
-                        testing_ad_data = collect_stage_ad_data(client, settings, "testing")
-                        for ad_id, ad_data in testing_ad_data.items():
-                            if isinstance(ad_data, dict) and 'spend' in ad_data:
-                                store_performance_data_in_supabase(supabase_client, ad_data, "testing", ml_system)
-                                
-                                # Record historical data for rule evaluation
-                                if store and ad_data.get("ad_id"):
-                                    ad_id = ad_data["ad_id"]
-                                    lifecycle_id = ad_data.get("lifecycle_id", "")
-                                    
-                                    # Record ad creation time and historical data (use Supabase)
-                                    if supabase_storage:
-                                        try:
-                                            creation_time = supabase_storage.get_ad_creation_time(ad_id)
-                                            if not creation_time:
-                                                supabase_storage.record_ad_creation(ad_id, lifecycle_id, "testing")
-                                            
-                                            # Store historical metrics for rule evaluation
-                                            metrics_to_track = ["cpm", "ctr", "impressions", "clicks", "spend", "add_to_cart", "purchases"]
-                                            for metric in metrics_to_track:
-                                                if metric in ad_data and ad_data[metric] is not None:
-                                                    supabase_storage.store_historical_data(ad_id, lifecycle_id, "testing", metric, float(ad_data[metric]))
-                                        except Exception as e:
-                                            notify(f"⚠️ Failed to store ad data in Supabase for {ad_id}: {e}")
-                                    else:
-                                        # Fallback to SQLite if Supabase not available
-                                        creation_time = store.get_ad_creation_time(ad_id)
-                                        if not creation_time:
-                                            store.record_ad_creation(ad_id, lifecycle_id, "testing")
-                                        
-                                        # Store historical metrics for rule evaluation
-                                        metrics_to_track = ["cpm", "ctr", "impressions", "clicks", "spend", "add_to_cart", "purchases"]
-                                        for metric in metrics_to_track:
-                                            if metric in ad_data and ad_data[metric] is not None:
-                                                store.store_historical_data(ad_id, lifecycle_id, "testing", metric, float(ad_data[metric]))
-                                    
-                                    # Enhanced ML system now has historical data capabilities integrated
-                        notify("📊 Performance data stored in Supabase for ML system")
-                    
-                    # Now run ML analysis on the stored data
-                    testing_analysis = ml_system.analyze_ad_intelligence("testing_stage", "testing")
-                    
-                    # Add ML insights to results
-                    overall["testing"]["ml_insights"] = testing_analysis
-                    overall["testing"]["intelligence_score"] = testing_analysis.get("intelligence_score", 0)
-                    
-                    # Store ML insights
-                    if supabase_client and testing_analysis:
-                        for ad_id in overall["testing"].keys():
-                            if isinstance(ad_id, str):
-                                store_ml_insights_in_supabase(supabase_client, ad_id, testing_analysis)
-                                
-                    # ML analysis completed - status will be reported later
-                    
-                except Exception as e:
-                    notify(f"⚠️ ML analysis failed: {e}")
-            # Store performance data in Supabase for ML system (standard path)
-            if overall["testing"] and not (ml_mode_enabled and ml_system):
-                if supabase_client:
-                    try:
-                        # Collect actual ad data for Supabase storage
-                        testing_ad_data = collect_stage_ad_data(client, settings, "testing")
-                        for ad_id, ad_data in testing_ad_data.items():
-                            if isinstance(ad_data, dict) and 'spend' in ad_data:
-                                store_performance_data_in_supabase(supabase_client, ad_data, "testing", ml_system)
-                                # NEW: Store time-series and creative data
-                                store_timeseries_data_in_supabase(supabase_client, ad_id, ad_data, "testing")
-                                store_creative_data_in_supabase(supabase_client, client, ad_id, "testing")
-                                
-                        notify("📊 Performance data + time-series + creative data stored in Supabase")
-                    except Exception as e:
-                        notify(f"⚠️ Failed to store data in Supabase: {e}")
-            
-            if overall["testing"]:
-                stage_summaries.append({
-                    "stage": "TEST",
-                    "counts": overall["testing"]
-                })
+        # ASC+ Campaign - Single campaign mode (always run)
+        overall["asc_plus"] = run_stage(
+            run_asc_plus_tick,
+            "ASC+",
+            client,
+            settings,
+            rules_cfg,
+            store,
+            ml_system=ml_system if ml_mode_enabled else None,
+        )
+        if overall.get("asc_plus"):
+            stage_summaries.append({
+                "stage": "ASC+",
+                "result": overall["asc_plus"],
+            })
+        
+        # System is ASC+ only - all old stages removed
+        
+        # Store ASC+ performance data in Supabase for ML system
+        if overall.get("asc_plus") and supabase_client:
+            try:
+                asc_result = overall.get("asc_plus", {})
+                campaign_id = asc_result.get("campaign_id")
+                adset_id = asc_result.get("adset_id")
+                
+                # Collect ASC+ ad data for Supabase storage
+                asc_ad_data = {}
+                if campaign_id and adset_id:
+                    # Use timezone from settings
+                    import zoneinfo
+                    tz_name = settings.get("account", {}).get("timezone") or os.getenv("ACCOUNT_TZ", "Europe/Amsterdam")
+                    local_tz = zoneinfo.ZoneInfo(tz_name)
+                    asc_insights = client.get_ad_insights(
+                        level="ad",
+                        time_range={"since": (datetime.now(local_tz) - pd.Timedelta(days=7)).strftime("%Y-%m-%d"), "until": datetime.now(local_tz).strftime("%Y-%m-%d")},
+                    )
+                    for insight in asc_insights:
+                        ad_id = insight.get("ad_id")
+                        if ad_id:
+                            asc_ad_data[ad_id] = insight
+                
+                for ad_id, ad_data in asc_ad_data.items():
+                    if isinstance(ad_data, dict) and 'spend' in ad_data:
+                        store_performance_data_in_supabase(supabase_client, ad_data, "asc_plus", ml_system)
+                
+                notify("📊 ASC+ performance data stored in Supabase for ML system")
+            except Exception as e:
+                notify(f"⚠️ Failed to store ASC+ data in Supabase: {e}")
 
-        if stage_choice in ("all", "validation"):
-            overall["validation"] = run_stage(
-                run_validation_tick, "VALIDATION", client, settings, engine, store, ml_pipeline=ml_pipeline if ml_mode_enabled else None, supabase_storage=supabase_storage  # NEW: Pass ML pipeline and Supabase storage
-            )
-            if overall["validation"]:
-                # Store validation stage performance data in Supabase
-                if supabase_client:
-                    try:
-                        # Collect actual ad data for Supabase storage
-                        validation_ad_data = collect_stage_ad_data(client, settings, "validation")
-                        for ad_id, ad_data in validation_ad_data.items():
-                            if isinstance(ad_data, dict) and 'spend' in ad_data:
-                                store_performance_data_in_supabase(supabase_client, ad_data, "validation", ml_system)
-                                
-                                # Record historical data for rule evaluation
-                                if store and ad_data.get("ad_id"):
-                                    ad_id = ad_data["ad_id"]
-                                    lifecycle_id = ad_data.get("lifecycle_id", "")
-                                    
-                                    # Record ad creation time and historical data (use Supabase)
-                                    if supabase_storage:
-                                        try:
-                                            creation_time = supabase_storage.get_ad_creation_time(ad_id)
-                                            if not creation_time:
-                                                supabase_storage.record_ad_creation(ad_id, lifecycle_id, "validation")
-                                            
-                                            # Store historical metrics for rule evaluation
-                                            metrics_to_track = ["cpm", "ctr", "impressions", "clicks", "spend", "add_to_cart", "purchases"]
-                                            for metric in metrics_to_track:
-                                                if metric in ad_data and ad_data[metric] is not None:
-                                                    supabase_storage.store_historical_data(ad_id, lifecycle_id, "validation", metric, float(ad_data[metric]))
-                                        except Exception as e:
-                                            notify(f"⚠️ Failed to store validation ad data in Supabase for {ad_id}: {e}")
-                                    else:
-                                        # Fallback to SQLite if Supabase not available
-                                        creation_time = store.get_ad_creation_time(ad_id)
-                                        if not creation_time:
-                                            store.record_ad_creation(ad_id, lifecycle_id, "validation")
-                                        
-                                        # Store historical metrics for rule evaluation
-                                        metrics_to_track = ["cpm", "ctr", "impressions", "clicks", "spend", "add_to_cart", "purchases"]
-                                        for metric in metrics_to_track:
-                                            if metric in ad_data and ad_data[metric] is not None:
-                                                store.store_historical_data(ad_id, lifecycle_id, "validation", metric, float(ad_data[metric]))
-                                
-                                # NEW: Store time-series and creative data
-                                store_timeseries_data_in_supabase(supabase_client, ad_id, ad_data, "validation")
-                                store_creative_data_in_supabase(supabase_client, client, ad_id, "validation")
-                        notify("📊 Validation data + time-series + creative data stored in Supabase")
-                    except Exception as e:
-                        notify(f"⚠️ Failed to store validation data in Supabase: {e}")
-                        
-                stage_summaries.append({
-                    "stage": "VALID", 
-                    "counts": overall["validation"]
-                })
-
-        if stage_choice in ("all", "scaling"):
-            overall["scaling"] = run_stage(run_scaling_tick, "SCALING", client, settings, store)
-            if overall["scaling"]:
-                # Store scaling stage performance data in Supabase
-                if supabase_client:
-                    try:
-                        # Collect actual ad data for Supabase storage
-                        scaling_ad_data = collect_stage_ad_data(client, settings, "scaling")
-                        for ad_id, ad_data in scaling_ad_data.items():
-                            if isinstance(ad_data, dict) and 'spend' in ad_data:
-                                store_performance_data_in_supabase(supabase_client, ad_data, "scaling", ml_system)
-                                
-                                # Record historical data for rule evaluation
-                                if store and ad_data.get("ad_id"):
-                                    ad_id = ad_data["ad_id"]
-                                    lifecycle_id = ad_data.get("lifecycle_id", "")
-                                    
-                                    # Record ad creation time and historical data (use Supabase)
-                                    if supabase_storage:
-                                        try:
-                                            creation_time = supabase_storage.get_ad_creation_time(ad_id)
-                                            if not creation_time:
-                                                supabase_storage.record_ad_creation(ad_id, lifecycle_id, "scaling")
-                                            
-                                            # Store historical metrics for rule evaluation
-                                            metrics_to_track = ["cpm", "ctr", "impressions", "clicks", "spend", "add_to_cart", "purchases"]
-                                            for metric in metrics_to_track:
-                                                if metric in ad_data and ad_data[metric] is not None:
-                                                    supabase_storage.store_historical_data(ad_id, lifecycle_id, "scaling", metric, float(ad_data[metric]))
-                                        except Exception as e:
-                                            notify(f"⚠️ Failed to store scaling ad data in Supabase for {ad_id}: {e}")
-                                    else:
-                                        # Fallback to SQLite if Supabase not available
-                                        creation_time = store.get_ad_creation_time(ad_id)
-                                        if not creation_time:
-                                            store.record_ad_creation(ad_id, lifecycle_id, "scaling")
-                                        
-                                        # Store historical metrics for rule evaluation
-                                        metrics_to_track = ["cpm", "ctr", "impressions", "clicks", "spend", "add_to_cart", "purchases"]
-                                        for metric in metrics_to_track:
-                                            if metric in ad_data and ad_data[metric] is not None:
-                                                store.store_historical_data(ad_id, lifecycle_id, "scaling", metric, float(ad_data[metric]))
-                                
-                                # NEW: Store time-series and creative data
-                                store_timeseries_data_in_supabase(supabase_client, ad_id, ad_data, "scaling")
-                                store_creative_data_in_supabase(supabase_client, client, ad_id, "scaling")
-                        notify("📊 Scaling data + time-series + creative data stored in Supabase")
-                    except Exception as e:
-                        notify(f"⚠️ Failed to store scaling data in Supabase: {e}")
-                        
-                stage_summaries.append({
-                    "stage": "SCALE",
-                    "counts": overall["scaling"]
-                })
-
-    # Queue persist (only if changed length; cheap heuristic).
-    # When using Supabase, this block normally will not run (DF length does not change in-place).
-    if 'queue_path' in locals() and len(queue_df) != queue_len_before:
-        try:
-            save_queue(queue_df, queue_path)
-            notify(f"📦 Queue saved ({len(queue_df)} rows) -> {queue_path}")
-        except Exception as e:
-            notify(f"⚠️ Queue save failed: {e}")
+    # Queue persist disabled - ASC+ generates creatives dynamically, no queue to persist
     
     # Run model validation if needed (NEW - weekly validation)
     if ml_mode_enabled and ml_pipeline:
@@ -2421,8 +2322,9 @@ def main() -> None:
                     "health": hc,
                 }
             )
-        except Exception:
-            pass
+        except (KeyError, ValueError, TypeError):
+            # Health check reporting is non-critical
+            logger.debug("Failed to send health check to Slack")
 
     # Post consolidated run summary
     if not shadow_mode:
@@ -2497,51 +2399,51 @@ def main() -> None:
                 
                 if ad_lines:
                     post_thread_ads_snapshot(thread_ts, ad_lines)
-        except Exception:
-            pass
+        except (AttributeError, TypeError, ValueError) as e:
+            logger.debug(f"Failed to post ads snapshot: {e}")
 
     # ML Model Training (if ML mode enabled and data is available)
-    print(f"🔧 ML mode enabled: {ml_mode_enabled}")
-    print(f"🔧 ML system exists: {ml_system is not None}")
+    logger.debug(f"ML mode enabled: {ml_mode_enabled}")
+    logger.debug(f"ML system exists: {ml_system is not None}")
     if ml_system:
-        print(f"🔧 ML system type: {type(ml_system)}")
-        print(f"🔧 ML system has predictor: {hasattr(ml_system, 'predictor')}")
+        logger.debug(f"ML system type: {type(ml_system)}")
+        logger.debug(f"ML system has predictor: {hasattr(ml_system, 'predictor')}")
         if hasattr(ml_system, 'predictor'):
-            print(f"🔧 ML predictor type: {type(ml_system.predictor)}")
+            logger.debug(f"ML predictor type: {type(ml_system.predictor)}")
     
     if ml_mode_enabled and ml_system:
         try:
             # Small delay to ensure data is fully committed to Supabase
-            time.sleep(2)
+            time.sleep(ML_TRAINING_DELAY_SECONDS)
             
             # Train testing stage models directly
-            print(f"🔧 Starting ML training...")
-            print(f"🔧 ML system type: {type(ml_system)}")
-            print(f"🔧 ML predictor type: {type(ml_system.predictor)}")
-            print(f"🔧 ML predictor methods: {[m for m in dir(ml_system.predictor) if not m.startswith('_')]}")
+            logger.info("Starting ML training...")
+            logger.debug(f"ML system type: {type(ml_system)}")
+            logger.debug(f"ML predictor type: {type(ml_system.predictor)}")
+            logger.debug(f"ML predictor methods: {[m for m in dir(ml_system.predictor) if not m.startswith('_')]}")
             
             try:
-                print(f"🔧 Calling performance_predictor training...")
+                logger.debug("Calling performance_predictor training...")
                 perf_success = ml_system.predictor.train_model('performance_predictor', 'testing', 'cpa')
-                print(f"🔧 Performance predictor training result: {perf_success}")
-            except Exception as e:
-                print(f"🔧 Performance predictor training error: {e}")
+                logger.debug(f"Performance predictor training result: {perf_success}")
+            except (AttributeError, ValueError, TypeError) as e:
+                logger.error(f"Performance predictor training error: {e}", exc_info=True)
                 perf_success = False
             
             try:
-                print(f"🔧 Calling roas_predictor training...")
+                logger.debug("Calling roas_predictor training...")
                 roas_success = ml_system.predictor.train_model('roas_predictor', 'testing', 'roas')
-                print(f"🔧 ROAS predictor training result: {roas_success}")
-            except Exception as e:
-                print(f"🔧 ROAS predictor training error: {e}")
+                logger.debug(f"ROAS predictor training result: {roas_success}")
+            except (AttributeError, ValueError, TypeError) as e:
+                logger.error(f"ROAS predictor training error: {e}", exc_info=True)
                 roas_success = False
             
             try:
-                print(f"🔧 Calling purchase_probability training...")
+                logger.debug("Calling purchase_probability training...")
                 purchase_success = ml_system.predictor.train_model('purchase_probability', 'testing', 'purchases')
-                print(f"🔧 Purchase predictor training result: {purchase_success}")
-            except Exception as e:
-                print(f"🔧 Purchase predictor training error: {e}")
+                logger.debug(f"Purchase predictor training result: {purchase_success}")
+            except (AttributeError, ValueError, TypeError) as e:
+                logger.error(f"Purchase predictor training error: {e}", exc_info=True)
                 purchase_success = False
             
             training_success = perf_success or roas_success or purchase_success
@@ -2602,24 +2504,23 @@ def main() -> None:
     amsterdam_tz = pytz.timezone('Europe/Amsterdam')
     amsterdam_time = datetime.now(amsterdam_tz).strftime('%Y-%m-%d %H:%M:%S %Z')
     
-    print("---- RUN SUMMARY ----")
-    print(f"Time: {amsterdam_time}")
+    logger.info("---- RUN SUMMARY ----")
+    logger.info(f"Time: {amsterdam_time}")
     
     # Display key metrics summary
     if acct.get('spend') is not None:
-        print(f"💰 Today's Spend: €{acct.get('spend', 0):.2f}")
-        print(f"📊 Active Ads: {acct.get('active_ads', 0)}")
-        print(f"👀 Impressions: {acct.get('impressions', 0):,}")
-        print(f"🖱️ Clicks: {acct.get('clicks', 0):,}")
-        print(f"📈 CTR: {acct.get('ctr', 0):.1f}%")
-        print(f"💵 CPC: €{acct.get('cpc', 0):.2f}")
-        print(f"📊 CPM: €{acct.get('cpm', 0):.2f}")
+        logger.info(f"Today's Spend: €{acct.get('spend', 0):.2f}")
+        logger.info(f"Active Ads: {acct.get('active_ads', 0)}")
+        logger.info(f"Impressions: {acct.get('impressions', 0):,}")
+        logger.info(f"Clicks: {acct.get('clicks', 0):,}")
+        logger.info(f"CTR: {acct.get('ctr', 0):.1f}%")
+        logger.info(f"CPC: €{acct.get('cpc', 0):.2f}")
+        logger.info(f"CPM: €{acct.get('cpm', 0):.2f}")
         if acct.get('purchases', 0) > 0:
-            print(f"🛒 Purchases: {acct.get('purchases', 0)}")
-            print(f"🎯 CPA: €{acct.get('cpa', 0):.2f}")
-        print()
+            logger.info(f"Purchases: {acct.get('purchases', 0)}")
+            logger.info(f"CPA: €{acct.get('cpa', 0):.2f}")
     
-    print(
+    logger.debug(
         json.dumps(
             {
                 "profile": profile,
