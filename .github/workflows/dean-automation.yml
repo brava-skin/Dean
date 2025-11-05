@@ -9,21 +9,26 @@ on:
 jobs:
   dean-automation:
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # Prevent hanging workflows
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 1  # Only fetch latest commit, faster checkout
       
     - name: Set up Python 3.11
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
+        cache: 'pip'  # Enable built-in pip caching
+        cache-dependency-path: 'dean/requirements.txt'
         
     - name: Cache pip dependencies
       uses: actions/cache@v3
       with:
         path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        key: ${{ runner.os }}-pip-${{ hashFiles('dean/requirements.txt') }}
         restore-keys: |
           ${{ runner.os }}-pip-
           
@@ -31,17 +36,25 @@ jobs:
       run: |
         echo "📦 Installing Python dependencies..."
         echo "💾 Using cached dependencies when available"
-        python -m pip install --upgrade pip
-        pip install --cache-dir ~/.cache/pip -r dean/requirements.txt
+        python -m pip install --upgrade pip --quiet
+        pip install --cache-dir ~/.cache/pip --quiet -r dean/requirements.txt
         echo "✅ Dependencies installed successfully"
         
+    - name: Cache apt packages
+      uses: actions/cache@v3
+      with:
+        path: /var/cache/apt
+        key: ${{ runner.os }}-apt-ffmpeg
+        restore-keys: |
+          ${{ runner.os }}-apt-
+    
     - name: Install ffmpeg
       run: |
         echo "📹 Installing ffmpeg for text overlay generation..."
-        sudo apt-get update
-        sudo apt-get install -y ffmpeg
-        ffmpeg -version
-        echo "✅ ffmpeg installed successfully"
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends --no-upgrade ffmpeg
+        ffmpeg -version | head -1
+        echo "✅ ffmpeg ready"
         
     - name: Run Dean
       env:
@@ -99,8 +112,12 @@ jobs:
         # Change to dean directory where config files are located
         cd dean
         
+        # Set Python optimizations for faster execution
+        export PYTHONUNBUFFERED=1
+        export PYTHONDONTWRITEBYTECODE=1  # Skip .pyc files
+        
         # Run Dean ASC+ automation
-        python src/main.py
+        python -u src/main.py
         
         echo ""
         echo "✅ Dean ASC+ automation cycle completed"
