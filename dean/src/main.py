@@ -1907,17 +1907,18 @@ def main() -> None:
             result = base.copy()
             for key, value in override.items():
                 if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                    result[key] = deep_merge(result[key], value)
-                else:
-                    # Only override if key doesn't exist in base, or if it's not a dict
-                    # For asc_plus, preserve settings values (daily_budget_eur, target_active_ads, etc.)
-                    if key == "asc_plus" and isinstance(result.get(key), dict) and isinstance(value, dict):
-                        # Merge asc_plus preserving settings values
+                    # Special handling for asc_plus to preserve settings values
+                    if key == "asc_plus":
+                        # Merge asc_plus preserving settings values (daily_budget_eur, target_active_ads, etc.)
                         merged_asc_plus = result[key].copy()
                         merged_asc_plus.update(value)  # Rules override only specific keys, not the whole dict
                         result[key] = merged_asc_plus
                     else:
-                        result[key] = value
+                        # Recursive merge for other nested dicts
+                        result[key] = deep_merge(result[key], value)
+                else:
+                    # For non-dict values or new keys, just set the value
+                    result[key] = value
             return result
         settings = deep_merge(settings, rules_cfg)
 

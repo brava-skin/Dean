@@ -36,8 +36,7 @@ FLUX_API_URL = "https://api.bfl.ai/v1/flux-kontext-max"
 FLUX_CREDITS_URL = "https://api.bfl.ai/v1/credits"
 FLUX_MODEL = "FLUX.1 Kontext [max]"
 
-if not FLUX_API_KEY:
-    raise ValueError("FLUX_API_KEY environment variable is required. Set it in your .env file.")
+# Note: FLUX_API_KEY validation happens lazily in FluxClient.__init__ to allow imports without env vars
 
 # Credit pricing (1 credit = $0.01 USD)
 FLUX_CREDITS_PER_IMAGE = {
@@ -59,7 +58,11 @@ class FluxClient:
     """Client for FLUX.1 Kontext API image generation with credit management."""
     
     def __init__(self, api_key: Optional[str] = None, check_credits: bool = True):
+        # Validate API key (lazy check - only when client is actually created)
         self.api_key = api_key or FLUX_API_KEY
+        if not self.api_key:
+            raise ValueError("FLUX_API_KEY environment variable is required. Set it in your .env file or pass api_key parameter.")
+        
         self.base_url = FLUX_API_URL
         self.credits_url = FLUX_CREDITS_URL
         self.check_credits = check_credits
