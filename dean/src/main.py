@@ -1900,8 +1900,26 @@ def main() -> None:
         os.environ["META_UI_PROTECTION_MODE"] = "true"  # Maximum UI protection
     
     # Merge rules configuration into settings so stages can access it
+    # Use deep merge to preserve settings values (especially asc_plus config)
     if rules_cfg:
-        settings.update(rules_cfg)
+        def deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+            """Deep merge two dictionaries, preserving base values when override has conflicting keys."""
+            result = base.copy()
+            for key, value in override.items():
+                if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                    result[key] = deep_merge(result[key], value)
+                else:
+                    # Only override if key doesn't exist in base, or if it's not a dict
+                    # For asc_plus, preserve settings values (daily_budget_eur, target_active_ads, etc.)
+                    if key == "asc_plus" and isinstance(result.get(key), dict) and isinstance(value, dict):
+                        # Merge asc_plus preserving settings values
+                        merged_asc_plus = result[key].copy()
+                        merged_asc_plus.update(value)  # Rules override only specific keys, not the whole dict
+                        result[key] = merged_asc_plus
+                    else:
+                        result[key] = value
+            return result
+        settings = deep_merge(settings, rules_cfg)
 
     # Resolve profile/dry-run/shadow
     profile = (
