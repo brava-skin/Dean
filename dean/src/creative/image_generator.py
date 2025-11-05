@@ -752,21 +752,33 @@ Now generate the scenario following ALL requirements above."""
                 input=user_prompt,
             )
             
-            # Extract text
+            # Extract text - handle None and empty responses safely
             output_text = ""
-            if hasattr(response, 'output'):
-                for item in response.output:
-                    if hasattr(item, 'content'):
-                        for content in item.content:
-                            if hasattr(content, 'text'):
-                                output_text += content.text
-                            elif hasattr(content, 'output_text'):
-                                output_text += content.output_text
-                    elif hasattr(item, 'text'):
-                        output_text += item.text
-            
-            if not output_text and hasattr(response, 'output_text'):
-                output_text = response.output_text
+            if hasattr(response, 'output_text') and response.output_text:
+                output_text = str(response.output_text)
+            elif hasattr(response, 'output') and response.output:
+                # Handle list of outputs
+                if isinstance(response.output, list):
+                    for item in response.output:
+                        if item is None:
+                            continue
+                        if hasattr(item, 'content') and item.content:
+                            if isinstance(item.content, list):
+                                for content in item.content:
+                                    if content is None:
+                                        continue
+                                    if hasattr(content, 'text') and content.text:
+                                        output_text += str(content.text)
+                                    elif isinstance(content, str):
+                                        output_text += content
+                            elif isinstance(item.content, str):
+                                output_text += item.content
+                        elif hasattr(item, 'text') and item.text:
+                            output_text += str(item.text)
+                        elif isinstance(item, str):
+                            output_text += item
+                elif isinstance(response.output, str):
+                    output_text = response.output
             
             if output_text:
                 # Parse structured output
@@ -1222,21 +1234,33 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                 input=user_prompt,
             )
             
-            # Extract text
+            # Extract text - handle None and empty responses safely
             output_text = ""
-            if hasattr(response, 'output'):
-                for item in response.output:
-                    if hasattr(item, 'content'):
-                        for content in item.content:
-                            if hasattr(content, 'text'):
-                                output_text += content.text
-                            elif hasattr(content, 'output_text'):
-                                output_text += content.output_text
-                    elif hasattr(item, 'text'):
-                        output_text += item.text
-            
-            if not output_text and hasattr(response, 'output_text'):
-                output_text = response.output_text
+            if hasattr(response, 'output_text') and response.output_text:
+                output_text = str(response.output_text)
+            elif hasattr(response, 'output') and response.output:
+                # Handle list of outputs
+                if isinstance(response.output, list):
+                    for item in response.output:
+                        if item is None:
+                            continue
+                        if hasattr(item, 'content') and item.content:
+                            if isinstance(item.content, list):
+                                for content in item.content:
+                                    if content is None:
+                                        continue
+                                    if hasattr(content, 'text') and content.text:
+                                        output_text += str(content.text)
+                                    elif isinstance(content, str):
+                                        output_text += content
+                            elif isinstance(item.content, str):
+                                output_text += item.content
+                        elif hasattr(item, 'text') and item.text:
+                            output_text += str(item.text)
+                        elif isinstance(item, str):
+                            output_text += item
+                elif isinstance(response.output, str):
+                    output_text = response.output
             
             if output_text:
                 import json
