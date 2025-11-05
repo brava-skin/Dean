@@ -431,14 +431,17 @@ def run_asc_plus_tick(
         from infrastructure.caching import cache_manager
         cache_key = f"ad_insights_{adset_id}_{datetime.now().strftime('%Y%m%d%H')}"
         
-        insights = cache_manager.get(cache_key, namespace="insights")
-        if not insights:
-            insights = client.get_ad_insights(
-                level="ad",
-                time_range={"since": (datetime.now(LOCAL_TZ) - pd.Timedelta(days=7)).strftime("%Y-%m-%d"), "until": datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")},
-            )
-            # Cache for 1 hour
-            cache_manager.set(cache_key, insights, ttl_seconds=3600, namespace="insights")
+            insights = cache_manager.get(cache_key, namespace="insights")
+            if not insights:
+                insights = client.get_ad_insights(
+                    level="ad",
+                    time_range={"since": (datetime.now(LOCAL_TZ) - pd.Timedelta(days=7)).strftime("%Y-%m-%d"), "until": datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")},
+                )
+                # Convert dict_values to list for caching (prevents pickle errors)
+                if insights:
+                    insights = list(insights) if isinstance(insights, (dict.values, dict_keys)) else insights
+                # Cache for 1 hour
+                cache_manager.set(cache_key, insights, ttl_seconds=3600, namespace="insights")
         
         # Process ads for kill decisions
         asc_rules = cfg(rules, "asc_plus") or {}
