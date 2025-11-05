@@ -107,11 +107,25 @@ class RedisCache:
     def set(self, key: str, value: Any, ttl_seconds: Optional[int] = None):
         """Set value in Redis."""
         try:
+            # Convert non-picklable types to picklable ones
+            value = self._make_picklable(value)
             data = pickle.dumps(value)
             ttl = ttl_seconds or self.default_ttl
             self.client.setex(key, ttl, data)
         except Exception as e:
             logger.error(f"Redis set error: {e}")
+    
+    def _make_picklable(self, value: Any) -> Any:
+        """Convert non-picklable objects to picklable ones."""
+        if isinstance(value, (dict.values, dict_keys)):
+            return list(value)
+        elif isinstance(value, dict):
+            return {k: self._make_picklable(v) for k, v in value.items()}
+        elif isinstance(value, (list, tuple)):
+            return type(value)(self._make_picklable(item) for item in value)
+        elif isinstance(value, set):
+            return {self._make_picklable(item) for item in value}
+        return value
     
     def delete(self, key: str):
         """Delete key from Redis."""
