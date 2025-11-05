@@ -1465,15 +1465,19 @@ def linter(settings: Dict[str, Any], rules: Dict[str, Any]) -> List[str]:
 
     # ASC+ budget validation
     asc_plus = settings.get("asc_plus", {}) or {}
-    try:
-        daily_budget = float(asc_plus.get("daily_budget_eur", 0) or 0)
-        if daily_budget <= 0:
-            issues.append("ASC+ daily_budget_eur must be > 0")
-        target_ads = int(asc_plus.get("target_active_ads", 0) or 0)
-        if target_ads <= 0:
-            issues.append("ASC+ target_active_ads must be > 0")
-    except (ValueError, TypeError, KeyError):
-        issues.append("ASC+ target_active_ads must be a valid integer > 0")
+    if not asc_plus:
+        issues.append("ASC+ section is missing or empty in settings.yaml")
+    else:
+        try:
+            daily_budget = float(asc_plus.get("daily_budget_eur", 0) or 0)
+            if daily_budget <= 0:
+                issues.append(f"ASC+ daily_budget_eur must be > 0 (got: {daily_budget})")
+            target_ads = int(asc_plus.get("target_active_ads", 0) or 0)
+            if target_ads <= 0:
+                issues.append(f"ASC+ target_active_ads must be > 0 (got: {target_ads})")
+        except (ValueError, TypeError, KeyError) as e:
+            issues.append(f"ASC+ configuration error: {e}")
+            issues.append(f"ASC+ section contents: {asc_plus}")
 
     return issues
 

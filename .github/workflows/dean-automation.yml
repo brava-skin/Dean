@@ -112,6 +112,11 @@ jobs:
         # Change to dean directory where config files are located
         cd dean
         
+        # Verify config files exist
+        echo "📁 Checking configuration files..."
+        ls -la config/ || echo "⚠️  Config directory not found"
+        cat config/settings.yaml | grep -A 5 "asc_plus:" || echo "⚠️  ASC+ section not found in settings.yaml"
+        
         # Set Python optimizations for faster execution
         export PYTHONUNBUFFERED=1
         export PYTHONDONTWRITEBYTECODE=1  # Skip .pyc files
