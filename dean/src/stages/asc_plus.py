@@ -172,20 +172,26 @@ def _create_creative_and_ad(
             logger.error("FB_PAGE_ID environment variable is required")
             return None, None, False
         
-        creative = client.create_image_creative(
-            page_id=page_id,
-            name=creative_name,
-            supabase_storage_url=supabase_storage_url,  # Use Supabase Storage URL
-            image_path=image_path if not supabase_storage_url else None,
-            primary_text=ad_copy_dict.get("primary_text", ""),
-            headline=ad_copy_dict.get("headline", ""),
-            description=ad_copy_dict.get("description", ""),
-            creative_id=storage_creative_id,  # Pass storage creative_id for tracking
-        )
+        logger.info(f"Creating Meta creative: name='{creative_name}', page_id='{page_id}', has_supabase_url={bool(supabase_storage_url)}, has_image_path={bool(image_path)}")
+        try:
+            creative = client.create_image_creative(
+                page_id=page_id,
+                name=creative_name,
+                supabase_storage_url=supabase_storage_url,  # Use Supabase Storage URL
+                image_path=image_path if not supabase_storage_url else None,
+                primary_text=ad_copy_dict.get("primary_text", ""),
+                headline=ad_copy_dict.get("headline", ""),
+                description=ad_copy_dict.get("description", ""),
+                creative_id=storage_creative_id,  # Pass storage creative_id for tracking
+            )
+            logger.info(f"Meta API create_image_creative response: {creative}")
+        except Exception as e:
+            logger.error(f"Meta API create_image_creative failed: {e}", exc_info=True)
+            return None, None, False
         
         meta_creative_id = creative.get("id")
         if not meta_creative_id:
-            logger.warning(f"Failed to get creative ID from Meta response")
+            logger.error(f"Failed to get creative ID from Meta response. Response: {creative}")
             return None, None, False
         
         # Check for duplicate creative (use Meta's creative ID)
@@ -195,15 +201,22 @@ def _create_creative_and_ad(
         
         # Create ad
         ad_name = f"[ASC+] Ad {active_count + created_count + 1}"
-        ad = client.create_ad(
-            adset_id=adset_id,
-            name=ad_name,
-            creative_id=meta_creative_id,  # Use Meta's creative ID
-            status="ACTIVE",
-        )
+        logger.info(f"Creating ad with name='{ad_name}', adset_id='{adset_id}', creative_id='{meta_creative_id}'")
+        try:
+            ad = client.create_ad(
+                adset_id=adset_id,
+                name=ad_name,
+                creative_id=meta_creative_id,  # Use Meta's creative ID
+                status="ACTIVE",
+            )
+            logger.info(f"Meta API create_ad response: {ad}")
+        except Exception as e:
+            logger.error(f"Meta API create_ad failed: {e}", exc_info=True)
+            return str(meta_creative_id), None, False
         
         ad_id = ad.get("id")
         if ad_id:
+            logger.info(f"Successfully created ad with ad_id={ad_id}")
             existing_creative_ids.add(str(meta_creative_id))
             
             # Update creative_intelligence with Supabase Storage URL and Meta creative ID
@@ -253,7 +266,7 @@ def _create_creative_and_ad(
             logger.warning(f"Failed to get ad ID from Meta response")
             return str(meta_creative_id), None, False
             
-    except (KeyError, ValueError, TypeError, AttributeError) as e:
+    except Exception as e:
         logger.error(f"Error creating creative and ad: {e}", exc_info=True)
         return None, None, False
 
@@ -675,9 +688,13 @@ def run_asc_plus_tick(
                                 break
                             
                             if not creative_data:
+                                logger.warning(f"Creative #{i+1}: Generation returned None")
                                 failed_count += 1
                                 failed_reasons.append(f"Attempt #{attempt_count}, Creative #{i+1}: Generation returned None")
                                 continue
+                            
+                            # Log creative data for debugging
+                            logger.info(f"Processing creative #{i+1}: has supabase_storage_url={bool(creative_data.get('supabase_storage_url'))}, has image_path={bool(creative_data.get('image_path'))}, has ad_copy={bool(creative_data.get('ad_copy'))}")
                             
                             # Analyze creative with advanced ML
                             if advanced_ml:
@@ -694,12 +711,12 @@ def run_asc_plus_tick(
                                         creative_data["quality_check"] = quality
                                         
                                         if not quality.get("passed_checks"):
-                                            logger.warning(f"Creative failed quality checks: {quality}")
+                                            logger.warning(f"Creative #{i+1} failed quality checks: {quality}")
                                             failed_count += 1
                                             failed_reasons.append(f"Attempt #{attempt_count}, Creative #{i+1}: Failed quality check")
                                             continue
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.debug(f"ML analysis failed for creative #{i+1}: {e}")
                             
                             # Optimize image
                             try:
@@ -709,9 +726,10 @@ def run_asc_plus_tick(
                                         creative_data["image_path"]
                                     )
                             except (FileNotFoundError, OSError, ValueError) as e:
-                                logger.warning(f"Image optimization failed: {e}")
+                                logger.warning(f"Image optimization failed for creative #{i+1}: {e}")
                             
                             # Create creative in Meta
+                            logger.info(f"Creating Meta creative and ad for creative #{i+1}...")
                             creative_id, ad_id, success = _create_creative_and_ad(
                                 client=client,
                                 image_generator=image_generator,
@@ -724,19 +742,25 @@ def run_asc_plus_tick(
                             )
                             
                             if success and ad_id:
+                                logger.info(f"✅ Successfully created creative #{i+1}: creative_id={creative_id}, ad_id={ad_id}")
                                 created_count += 1
+                                existing_creative_ids.add(str(creative_id))
                                 # Verify the ad is actually active
                                 try:
                                     ads = client.list_ads_in_adset(adset_id)
                                     active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
                                     active_count = len(active_ads)
-                                except Exception:
+                                    logger.info(f"Verified active ads count: {active_count}")
+                                except Exception as e:
+                                    logger.warning(f"Failed to verify active ads: {e}")
                                     active_count += 1  # Assume it's active if we can't check
                             elif not success:
                                 if creative_id:
+                                    logger.warning(f"⚠️ Creative #{i+1} created but ad failed: creative_id={creative_id}, ad_id={ad_id}")
                                     failed_count += 1
-                                    failed_reasons.append(f"Attempt #{attempt_count}, Creative #{i+1}: Duplicate creative ID")
+                                    failed_reasons.append(f"Attempt #{attempt_count}, Creative #{i+1}: Duplicate creative ID or ad creation failed")
                                 else:
+                                    logger.error(f"❌ Failed to create creative #{i+1}: creative_id={creative_id}, ad_id={ad_id}, success={success}")
                                     failed_count += 1
                                     failed_reasons.append(f"Attempt #{attempt_count}, Creative #{i+1}: Failed to create")
                     
