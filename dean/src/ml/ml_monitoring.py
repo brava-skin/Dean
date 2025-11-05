@@ -269,23 +269,38 @@ class MLDashboard:
     def _get_model_metrics(self, since: str) -> Dict[str, Any]:
         """Get model training metrics."""
         try:
-            # FIX: accuracy_score doesn't exist - it's in performance_metrics JSONB
-            response = self.client.table('ml_models').select(
-                'id, performance_metrics, trained_at'
-            ).gte('trained_at', since).execute()
+            # Try to get model metrics - performance_metrics may not exist in schema
+            try:
+                response = self.client.table('ml_models').select(
+                    'id, trained_at'
+                ).gte('trained_at', since).execute()
+            except Exception as e:
+                # If column doesn't exist, try without it
+                self.logger.warning(f"Could not query performance_metrics column: {e}")
+                response = self.client.table('ml_models').select(
+                    'id, trained_at'
+                ).gte('trained_at', since).execute()
             
             if not response.data:
                 return {'avg_accuracy': 0.0, 'count': 0}
             
-            # Extract test_r2 from performance_metrics as a proxy for accuracy
+            # Extract accuracy from model data if available
+            # Note: performance_metrics column may not exist in schema
             accuracies = []
             for m in response.data:
-                perf_metrics = m.get('performance_metrics', {})
-                if isinstance(perf_metrics, dict):
-                    # Use test_r2 or cv_score as accuracy proxy
-                    accuracy = perf_metrics.get('test_r2') or perf_metrics.get('cv_score', 0)
-                    if accuracy and not (np.isnan(accuracy) or np.isinf(accuracy)):
-                        accuracies.append(float(accuracy))
+                # Try to get performance_metrics if column exists
+                try:
+                    perf_response = self.client.table('ml_models').select('performance_metrics').eq('id', m['id']).execute()
+                    if perf_response.data and perf_response.data[0].get('performance_metrics'):
+                        perf_metrics = perf_response.data[0]['performance_metrics']
+                        if isinstance(perf_metrics, dict):
+                            # Use test_r2 or cv_score as accuracy proxy
+                            accuracy = perf_metrics.get('test_r2') or perf_metrics.get('cv_score', 0)
+                            if accuracy and not (np.isnan(accuracy) or np.isinf(accuracy)):
+                                accuracies.append(float(accuracy))
+                except Exception:
+                    # Column doesn't exist or is not accessible, skip
+                    pass
             
             avg_accuracy = np.mean(accuracies) if accuracies else 0.0
             # Ensure accuracy is never negative (R2 can be negative for poor models)
