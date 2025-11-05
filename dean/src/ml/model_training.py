@@ -16,6 +16,8 @@ import joblib
 logger = logging.getLogger(__name__)
 
 
+from dataclasses import dataclass
+
 @dataclass
 class ModelVersion:
     """Model version information."""
