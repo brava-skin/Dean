@@ -1336,13 +1336,22 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                             "description": "",
                         }
             
-            # Final fallback
+            # Final fallback - ensure we always return a valid dict
             import random
-            return {
-                "primary_text": random.choice(PRIMARY_TEXT_OPTIONS),
-                "headline": random.choice(HEADLINE_OPTIONS),
-                "description": "",
-            }
+            try:
+                return {
+                    "primary_text": random.choice(PRIMARY_TEXT_OPTIONS) if PRIMARY_TEXT_OPTIONS else "Precision skincare designed to elevate daily standards.",
+                    "headline": random.choice(HEADLINE_OPTIONS) if HEADLINE_OPTIONS else "For men who value discipline.",
+                    "description": "",
+                }
+            except Exception as e:
+                logger.warning(f"Error in final ad copy fallback: {e}")
+                # Ultimate fallback - always return valid dict
+                return {
+                    "headline": "For men who value discipline.",
+                    "primary_text": "Precision skincare designed to elevate daily standards.",
+                    "description": ""
+                }
             
         except Exception as e:
             logger.error(f"Error generating ad copy: {e}")
