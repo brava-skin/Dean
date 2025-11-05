@@ -366,6 +366,14 @@ class ImageCreativeGenerator:
                 notify("❌ Failed to download generated image")
                 return None
             
+            # Step 4.5: Get scenario description from stored value (set during prompt generation)
+            scenario_description = None
+            if hasattr(self, '_last_scenario_description'):
+                scenario_description = self._last_scenario_description
+            if not scenario_description:
+                # Fallback if scenario wasn't generated
+                scenario_description = "Premium men's lifestyle portrait, sophisticated, calm confidence, editorial style"
+            
             # Step 5: Generate calm confidence ad copy (needed for text overlay context)
             ad_copy = self._generate_ad_copy(product_info, ml_insights, scenario_description)
             
@@ -420,11 +428,7 @@ class ImageCreativeGenerator:
                     logger.warning(f"Failed to upload creative to Supabase Storage: {e}")
                     # Continue even if upload fails
             
-            # Get scenario description for ML tracking
-            scenario_description = None
-            if hasattr(self, '_last_scenario_description'):
-                scenario_description = self._last_scenario_description
-            
+            # scenario_description is already set above (line 4.5), use it for result
             result = {
                 "image_path": final_image_path,
                 "original_image_path": image_path,
@@ -793,19 +797,22 @@ Now generate the scenario following ALL requirements above."""
                 self.scenario_bank.append(scenario)
                 
                 return scenario
-            
-            # Fallback
-            import random
-            fallback_scenarios = [
-                "A close-up portrait of a man laughing naturally, genuine expression, cinematic lighting, diverse model",
-                "A man in a luxury setting with blurred background of people in rush hour, cinematic composition, fashion editorial style",
-                "A man sitting in a vintage car wearing a bold colored suit, fashion editorial style, sophisticated environment",
-                "A man lying on grass in a premium fashion outfit, natural lighting, relaxed pose, luxury aesthetic",
-            ]
-            return random.choice(fallback_scenarios)
+            else:
+                # If no output text, return fallback
+                logger.warning("Failed to extract scenario from ChatGPT response, using fallback")
+                import random
+                fallback_scenarios = [
+                    "A close-up portrait of a man laughing naturally, genuine expression, cinematic lighting, diverse model",
+                    "A man in a luxury setting with blurred background of people in rush hour, cinematic composition, fashion editorial style",
+                    "A man sitting in a vintage car wearing a bold colored suit, fashion editorial style, sophisticated environment",
+                    "A man lying on grass in a premium fashion outfit, natural lighting, relaxed pose, luxury aesthetic",
+                ]
+                return random.choice(fallback_scenarios)
             
         except Exception as e:
             logger.warning(f"Failed to generate diverse scenario with ChatGPT: {e}")
+            import traceback
+            logger.debug(f"Scenario generation error traceback: {traceback.format_exc()}")
             # Fallback
             import random
             fallback_scenarios = [
