@@ -252,8 +252,8 @@ def ensure_asc_plus_campaign(
     """
     try:
         # Check if campaign already exists
-        campaign_id = cfg(settings, ("ids", "asc_plus_campaign_id")) or ""
-        adset_id = cfg(settings, ("ids", "asc_plus_adset_id")) or ""
+        campaign_id = cfg(settings, "ids.asc_plus_campaign_id") or ""
+        adset_id = cfg(settings, "ids.asc_plus_adset_id") or ""
         
         if campaign_id and adset_id:
             # Verify they still exist
@@ -279,8 +279,8 @@ def ensure_asc_plus_campaign(
             return None, None
         
         # Create ASC+ adset with Advantage+ placements
-        asc_config = cfg(settings, ("asc_plus",)) or {}
-        daily_budget = cfg_or_env_f(asc_config, ("daily_budget_eur",), "ASC_PLUS_BUDGET", 50.0)
+        asc_config = cfg(settings, "asc_plus") or {}
+        daily_budget = cfg_or_env_f(asc_config, "daily_budget_eur", "ASC_PLUS_BUDGET", 50.0)
         
         # Validate budget
         if daily_budget < ASC_PLUS_BUDGET_MIN:
@@ -291,9 +291,9 @@ def ensure_asc_plus_campaign(
             daily_budget = ASC_PLUS_BUDGET_MAX
         
         # Verify budget matches target active ads
-        target_ads = cfg(settings, ("asc_plus", "target_active_ads")) or 5
+        target_ads = cfg(settings, "asc_plus.target_active_ads") or 5
         budget_per_creative = daily_budget / target_ads if target_ads > 0 else daily_budget
-        min_budget_per_creative = cfg_or_env_f(asc_config, ("min_budget_per_creative_eur",), None, ASC_PLUS_MIN_BUDGET_PER_CREATIVE)
+        min_budget_per_creative = cfg_or_env_f(asc_config, "min_budget_per_creative_eur", None, ASC_PLUS_MIN_BUDGET_PER_CREATIVE)
         
         if budget_per_creative < min_budget_per_creative:
             notify(f"⚠️ Budget per creative (€{budget_per_creative:.2f}) below minimum (€{min_budget_per_creative:.2f})")
@@ -408,7 +408,7 @@ def run_asc_plus_tick(
         active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
         active_count = len(active_ads)
         
-        target_count = cfg(settings, ("asc_plus", "target_active_ads")) or 5
+        target_count = cfg(settings, "asc_plus.target_active_ads") or 5
         
         # Get insights for current ads (with caching)
         from infrastructure.caching import cache_manager
@@ -424,7 +424,7 @@ def run_asc_plus_tick(
             cache_manager.set(cache_key, insights, ttl_seconds=3600, namespace="insights")
         
         # Process ads for kill decisions
-        asc_rules = cfg(rules, ("asc_plus",)) or {}
+        asc_rules = cfg(rules, "asc_plus") or {}
         kill_rules = asc_rules.get("kill", [])
         
         killed_count = 0
@@ -601,7 +601,7 @@ def run_asc_plus_tick(
                     advanced_ml = None
             
             # Load product info from settings
-            product_config = cfg(settings, ("asc_plus", "product")) or {}
+            product_config = cfg(settings, "asc_plus.product") or {}
             product_info = {
                 "name": product_config.get("name", "Brava Product"),
                 "description": product_config.get("description", "Luxury product for men"),
@@ -792,7 +792,7 @@ def run_asc_plus_tick(
                         
                         if len(performance_data) >= 3:
                             budget_engine = create_budget_scaling_engine()
-                            current_budget = cfg_or_env_f(cfg(settings, ("asc_plus",)) or {}, ("daily_budget_eur",), "ASC_PLUS_BUDGET", 50.0)
+                            current_budget = cfg_or_env_f(cfg(settings, "asc_plus") or {}, "daily_budget_eur", "ASC_PLUS_BUDGET", 50.0)
                             
                             decision = budget_engine.get_budget_recommendation(
                                 campaign_id=campaign_id,

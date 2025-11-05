@@ -2335,7 +2335,7 @@ def main() -> None:
         try:
             append_digest(
                 {
-                    "ts": datetime.utcnow().isoformat(),
+                    "ts": datetime.now(timezone.utc).isoformat(),
                     "profile": profile,
                     "dry_run": client.dry_run,
                     "simulate": shadow_mode,
