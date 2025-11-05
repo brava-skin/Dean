@@ -154,15 +154,32 @@ def _create_creative_and_ad(
         
         # Use Supabase Storage URL if available, otherwise fallback to image_path
         supabase_storage_url = creative_data.get("supabase_storage_url")
+        image_path = creative_data.get("image_path")
+        
+        # Ensure we have either supabase_storage_url or image_path
+        if not supabase_storage_url and not image_path:
+            logger.error("Creative data must have either supabase_storage_url or image_path")
+            return None, None, False
+        
+        # Ensure ad_copy is a dict (not None)
+        ad_copy_dict = creative_data.get("ad_copy") or {}
+        if not isinstance(ad_copy_dict, dict):
+            ad_copy_dict = {}
+        
+        # Validate page_id
+        page_id = os.getenv("FB_PAGE_ID")
+        if not page_id:
+            logger.error("FB_PAGE_ID environment variable is required")
+            return None, None, False
         
         creative = client.create_image_creative(
-            page_id=os.getenv("FB_PAGE_ID"),
+            page_id=page_id,
             name=creative_name,
             supabase_storage_url=supabase_storage_url,  # Use Supabase Storage URL
-            image_path=creative_data.get("image_path") if not supabase_storage_url else None,
-            primary_text=creative_data.get("ad_copy", {}).get("primary_text", ""),
-            headline=creative_data.get("ad_copy", {}).get("headline", ""),
-            description=creative_data.get("ad_copy", {}).get("description", ""),
+            image_path=image_path if not supabase_storage_url else None,
+            primary_text=ad_copy_dict.get("primary_text", ""),
+            headline=ad_copy_dict.get("headline", ""),
+            description=ad_copy_dict.get("description", ""),
             creative_id=storage_creative_id,  # Pass storage creative_id for tracking
         )
         
@@ -619,6 +636,7 @@ def run_asc_plus_tick(
             failed_reasons = []
             max_attempts = needed_count * 3  # Allow up to 3x attempts in case of failures
             attempt_count = 0
+            existing_creative_ids = set()  # Track created creative IDs to prevent duplicates
             
             # Use advanced ML pipeline if available
             if advanced_ml and advanced_ml.creative_pipeline:

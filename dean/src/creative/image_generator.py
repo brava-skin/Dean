@@ -377,6 +377,15 @@ class ImageCreativeGenerator:
             # Step 5: Generate calm confidence ad copy (needed for text overlay context)
             ad_copy = self._generate_ad_copy(product_info, ml_insights, scenario_description)
             
+            # Ensure ad_copy is always a dict (never None)
+            if not ad_copy or not isinstance(ad_copy, dict):
+                logger.warning("ad_copy generation returned invalid value, using fallback")
+                ad_copy = {
+                    "headline": "For men who value discipline.",
+                    "primary_text": "Precision skincare designed to elevate daily standards.",
+                    "description": ""
+                }
+            
             # Step 6: Generate intelligent text overlay (uses ad copy and scenario for context)
             overlay_text = self._select_creative_text(
                 ml_insights=ml_insights,
