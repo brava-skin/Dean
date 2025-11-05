@@ -802,10 +802,20 @@ def run_asc_plus_tick(
                         failed_count += 1
                         failed_reasons.append(f"Creative #{i+1}: {str(e)[:50]}")
             
+            # Final check of active count
+            ads = client.list_ads_in_adset(adset_id)
+            active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
+            final_active_count = len(active_ads)
+            
             if created_count > 0:
-                notify(f"✅ Created {created_count} new creatives for ASC+ campaign")
+                notify(f"✅ Created {created_count} new creatives for ASC+ campaign (now {final_active_count}/{target_count} active)")
             if failed_count > 0:
                 notify(f"⚠️ Failed to create {failed_count} creatives. Reasons: {', '.join(failed_reasons[:3])}")
+            
+            if final_active_count < target_count:
+                notify(f"⚠️ Still need {target_count - final_active_count} more active creatives (currently {final_active_count}/{target_count})")
+            elif final_active_count >= target_count:
+                notify(f"✅ Target reached: {final_active_count} active creatives")
             
             # Cleanup unused and killed creatives from storage
             try:
