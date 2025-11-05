@@ -117,7 +117,9 @@ class RedisCache:
     
     def _make_picklable(self, value: Any) -> Any:
         """Convert non-picklable objects to picklable ones."""
-        if isinstance(value, (dict.values, dict_keys)):
+        # Check for dict_values and dict_keys types
+        value_type = type(value)
+        if value_type is type({}.values()) or value_type is type({}.keys()):
             return list(value)
         elif isinstance(value, dict):
             return {k: self._make_picklable(v) for k, v in value.items()}
