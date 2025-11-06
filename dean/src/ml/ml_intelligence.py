@@ -538,6 +538,18 @@ class SupabaseMLClient:
                 confidence_score = random.uniform(0.5, 0.8)
                 impact_score = random.uniform(0.4, 0.7)
             
+            # Use optimizer to calculate correct scores
+            try:
+                from infrastructure.data_optimizer import LearningEventsOptimizer
+                optimizer = LearningEventsOptimizer(self.client)
+                # Recalculate scores using optimizer logic
+                confidence_score = optimizer.calculate_confidence_score(event.event_type, learning_data)
+                impact_score = optimizer.calculate_impact_score(event.event_type, event_data)
+            except ImportError:
+                pass  # Optimizer not available, use calculated values
+            except Exception as opt_error:
+                logger.debug(f"Failed to optimize learning event scores: {opt_error}")
+            
             # Generate stage progression if not provided
             # For ASC+ only system, default to asc_plus
             if not from_stage:

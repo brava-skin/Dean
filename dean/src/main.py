@@ -879,10 +879,39 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                 # Validate all timestamps in creative intelligence data
                 creative_data = validate_all_timestamps(creative_data)
                 
+                # Ensure performance metrics are calculated if missing
+                if not creative_data.get('avg_ctr') or not creative_data.get('avg_cpa') or not creative_data.get('avg_roas'):
+                    try:
+                        from infrastructure.data_optimizer import CreativeIntelligenceOptimizer
+                        optimizer = CreativeIntelligenceOptimizer(supabase_client)
+                        metrics = optimizer.calculate_performance_metrics(
+                            creative_id,
+                            ad_data.get('ad_id', ''),
+                        )
+                        # Update with calculated metrics
+                        creative_data['avg_ctr'] = metrics.get('avg_ctr', creative_data.get('avg_ctr', 0.0))
+                        creative_data['avg_cpa'] = metrics.get('avg_cpa', creative_data.get('avg_cpa', 0.0))
+                        creative_data['avg_roas'] = metrics.get('avg_roas', creative_data.get('avg_roas', 0.0))
+                        creative_data['performance_score'] = metrics.get('performance_score', creative_data.get('performance_score', 0.0))
+                        creative_data['fatigue_index'] = metrics.get('fatigue_index', creative_data.get('fatigue_index', 0.0))
+                    except ImportError:
+                        pass  # Optimizer not available
+                    except Exception as e:
+                        logger.debug(f"Failed to calculate performance metrics: {e}")
+                
                 # Insert creative intelligence data with automatic validation
                 result = validated_client.insert('creative_intelligence', creative_data)
                 if result:
                     logger.info(f"Creative intelligence validated and inserted: {creative_id} for ad {ad_data.get('ad_id')}")
+                    
+                    # Schedule performance metrics update (async, non-blocking)
+                    try:
+                        from infrastructure.data_optimizer import CreativeIntelligenceOptimizer
+                        optimizer = CreativeIntelligenceOptimizer(supabase_client)
+                        # Update in background (will calculate from performance_metrics)
+                        optimizer.update_creative_performance(creative_id, ad_data.get('ad_id', ''))
+                    except Exception:
+                        pass  # Non-critical, continue
         except (KeyError, ValueError, TypeError) as e:
             logger.error(f"Failed to store creative intelligence for {ad_data.get('ad_id')}: {e}", exc_info=True)
         
@@ -2539,6 +2568,17 @@ def main() -> None:
             
             # Update previous counts for next tick
             table_monitor.update_previous_counts(table_insights)
+            
+            # Optimize ML tables data - ensure all data is correct
+            try:
+                from infrastructure.data_optimizer import create_ml_data_optimizer
+                optimizer = create_ml_data_optimizer(supabase_client)
+                optimization_results = optimizer.optimize_all_tables(stage='asc_plus', force_recalculate=False)
+                logger.info(f"✅ ML tables optimized: {optimization_results}")
+            except ImportError:
+                pass  # Optimizer not available
+            except Exception as opt_error:
+                logger.debug(f"ML table optimization failed (non-critical): {opt_error}")
             
         except Exception as e:
             notify(f"⚠️ Table monitoring failed: {e}")

@@ -155,6 +155,15 @@ class CreativeStorageManager:
             }
             
             try:
+                # Use data optimizer to ensure complete metadata
+                try:
+                    from infrastructure.data_optimizer import CreativeStorageOptimizer
+                    optimizer = CreativeStorageOptimizer(self.client)
+                    complete_metadata = optimizer.ensure_complete_metadata(creative_id, enhanced_metadata)
+                    storage_data["metadata"] = complete_metadata
+                except ImportError:
+                    pass  # Optimizer not available, use existing metadata
+                
                 self.client.table("creative_storage").upsert(
                     storage_data,
                     on_conflict="creative_id"

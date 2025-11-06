@@ -319,10 +319,37 @@ def _create_creative_and_ad(
                     if creative_data.get("text_overlay"):
                         creative_intel_data["text_overlay_content"] = creative_data.get("text_overlay")
                     
+                    # Ensure performance metrics are calculated
+                    try:
+                        from infrastructure.data_optimizer import CreativeIntelligenceOptimizer
+                        optimizer = CreativeIntelligenceOptimizer(supabase_client)
+                        metrics = optimizer.calculate_performance_metrics(
+                            str(meta_creative_id),
+                            ad_id,
+                        )
+                        # Add calculated metrics to creative_intel_data
+                        creative_intel_data['avg_ctr'] = metrics.get('avg_ctr', 0.0)
+                        creative_intel_data['avg_cpa'] = metrics.get('avg_cpa', 0.0)
+                        creative_intel_data['avg_roas'] = metrics.get('avg_roas', 0.0)
+                        creative_intel_data['performance_score'] = metrics.get('performance_score', 0.0)
+                        creative_intel_data['fatigue_index'] = metrics.get('fatigue_index', 0.0)
+                    except ImportError:
+                        pass  # Optimizer not available
+                    except Exception as opt_error:
+                        logger.debug(f"Failed to calculate metrics: {opt_error}")
+                    
                     supabase_client.table("creative_intelligence").upsert(
                         creative_intel_data,
                         on_conflict="creative_id,ad_id"
                     ).execute()
+                    
+                    # Schedule async update for accurate metrics
+                    try:
+                        from infrastructure.data_optimizer import CreativeIntelligenceOptimizer
+                        optimizer = CreativeIntelligenceOptimizer(supabase_client)
+                        optimizer.update_creative_performance(str(meta_creative_id), ad_id)
+                    except Exception:
+                        pass  # Non-critical
             except Exception as e:
                 logger.warning(f"Failed to update creative_intelligence with storage URL: {e}")
             
@@ -1247,6 +1274,25 @@ def run_asc_plus_tick(
                 notify(f"⚠️ Still need {target_count - final_active_count} more active creatives (currently {final_active_count}/{target_count})")
             elif final_active_count >= target_count:
                 notify(f"✅ Target reached: {final_active_count} active creatives")
+            
+            # Optimize ML tables data - ensure all performance metrics are correct
+            try:
+                from infrastructure.data_optimizer import create_ml_data_optimizer
+                from infrastructure.supabase_storage import get_validated_supabase_client
+                
+                supabase_client = get_validated_supabase_client()
+                if supabase_client:
+                    optimizer = create_ml_data_optimizer(supabase_client)
+                    # Run optimization (non-blocking, will update metrics in background)
+                    try:
+                        optimizer.optimize_all_tables(stage='asc_plus', force_recalculate=False)
+                        logger.info("✅ ML tables optimized")
+                    except Exception as opt_error:
+                        logger.debug(f"Table optimization error (non-critical): {opt_error}")
+            except ImportError:
+                pass  # Optimizer not available
+            except Exception as e:
+                logger.debug(f"ML table optimization failed (non-critical): {e}")
             
             # Cleanup unused and killed creatives from storage
             try:
