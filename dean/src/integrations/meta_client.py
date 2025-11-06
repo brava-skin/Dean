@@ -978,9 +978,9 @@ class MetaClient:
     def count_active_ads_in_adset(self, adset_id: str) -> int:
         """Count active ads in an adset using multiple methods for accuracy."""
         try:
-            # Method 1: Direct API call
+            # Method 1: Direct API call - count only ACTIVE ads
             ads = self.list_ads_in_adset(adset_id)
-            active_count = sum(1 for a in ads if str(a.get("status", "")).upper() in ("ACTIVE", "PAUSED"))
+            active_count = sum(1 for a in ads if str(a.get("status", "")).upper() == "ACTIVE")
             
             # Method 2: Use insights API to verify (ads with recent data are definitely active)
             try:
