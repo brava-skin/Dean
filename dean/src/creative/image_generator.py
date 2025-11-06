@@ -665,7 +665,10 @@ CHAIN-OF-THOUGHT PROCESS - Follow this reasoning:
 
 1. DIVERSITY ANALYSIS:
    - Current diversity focus: {diversity_focus}
-   - Ensure representation: different ethnicities, facial hair styles (clean-shaven, stubble, beard, mustache, goatee), hair types (short, long, curly, straight, wavy, textured, afro, braided), ages (20s, 30s, 40s, 50s), body types (athletic, lean, average, robust), lifestyles (athlete, artist, businessman, creative professional, entrepreneur)
+   - CRITICAL: Target American men ONLY (Caucasian, African American, Hispanic, Asian American, Native American, mixed heritage)
+   - NEVER include: Indian/South Asian men, turbans, traditional ethnic clothing
+   - Ensure representation: different American ethnicities, facial hair styles (clean-shaven, stubble, beard, mustache, goatee), hair types (short, long, curly, straight, wavy, textured, afro, braided), ages (20s, 30s, 40s, 50s), body types (athletic, lean, average, robust), lifestyles (athlete, artist, creative professional, entrepreneur, student)
+   - AVOID: Formal suits, business attire, blazers, ties - prefer casual luxury, streetwear, athleisure, minimalist fashion
 
 2. SETTING SELECTION:
    - Choose dramatically different from recent scenarios
