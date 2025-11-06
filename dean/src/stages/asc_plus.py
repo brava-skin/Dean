@@ -150,7 +150,33 @@ def _create_creative_and_ad(
             storage_creative_id = f"creative_{int(time.time())}"
     
     try:
-        creative_name = f"[ASC+] Creative {active_count + created_count + 1}"
+        # Create descriptive creative name for Ads Manager
+        # Include headline snippet and sequence for easy identification
+        ad_copy_dict = creative_data.get("ad_copy") or {}
+        if not isinstance(ad_copy_dict, dict):
+            ad_copy_dict = {}
+        
+        headline = ad_copy_dict.get("headline", "")
+        if headline:
+            # Extract first 2-3 words from headline (max 25 chars)
+            headline_words = headline.split()[:3]
+            headline_snippet = " ".join(headline_words)
+            if len(headline_snippet) > 25:
+                headline_snippet = headline_snippet[:22] + "..."
+            # Clean for filename safety
+            headline_snippet = headline_snippet.replace(":", "").replace("/", "").replace("\\", "").strip()
+        else:
+            headline_snippet = "Creative"
+        
+        # Sequence number
+        seq_num = active_count + created_count + 1
+        
+        # Build descriptive creative name: [ASC+] HeadlineSnippet - #N
+        creative_name = f"[ASC+] {headline_snippet} - #{seq_num}"
+        
+        # Ensure it's not too long (keep under 80 chars for creatives)
+        if len(creative_name) > 80:
+            creative_name = f"[ASC+] {headline_snippet[:15]} - #{seq_num}"
         
         # Use Supabase Storage URL if available, otherwise fallback to image_path
         supabase_storage_url = creative_data.get("supabase_storage_url")
@@ -219,8 +245,34 @@ def _create_creative_and_ad(
             logger.debug(f"Skipping duplicate creative: {meta_creative_id}")
             return str(meta_creative_id), None, False
         
-        # Create ad
-        ad_name = f"[ASC+] Ad {active_count + created_count + 1}"
+        # Create descriptive ad name for Ads Manager
+        # Include headline snippet, date, and sequence for easy identification
+        headline = ad_copy_dict.get("headline", "")
+        if headline:
+            # Extract first 3-4 words from headline (max 30 chars)
+            headline_words = headline.split()[:4]
+            headline_snippet = " ".join(headline_words)
+            if len(headline_snippet) > 30:
+                headline_snippet = headline_snippet[:27] + "..."
+            # Clean for filename safety
+            headline_snippet = headline_snippet.replace(":", "").replace("/", "").replace("\\", "").strip()
+        else:
+            headline_snippet = "Creative"
+        
+        # Get date in YYMMDD format for easy sorting
+        from datetime import datetime
+        date_str = datetime.now().strftime("%y%m%d")
+        
+        # Sequence number
+        seq_num = active_count + created_count + 1
+        
+        # Build descriptive ad name: [ASC+] HeadlineSnippet - YYMMDD - #N
+        ad_name = f"[ASC+] {headline_snippet} - {date_str} - #{seq_num}"
+        
+        # Ensure it's not too long (Meta has limits, keep under 100 chars)
+        if len(ad_name) > 100:
+            ad_name = f"[ASC+] {headline_snippet[:20]} - {date_str} - #{seq_num}"
+        
         logger.info(f"Creating ad with name='{ad_name}', adset_id='{adset_id}', creative_id='{meta_creative_id}'")
         try:
             ad = client.create_ad(
