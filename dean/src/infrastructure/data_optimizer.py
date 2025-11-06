@@ -365,15 +365,19 @@ class CreativeStorageOptimizer:
     def fix_storage_data(self, creative_id: str) -> bool:
         """Fix any issues in creative_storage data."""
         try:
-            is_valid, issues = self.validate_storage_data(creative_id)
+            # Always ensure metadata is complete FIRST (this fixes most issues)
+            try:
+                self.ensure_complete_metadata(creative_id)
+            except Exception as e:
+                logger.debug(f"Error ensuring metadata for {creative_id}: {e}")
             
-            # Always ensure metadata is complete (even if validation passes)
-            self.ensure_complete_metadata(creative_id)
+            # Validate after fixing
+            is_valid, issues = self.validate_storage_data(creative_id)
             
             if is_valid:
                 return True
             
-            # Fix status issues
+            # Fix status issues if any remain
             response = self.client.table('creative_storage').select('status').eq(
                 'creative_id', creative_id
             ).execute()
@@ -382,12 +386,21 @@ class CreativeStorageOptimizer:
                 status = response.data[0].get('status')
                 if status not in ['queue', 'active', 'killed']:
                     # Set to queue if invalid
-                    self.client.table('creative_storage').update({
-                        'status': 'queue',
-                    }).eq('creative_id', creative_id).execute()
+                    try:
+                        self.client.table('creative_storage').update({
+                            'status': 'queue',
+                        }).eq('creative_id', creative_id).execute()
+                    except Exception as e:
+                        logger.debug(f"Error fixing status for {creative_id}: {e}")
             
-            logger.debug(f"✅ Fixed storage data for {creative_id}")
-            return True
+            # Check if we fixed the issues
+            is_valid_after, remaining_issues = self.validate_storage_data(creative_id)
+            if is_valid_after:
+                logger.debug(f"✅ Fixed storage data for {creative_id}")
+                return True
+            else:
+                logger.debug(f"⚠️ Some issues remain for {creative_id}: {remaining_issues[:2]}")
+                return len(remaining_issues) < len(issues)  # Return True if we fixed at least some issues
         except Exception as e:
             logger.debug(f"Error fixing storage data for {creative_id}: {e}")
             return False
@@ -612,21 +625,26 @@ class MLDataOptimizer:
             fixed_count = 0
             # Auto-fix missing metadata fields
             # Issue format: "creative_id: Missing metadata field: field_name"
-            fixed_creatives = set()  # Track which creatives we've already fixed
+            creatives_to_fix = set()  # Track which creatives need fixing
             for issue in storage_issues:
-                if 'Missing metadata field' in issue:
+                if 'Missing metadata field' in issue or 'Missing required field' in issue:
                     # Extract creative_id from issue string (format: "creative_id: Missing metadata field: field_name")
                     parts = issue.split(':')
                     if len(parts) >= 1:
                         creative_id = parts[0].strip()
                         # Validate creative_id format (should start with "creative_")
-                        if creative_id.startswith('creative_') and creative_id not in fixed_creatives:
-                            try:
-                                if self.creative_storage_optimizer.fix_storage_data(creative_id):
-                                    fixed_creatives.add(creative_id)
-                                    fixed_count += 1
-                            except Exception as e:
-                                logger.debug(f"Failed to fix creative {creative_id}: {e}")
+                        if creative_id.startswith('creative_'):
+                            creatives_to_fix.add(creative_id)
+            
+            # Fix all creatives that need fixing (fix once per creative, but ensure all fields are fixed)
+            for creative_id in creatives_to_fix:
+                try:
+                    # fix_storage_data will call ensure_complete_metadata which fixes ALL missing fields at once
+                    if self.creative_storage_optimizer.fix_storage_data(creative_id):
+                        fixed_count += 1
+                        logger.debug(f"✅ Fixed all metadata fields for {creative_id}")
+                except Exception as e:
+                    logger.debug(f"Failed to fix creative {creative_id}: {e}")
             results['creative_storage'] = {
                 'validated': len(storage_issues) == 0,
                 'issues_found': len(storage_issues),
