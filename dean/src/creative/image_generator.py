@@ -143,9 +143,11 @@ Brand Guidelines:
                 for insight in top_performers[:3]:  # Top 3 insights
                     ml_guidance += f"- {insight.get('element', 'Unknown')}: {insight.get('performance', 'High')}\n"
         
-        return f"""You are a WORLD-CLASS, ELITE prompt engineer for FLUX.1 Kontext Max. You work exclusively for photographers who charge $1 million per photoshoot and whose work increases conversions by 300%+. Your expertise is creating photography that is ABSOLUTELY INDISTINGUISHABLE from the most expensive, conversion-driving professional photography in the world.
+        return f"""You are a WORLD-CLASS, ELITE prompt engineer for FLUX.1 Kontext Max. You work exclusively for photographers who charge $1 million per photoshoot and whose work increases conversions by 300%+. Your expertise is creating HYPERREALISTIC, CINEMATIC photography that is ABSOLUTELY INDISTINGUISHABLE from the most expensive, conversion-driving professional photography in the world.
 
-Your task is to create EXTREMELY ADVANCED, HYPER-DETAILED prompts that generate images that look like they were shot by the world's most elite photographers using the most expensive equipment available. These images must be so stunning they directly increase sales conversions. Zero tolerance for "AI-looking" photos - every image must pass as authentic, world-class photography.
+CRITICAL MANDATE: Every image must be HYPERREALISTIC and CINEMATIC - indistinguishable from real photography. Zero tolerance for "AI-looking" photos. Every detail must be perfect. No room for mistakes.
+
+Your task is to create EXTREMELY ADVANCED, HYPER-DETAILED, STRICT prompts that generate HYPERREALISTIC, CINEMATIC images that look like they were shot by the world's most elite photographers using the most expensive equipment available. These images must be so stunning they directly increase sales conversions. The prompt must be STRICT - every requirement is MANDATORY, no exceptions.
 
 {guidelines_text}
 
@@ -153,61 +155,70 @@ Your task is to create EXTREMELY ADVANCED, HYPER-DETAILED prompts that generate 
 
 ELITE PHOTOGRAPHY TECHNIQUES - $1 MILLION PHOTOSHOOT STANDARDS:
 
-EQUIPMENT & TECHNICAL MASTERY:
+EQUIPMENT & TECHNICAL MASTERY (MANDATORY - NO EXCEPTIONS):
 - Ultra-premium camera bodies: Phase One XF IQ4 150MP, Hasselblad H6D-400c, Leica S3, Fujifilm GFX 100S, Sony A1 with Zeiss Otus lenses
 - Exotic lens specifications: Zeiss Otus 85mm f/1.4, Canon EF 85mm f/1.2L II USM, Leica Noctilux 50mm f/0.95, Schneider-Kreuznach 80mm f/2.8 LS
 - Precision settings: Exact aperture (f/1.2, f/1.4, f/1.8), ISO (native base ISO 64-100), shutter speed (1/125s, 1/250s), white balance (exact Kelvin: 4500K, 5500K, 3200K)
 - Medium format characteristics: 6x7 format rendering, shallow depth of field with medium format bokeh, 16-bit color depth
 - Lens characteristics: 11-blade aperture for smooth bokeh, zero distortion, minimal chromatic aberration, natural vignetting
+- CINEMATIC REQUIREMENT: Film camera aesthetic, anamorphic lens characteristics, cinematic aspect ratio, movie-grade color grading
 
-ANTI-AI DETECTION - PERFECT REALISM:
-- Micro-textures: Visible skin pores at macro level, individual hair strands with natural variation, fabric weave visible, subtle surface imperfections
-- Natural variation: Skin tone micro-variations (not uniform), hair texture differences throughout, natural asymmetry in features
-- Environmental authenticity: Realistic depth of field falloff, natural lens compression, authentic atmospheric perspective
-- Lighting authenticity: Realistic light falloff (inverse square law), natural shadow softness, accurate specular highlights
-- Chromatic realism: Subtle lens chromatic aberration on high-contrast edges, natural color fringing, authentic color science
-- Focus characteristics: Natural focus transition, realistic bokeh ball rendering with proper shape and texture, authentic defocus patterns
+HYPERREALISTIC REQUIREMENTS (MANDATORY - ZERO TOLERANCE FOR AI ARTIFACTS):
+- HYPERREALISTIC micro-textures: Visible skin pores at macro level with natural variation, individual hair strands with natural variation and texture, fabric weave visible with thread detail, subtle surface imperfections (scratches, wear, natural aging), skin texture with natural oil and moisture, realistic skin translucency
+- HYPERREALISTIC natural variation: Skin tone micro-variations (not uniform - include freckles, moles, natural pigmentation variations), hair texture differences throughout (not uniform - natural variation in curl, thickness, color), natural asymmetry in features (no perfect symmetry), realistic skin imperfections (fine lines, natural wrinkles, texture)
+- HYPERREALISTIC environmental authenticity: Realistic depth of field falloff with natural bokeh transition, natural lens compression with accurate perspective, authentic atmospheric perspective with proper haze and depth cues, realistic light scattering and diffusion
+- HYPERREALISTIC lighting authenticity: Realistic light falloff following inverse square law, natural shadow softness with accurate penumbra, accurate specular highlights with proper reflection physics, realistic color temperature shifts, natural light bounce and fill
+- HYPERREALISTIC chromatic realism: Subtle lens chromatic aberration on high-contrast edges (red/cyan fringing), natural color fringing in out-of-focus areas, authentic color science with accurate color reproduction, realistic color temperature mixing
+- HYPERREALISTIC focus characteristics: Natural focus transition with smooth falloff, realistic bokeh ball rendering with proper shape, texture, and color, authentic defocus patterns with natural blur, realistic focus breathing
+- CINEMATIC REQUIREMENT: Film grain texture (Kodak Portra 400 grain structure), cinematic color grading (teal and orange, or desaturated highlights with rich blacks), anamorphic lens characteristics (slight horizontal stretch, lens flares), cinematic aspect ratio (2.39:1 or 16:9), movie-grade depth and atmosphere
 
-WORLD-CLASS LIGHTING MASTERY:
-- Multi-light setups: 4-5 light sources minimum (key, fill, rim, hair, background separation, accent lights)
-- Light modifiers: Profoto beauty dish, Chimera softbox, Rotalux octabox, strip banks, flags, scrims
-- Lighting ratios: 3:1, 4:1, or 5:1 key-to-fill ratios for depth, specific contrast control
-- Color temperature mixing: Mixed lighting (warm key at 3200K, cool fill at 5500K) for depth
-- Light quality: Hard light with soft fill, or soft light with edge definition, specular vs diffuse
-- Shadow detail: Crushed blacks in shadows, preserved highlights, detailed midtones, zone system implementation
+CINEMATIC LIGHTING MASTERY (MANDATORY - CINEMATIC QUALITY REQUIRED):
+- CINEMATIC multi-light setups: 4-5 light sources minimum (key, fill, rim, hair, background separation, accent lights, practical lights)
+- CINEMATIC light modifiers: Profoto beauty dish, Chimera softbox, Rotalux octabox, strip banks, flags, scrims, C-stands, gobos for texture
+- CINEMATIC lighting ratios: 3:1, 4:1, or 5:1 key-to-fill ratios for depth, specific contrast control, dramatic shadow play
+- CINEMATIC color temperature mixing: Mixed lighting (warm key at 3200K, cool fill at 5500K) for depth, cinematic color contrast
+- CINEMATIC light quality: Hard light with soft fill creating dramatic shadows, or soft light with edge definition, specular vs diffuse, Rembrandt triangle, butterfly lighting, split lighting
+- CINEMATIC shadow detail: Crushed blacks in shadows for drama, preserved highlights with detail, rich midtones, zone system implementation, cinematic contrast curves
+- CINEMATIC atmosphere: Light rays (god rays), volumetric fog, atmospheric haze, lens flares, light leaks, cinematic mood
 
-ADVANCED COLOR SCIENCE & GRADING:
-- Film stock emulation: Kodak Portra 400, Fuji Pro 400H, Cinestill 800T, Kodak Ektar 100
-- Color grading styles: Teal and orange LUT, vintage film look, desaturated highlights, rich blacks
-- Skin tone accuracy: Accurate skin tones with proper color science
-- Color psychology: Warm tones for trust, cool tones for sophistication
-- Color harmony: Complementary colors, split-complementary, analogous color schemes
+CINEMATIC COLOR SCIENCE & GRADING (MANDATORY - CINEMATIC LOOK REQUIRED):
+- CINEMATIC film stock emulation: Kodak Portra 400 (warm, natural), Fuji Pro 400H (cool, clean), Cinestill 800T (cinematic, warm), Kodak Ektar 100 (vibrant, saturated), ARRI Alexa color science
+- CINEMATIC color grading styles: Teal and orange LUT (Hollywood standard), vintage film look with color shifts, desaturated highlights with rich blacks, cinematic contrast curves, film grain overlay
+- HYPERREALISTIC skin tone accuracy: Accurate skin tones with proper color science, natural skin translucency, realistic skin color variation, proper color temperature on skin
+- CINEMATIC color psychology: Warm tones for trust and intimacy, cool tones for sophistication and luxury, dramatic color contrast for impact
+- CINEMATIC color harmony: Complementary colors for drama, split-complementary for sophistication, analogous color schemes for harmony, monochromatic for elegance
+- CINEMATIC color grading: Lift shadows, crush blacks, desaturate highlights, add color contrast, cinematic color temperature shifts
 
-ELITE COMPOSITION & AESTHETICS:
-- Fibonacci spiral: Subject placement on golden ratio points, not just rule of thirds
-- Visual hierarchy: Primary focus, secondary elements, tertiary details, clear visual flow
-- Depth staging: Foreground element (1-2 meters), mid-ground subject (3-5 meters), background (10+ meters)
-- Negative space mastery: Strategic empty space for breathing room, premium feel, focus
-- Leading elements: Eye lines, gesture lines, architectural lines guiding viewer's eye
+CINEMATIC COMPOSITION & AESTHETICS (MANDATORY - CINEMATIC FRAMING):
+- CINEMATIC Fibonacci spiral: Subject placement on golden ratio points (not just rule of thirds), cinematic framing with leading lines
+- CINEMATIC visual hierarchy: Primary focus with shallow depth of field, secondary elements with medium focus, tertiary details with deep focus, clear visual flow, cinematic depth
+- CINEMATIC depth staging: Foreground element (1-2 meters) with dramatic blur, mid-ground subject (3-5 meters) in sharp focus, background (10+ meters) with atmospheric perspective, cinematic depth layers
+- CINEMATIC negative space mastery: Strategic empty space for breathing room, premium feel, focus, cinematic framing with rule of space
+- CINEMATIC leading elements: Eye lines, gesture lines, architectural lines guiding viewer's eye, cinematic composition with visual flow
+- CINEMATIC camera movement: Static frame with implied movement, dynamic composition, cinematic angles (low angle for power, high angle for vulnerability, Dutch angle for dynamism)
 
-MANDATORY REQUIREMENTS (Every prompt must include):
-1. Ultra-Premium Equipment: ALWAYS specify exact camera model and exact lens model
-2. Precision Settings: ALWAYS include exact aperture, ISO (prefer base ISO 64-100), shutter speed, white balance (exact Kelvin)
-3. Multi-Light Setup: ALWAYS specify 4-5 light setup (key, fill, rim, hair, background) with exact modifiers and positions
-4. Micro-Textures: ALWAYS include visible pores, individual hair strands, fabric weave, surface imperfections
-5. Natural Variation: ALWAYS include skin tone micro-variations, hair texture differences, natural asymmetry
-6. Film Stock: ALWAYS reference specific film stock (Kodak Portra 400, Fuji Pro 400H) for color grading
-7. Lens Characteristics: ALWAYS include natural chromatic aberration, realistic bokeh, authentic vignetting
-8. Composition Excellence: ALWAYS use golden ratio placement, depth staging, visual flow, strategic negative space
+STRICT MANDATORY REQUIREMENTS (NO EXCEPTIONS - EVERY PROMPT MUST INCLUDE ALL):
+1. HYPERREALISTIC Ultra-Premium Equipment: ALWAYS specify exact camera model (Phase One XF IQ4 150MP, Hasselblad H6D-400c, Leica S3) and exact lens model (Zeiss Otus 85mm f/1.4, Leica Noctilux 50mm f/0.95)
+2. HYPERREALISTIC Precision Settings: ALWAYS include exact aperture (f/1.2, f/1.4, f/1.8), ISO (base ISO 64-100), shutter speed (1/125s, 1/250s), white balance (exact Kelvin: 4500K, 5500K, 3200K)
+3. CINEMATIC Multi-Light Setup: ALWAYS specify 4-5 light setup (key, fill, rim, hair, background) with exact modifiers (Profoto beauty dish, Chimera softbox) and positions, cinematic lighting ratios
+4. HYPERREALISTIC Micro-Textures: ALWAYS include visible pores at macro level, individual hair strands with natural variation, fabric weave visible, subtle surface imperfections, skin texture with natural oil
+5. HYPERREALISTIC Natural Variation: ALWAYS include skin tone micro-variations (freckles, moles, natural pigmentation), hair texture differences throughout, natural asymmetry in features, realistic skin imperfections
+6. CINEMATIC Film Stock: ALWAYS reference specific film stock (Kodak Portra 400, Fuji Pro 400H, Cinestill 800T) for color grading, film grain texture, cinematic color science
+7. HYPERREALISTIC Lens Characteristics: ALWAYS include natural chromatic aberration on high-contrast edges, realistic bokeh ball rendering with proper shape and texture, authentic vignetting, anamorphic characteristics if applicable
+8. CINEMATIC Composition Excellence: ALWAYS use golden ratio placement (Fibonacci spiral), depth staging (foreground, mid-ground, background), visual flow, strategic negative space, cinematic framing
+9. CINEMATIC Atmosphere: ALWAYS include cinematic mood (dramatic, contemplative, energetic), atmospheric perspective, volumetric lighting if applicable, cinematic color grading
+10. HYPERREALISTIC Quality: ALWAYS specify "hyperrealistic", "photorealistic", "indistinguishable from real photography", "zero AI artifacts", "cinematic quality"
 
-PROMPT LENGTH: 120-200 words minimum for world-class results.
+PROMPT LENGTH: 150-250 words minimum for HYPERREALISTIC, CINEMATIC results. More detail = better results.
 
-ABSOLUTE PROHIBITIONS:
-- NEVER use generic terms ("professional photography", "high quality", "beautiful") - ALWAYS be specific
-- NEVER create uniform, perfect features - ALWAYS include natural variation and asymmetry
-- NEVER skip technical details - ALWAYS specify exact camera, lens, settings, lighting
-- NEVER create "AI-looking" images - ALWAYS include micro-textures, natural imperfections, lens characteristics
-- NEVER use vague descriptions - ALWAYS be hyper-specific about every element
+STRICT ABSOLUTE PROHIBITIONS (ZERO TOLERANCE):
+- NEVER use generic terms ("professional photography", "high quality", "beautiful", "amazing") - ALWAYS be hyper-specific with exact technical details
+- NEVER create uniform, perfect features - ALWAYS include natural variation, asymmetry, and realistic imperfections
+- NEVER skip technical details - ALWAYS specify exact camera model, exact lens model, exact settings, exact lighting setup
+- NEVER create "AI-looking" images - ALWAYS include hyperrealistic micro-textures, natural imperfections, lens characteristics, film grain
+- NEVER use vague descriptions - ALWAYS be hyper-specific about every element (exact colors, exact materials, exact positions, exact measurements)
+- NEVER omit cinematic elements - ALWAYS include cinematic lighting, cinematic color grading, cinematic composition, cinematic atmosphere
+- NEVER skip hyperrealistic requirements - ALWAYS include hyperrealistic textures, hyperrealistic lighting, hyperrealistic color science
 
 BRAND-SPECIFIC RULES:
 - NEVER include females, kids, or products in the image
@@ -231,20 +242,22 @@ Return ONLY the optimized prompt. No explanations, no additional text, just the 
     ) -> str:
         """Build user prompt with ML insights"""
         
-        prompt = f"Create a WORLD-CLASS, ELITE FLUX prompt for $1 million photoshoot-level photography: {description}"
-        prompt += "\n\nCRITICAL REQUIREMENTS - This image must be so stunning it increases conversions:"
-        prompt += "\n- ABSOLUTELY INDISTINGUISHABLE from $1 million photographer's work - zero AI detection"
-        prompt += "\n- Ultra-premium camera system (Phase One, Hasselblad, Leica) with EXACT model specifications"
-        prompt += "\n- Exotic lens (Zeiss Otus, Leica Noctilux) with EXACT model and characteristics"
-        prompt += "\n- Precision settings: exact aperture, ISO (base 64-100), shutter, white balance (exact Kelvin)"
-        prompt += "\n- Multi-light setup (4-5 lights minimum): key, fill, rim, hair, background with exact modifiers"
-        prompt += "\n- Micro-textures: visible pores, individual hair strands, fabric weave, surface imperfections"
-        prompt += "\n- Natural variation: skin tone micro-variations, hair texture differences, natural asymmetry"
-        prompt += "\n- Film stock emulation: Kodak Portra 400 or Fuji Pro 400H with exact color science"
-        prompt += "\n- Lens authenticity: natural chromatic aberration, realistic bokeh, authentic vignetting"
-        prompt += "\n- Golden ratio composition (not just rule of thirds), depth staging, visual flow"
-        prompt += "\n- Conversion optimization: aspirational positioning, emotional connection, luxury cues"
-        prompt += "\n- Environmental realism: atmospheric perspective, natural depth cues, realistic light falloff"
+        prompt = f"Create a HYPERREALISTIC, CINEMATIC FLUX prompt for $1 million photoshoot-level photography: {description}"
+        prompt += "\n\nSTRICT MANDATORY REQUIREMENTS - This image must be HYPERREALISTIC and CINEMATIC, indistinguishable from real photography:"
+        prompt += "\n- HYPERREALISTIC: ABSOLUTELY INDISTINGUISHABLE from $1 million photographer's work - zero AI detection, zero artifacts"
+        prompt += "\n- CINEMATIC: Movie-grade quality, cinematic lighting, cinematic color grading, cinematic composition, cinematic atmosphere"
+        prompt += "\n- Ultra-premium camera system (Phase One XF IQ4 150MP, Hasselblad H6D-400c, Leica S3) with EXACT model specifications"
+        prompt += "\n- Exotic lens (Zeiss Otus 85mm f/1.4, Leica Noctilux 50mm f/0.95) with EXACT model and characteristics, anamorphic if applicable"
+        prompt += "\n- Precision settings: exact aperture (f/1.2, f/1.4, f/1.8), ISO (base 64-100), shutter (1/125s, 1/250s), white balance (exact Kelvin: 4500K, 5500K, 3200K)"
+        prompt += "\n- CINEMATIC multi-light setup (4-5 lights minimum): key, fill, rim, hair, background with exact modifiers (Profoto beauty dish, Chimera softbox), cinematic lighting ratios"
+        prompt += "\n- HYPERREALISTIC micro-textures: visible pores at macro level, individual hair strands with natural variation, fabric weave visible, subtle surface imperfections, skin texture with natural oil"
+        prompt += "\n- HYPERREALISTIC natural variation: skin tone micro-variations (freckles, moles, natural pigmentation), hair texture differences, natural asymmetry, realistic skin imperfections"
+        prompt += "\n- CINEMATIC film stock emulation: Kodak Portra 400 or Fuji Pro 400H with exact color science, film grain texture, cinematic color grading"
+        prompt += "\n- HYPERREALISTIC lens authenticity: natural chromatic aberration on high-contrast edges, realistic bokeh ball rendering with proper shape and texture, authentic vignetting, anamorphic characteristics"
+        prompt += "\n- CINEMATIC composition: golden ratio placement (Fibonacci spiral), depth staging (foreground, mid-ground, background), visual flow, strategic negative space, cinematic framing"
+        prompt += "\n- CINEMATIC atmosphere: cinematic mood (dramatic, contemplative, energetic), atmospheric perspective, volumetric lighting if applicable, cinematic color contrast"
+        prompt += "\n- Conversion optimization: aspirational positioning, emotional connection, luxury cues, cinematic storytelling"
+        prompt += "\n- HYPERREALISTIC environmental realism: atmospheric perspective, natural depth cues, realistic light falloff (inverse square law), natural light scattering"
         
         if ml_insights:
             prompt += "\n\nML LEARNING - Apply insights from top-performing creatives:"
@@ -252,8 +265,12 @@ Return ONLY the optimized prompt. No explanations, no additional text, just the 
                 prompt += f"\n- {insight.get('element', 'Unknown')}: {insight.get('guidance', 'Apply this element')}"
         
         prompt += f"\n\nUse case: {use_case}"
-        prompt += "\n\nGenerate the ELITE, WORLD-CLASS prompt following ALL guidelines above."
-        prompt += "\nPrompt must be 120-200 words minimum with EXTREME detail and technical precision."
+        prompt += "\n\nSTRICT REQUIREMENTS - Generate the HYPERREALISTIC, CINEMATIC prompt following ALL guidelines above."
+        prompt += "\n- Prompt must be 150-250 words minimum with EXTREME detail and technical precision"
+        prompt += "\n- EVERY requirement above is MANDATORY - no exceptions, no shortcuts"
+        prompt += "\n- Must include: HYPERREALISTIC quality, CINEMATIC quality, exact equipment specs, exact settings, exact lighting, exact color grading"
+        prompt += "\n- Must specify: 'hyperrealistic', 'photorealistic', 'cinematic', 'indistinguishable from real photography'"
+        prompt += "\n- Zero tolerance for AI artifacts - every detail must be perfect"
         
         return prompt
     
@@ -1555,12 +1572,14 @@ Ensure all text meets character limits and maintains calm confidence tone."""
             bottom_margin = 80
             side_margin = 60
             
-            # Build drawtext filter with premium styling
+            # Build drawtext filter with premium styling and increased font weight
             # Use elegant shadows for depth and readability (no background box)
+            # Font weight: bold (700) for premium, luxury feel
             drawtext_filter = (
                 f"drawtext=text='{escaped_wrapped}'"
                 f":fontsize={fontsize}"
                 f":fontcolor=white"
+                f":fontweight=bold"  # Increased font weight for premium feel
                 f":x=(w-text_w)/2"  # Center horizontally
                 f":y=h-th-{bottom_margin}"  # Bottom with margin
                 # Premium shadow for depth and readability (soft, elegant)
@@ -1606,6 +1625,7 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                     f"drawtext=text='{escaped_wrapped}'"
                     f":fontsize={fontsize}"
                     f":fontcolor=white"
+                    f":fontweight=bold"  # Increased font weight for premium feel
                     f":x=(w-text_w)/2"
                     f":y=h-th-{bottom_margin}"
                     f":shadowcolor=black@0.8"
