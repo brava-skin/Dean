@@ -37,7 +37,38 @@ class CreativeGenerationPipeline:
         generate_count: int = 20,
     ) -> List[Dict[str, Any]]:
         """Generate a batch of creatives through the pipeline."""
-        # Stage 1: Generate variations
+        # TESTING: If target_count is 1, only generate 1 creative (no filtering needed)
+        if target_count == 1:
+            logger.info(f"TEST MODE: Generating exactly 1 creative (no filtering)")
+            generated_creatives = []
+            
+            # Get advanced ML system if available
+            advanced_ml = getattr(self.image_generator, 'advanced_ml', None)
+            if not advanced_ml:
+                advanced_ml = getattr(self, 'advanced_ml', None)
+            
+            # Generate exactly 1 creative
+            try:
+                logger.info(f"Generating creative 1/1")
+                creative = self.image_generator.generate_creative(
+                    product_info,
+                    creative_style="test_creative",
+                    advanced_ml=advanced_ml,
+                )
+                
+                if creative:
+                    creative["generation_stage"] = "test_mode"
+                    generated_creatives.append(creative)
+                    logger.info(f"✅ Creative generated successfully")
+                else:
+                    logger.warning(f"⚠️ Creative generation returned None")
+            except Exception as e:
+                logger.error(f"Error generating creative: {e}", exc_info=True)
+            
+            logger.info(f"Test mode complete: {len(generated_creatives)} creative generated")
+            return generated_creatives
+        
+        # Stage 1: Generate variations (normal mode)
         logger.info(f"Stage 1: Generating {generate_count} creative variations")
         generated_creatives = []
         

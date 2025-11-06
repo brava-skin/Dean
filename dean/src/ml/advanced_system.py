@@ -127,8 +127,12 @@ class AdvancedMLSystem:
     ) -> List[Dict[str, Any]]:
         """Generate optimized creatives using the full pipeline."""
         if self.creative_pipeline:
-            # Generate fewer variations to avoid timeout (max 10, but aim for target_count + 2)
-            generate_count = min(target_count + 2, 10)
+            # For testing: generate only 1 if target is 1, otherwise use normal logic
+            if target_count == 1:
+                generate_count = 1  # Test mode: only generate 1
+            else:
+                # Generate fewer variations to avoid timeout (max 10, but aim for target_count + 2)
+                generate_count = min(target_count + 2, 10)
             logger.info(f"Generating {generate_count} creatives to filter to top {target_count}")
             return self.creative_pipeline.generate_creatives_batch(
                 product_info,

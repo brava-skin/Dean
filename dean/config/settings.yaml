@@ -74,7 +74,7 @@ asc_plus:
   daily_budget_eur: 50
   keep_ads_live: 5
   max_active_ads: 5
-  target_active_ads: 5                     # Always maintain 5 creatives
+  target_active_ads: 1                     # TESTING: Only 1 creative for pipeline test
   optimization_goal: "PURCHASE"
   naming_prefix: "[ASC+]"
   

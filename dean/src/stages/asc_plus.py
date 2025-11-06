@@ -681,10 +681,17 @@ def run_asc_plus_tick(
                         
                         # Generate batch of creatives (generate more than needed to account for failures)
                         remaining_needed = target_count - active_count
-                        logger.info(f"Generating {min(remaining_needed * 2, 5)} creatives (need {remaining_needed} more)")
+                        # TESTING: If target is 1, generate exactly 1
+                        if target_count == 1:
+                            logger.info(f"TEST MODE: Generating exactly 1 creative")
+                            generate_target = 1
+                        else:
+                            logger.info(f"Generating {min(remaining_needed * 2, 5)} creatives (need {remaining_needed} more)")
+                            generate_target = min(remaining_needed * 2, 5)
+                        
                         generated_creatives = advanced_ml.generate_optimized_creatives(
                             product_info,
-                            target_count=min(remaining_needed * 2, 5),  # Generate up to 5 at a time
+                            target_count=generate_target,
                         )
                         
                         logger.info(f"Pipeline returned {len(generated_creatives)} creatives")

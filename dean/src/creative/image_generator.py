@@ -1412,17 +1412,33 @@ Ensure all text meets character limits and maintains calm confidence tone."""
         Luxury serif font, proper wrapping, bottom positioning with margins.
         """
         try:
-            # Check if ffmpeg is available
-            try:
-                subprocess.run(
-                    ["ffmpeg", "-version"],
-                    capture_output=True,
-                    check=True,
-                    timeout=5,
-                )
-            except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-                notify("⚠️ ffmpeg not found, cannot add text overlay")
-                return None
+            # Check if ffmpeg is available (REQUIRED - not optional)
+            # Check common installation paths (macOS Homebrew, Linux, etc.)
+            ffmpeg_paths = [
+                "/opt/homebrew/bin/ffmpeg",  # macOS Homebrew (Apple Silicon)
+                "/usr/local/bin/ffmpeg",     # macOS Homebrew (Intel) or Linux
+                "ffmpeg",                    # System PATH
+                "/usr/bin/ffmpeg",           # Linux system path
+            ]
+            ffmpeg_cmd = None
+            for path in ffmpeg_paths:
+                try:
+                    result = subprocess.run(
+                        [path, "-version"],
+                        capture_output=True,
+                        check=True,
+                        timeout=5,
+                    )
+                    ffmpeg_cmd = path
+                    break
+                except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+                    continue
+            
+            if not ffmpeg_cmd:
+                error_msg = "❌ CRITICAL: ffmpeg is REQUIRED but not found. Install with: brew install ffmpeg (macOS) or apt-get install ffmpeg (Linux)"
+                logger.error(error_msg)
+                notify(error_msg)
+                raise RuntimeError("ffmpeg is required for text overlay generation but is not installed or not in PATH")
             
             if output_path is None:
                 input_path = Path(image_path)
@@ -1535,7 +1551,7 @@ Ensure all text meets character limits and maintains calm confidence tone."""
             )
             
             cmd = [
-                "ffmpeg",
+                ffmpeg_cmd,
                 "-i", image_path,
                 "-vf", vf_filter,
                 "-y",
@@ -1574,7 +1590,7 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                 )
                 
                 cmd_fallback = [
-                    "ffmpeg",
+                    ffmpeg_cmd,
                     "-i", image_path,
                     "-vf", vf_fallback,
                     "-y",
