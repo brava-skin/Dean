@@ -315,9 +315,30 @@ def _create_creative_and_ad(
             
             # Update creative_intelligence with Supabase Storage URL and Meta creative ID
             try:
-                from infrastructure.supabase_storage import get_validated_supabase_client
+                from infrastructure.supabase_storage import get_validated_supabase_client, SupabaseStorage
                 supabase_client = get_validated_supabase_client()
                 if supabase_client:
+                    # Record ad creation time (populates ad_creation_times table)
+                    try:
+                        storage = SupabaseStorage(supabase_client)
+                        lifecycle_id = f"lifecycle_{ad_id}"
+                        storage.record_ad_creation(ad_id, lifecycle_id, "asc_plus")
+                        logger.debug(f"✅ Recorded ad creation time for {ad_id}")
+                    except Exception as e:
+                        logger.debug(f"Failed to record ad creation time: {e}")
+                    
+                    # Store initial historical data (populates historical_data table)
+                    try:
+                        storage = SupabaseStorage(supabase_client)
+                        lifecycle_id = f"lifecycle_{ad_id}"
+                        # Store initial metrics as historical data
+                        storage.store_historical_data(ad_id, lifecycle_id, "asc_plus", "spend", 0.0)
+                        storage.store_historical_data(ad_id, lifecycle_id, "asc_plus", "impressions", 0.0)
+                        storage.store_historical_data(ad_id, lifecycle_id, "asc_plus", "clicks", 0.0)
+                        storage.store_historical_data(ad_id, lifecycle_id, "asc_plus", "purchases", 0.0)
+                        logger.debug(f"✅ Stored initial historical data for {ad_id}")
+                    except Exception as e:
+                        logger.debug(f"Failed to store initial historical data: {e}")
                     creative_intel_data = {
                         "creative_id": str(meta_creative_id),  # Use Meta's creative ID
                         "ad_id": ad_id,

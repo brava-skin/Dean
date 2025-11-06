@@ -1105,9 +1105,9 @@ class MetaClient:
                     counts['campaign_direct'] = campaign_count
                     # Use the higher count (campaign query is more comprehensive)
                     active_count = max(active_count, campaign_count)
-                    logger.debug(f"Campaign-level query found {campaign_count} active ads (vs {direct_count} from adset)")
+                    logger.info(f"📊 Campaign-level query found {campaign_count} active ads (vs {direct_count} from adset)")
                 except Exception as e:
-                    logger.debug(f"Campaign-level query failed (non-critical): {e}")
+                    logger.warning(f"Campaign-level query failed (non-critical): {e}")
             
             # Method 2: Use insights API to verify (ads with recent data are definitely active)
             try:
