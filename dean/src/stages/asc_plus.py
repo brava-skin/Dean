@@ -187,8 +187,7 @@ def _create_creative_and_ad(
             logger.error("Creative data must have either supabase_storage_url or image_path")
             return None, None, False
         
-        # Ensure ad_copy is a dict (not None)
-        ad_copy_dict = creative_data.get("ad_copy") or {}
+        # Ensure ad_copy is a dict (not None) - already set above, but ensure it's valid
         if not isinstance(ad_copy_dict, dict):
             ad_copy_dict = {}
         
