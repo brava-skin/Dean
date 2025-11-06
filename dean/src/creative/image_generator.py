@@ -32,14 +32,14 @@ CHATGPT5_MODEL = "gpt-5"
 
 # Calm confidence text options
 CREATIVE_TEXT_OPTIONS = [
-    "This is maintenance, not vanity.",
-    "The man who cares stands out.",
-    "Elevate your baseline.",
-    "Look like you live with intention.",
-    "Take care. Not for others. For yourself.",
-    "Consistency builds presence.",
-    "The face you show the world matters.",
     "Refined, not complicated.",
+    "Elevate your baseline.",
+    "Consistency builds presence.",
+    "Maintenance, not vanity.",
+    "Take care.",
+    "Presence over convenience.",
+    "Discipline, not hype.",
+    "Quiet confidence.",
 ]
 
 HEADLINE_OPTIONS = [
@@ -519,12 +519,13 @@ class ImageCreativeGenerator:
         # Store scenario description for inclusion in result (for ML tracking)
         self._last_scenario_description = scenario_description
         
-        brand_guidelines = {
+            brand_guidelines = {
             "brand_name": "Brava",
-            "target_audience": "premium men who value discipline",
+            "target_audience": "premium American men aged 18-54 who value discipline",
             "style": "premium, sophisticated, calm confidence",
             "aesthetic": "editorial, cinematic, refined, luxury fashion brand style (like Dior/LV/Aesop)",
-            "exclusions": ["females", "kids", "products", "bathroom settings", "selfie-style photos"],
+            "exclusions": ["females", "kids", "products", "bathroom settings", "selfie-style photos", "formal suits", "business attire", "Indian/South Asian men", "turbans", "traditional ethnic clothing"],
+            "preferences": ["casual luxury", "streetwear", "athleisure", "minimalist fashion", "contemporary American style", "diverse American men (Caucasian, African American, Hispanic, Asian American, etc.)"],
         }
         
         return self.prompt_engineer.create_prompt(
@@ -682,8 +683,9 @@ CHAIN-OF-THOUGHT PROCESS - Follow this reasoning:
    - Magazine aesthetic: Vogue (high fashion), GQ (contemporary style), Esquire (sophisticated lifestyle)
 
 5. FASHION DETAILS:
-   - Specify exact outfit: type of garment (suit, blazer, coat, shirt, jacket), material (cashmere, wool, linen, leather), color (specific shades), fit (tailored, relaxed, oversized)
-   - Include accessories: shoes, watch, jewelry, bags if relevant
+   - CRITICAL: NO formal suits, NO business blazers, NO ties - use casual luxury, streetwear, athleisure
+   - Specify exact outfit: type of garment (hoodie, crewneck, t-shirt, henley, bomber jacket, leather jacket, field jacket, denim jacket, jeans, chinos, shorts, sneakers), material (cashmere, wool, linen, leather, cotton), color (specific shades), fit (relaxed, fitted, oversized)
+   - Include accessories: sneakers, boots, watch, minimal jewelry if relevant
 
 6. LIGHTING & COLOR:
    - Lighting mood: dramatic (high contrast), soft (gentle), natural (window light), cinematic (movie-like)
@@ -900,12 +902,14 @@ Now generate the scenario following ALL requirements above."""
                 user_prompt = f"""You are a copywriter for a premium men's skincare brand. Generate a SINGLE LINE of text overlay for an image creative.
 
 CRITICAL REQUIREMENTS:
-- Maximum 8-12 words (must fit on image without crowding)
+- MAXIMUM 4 WORDS (must be short, simple, premium)
+- Examples: "Refined, not complicated." | "Elevate your baseline." | "Consistency builds presence." | "Quiet confidence."
 - Calm confidence tone: self-respect, not convenience; discipline, not vanity
 - Must complement the scenario and ad copy theme
 - White text on image (premium, luxury feel)
 - No hype, no urgency, no sales language
 - Speak to self-respect and presence
+- Simple, powerful, memorable
 
 {ml_guidance}
 
@@ -939,7 +943,7 @@ GENERATION PROCESS:
 5. Verify it matches calm confidence tone
 
 Return ONLY the text overlay (no explanations, no quotes, just the text).
-The text should be 8-12 words maximum."""
+The text MUST be 4 words or less. Examples: "Refined, not complicated." | "Elevate your baseline." | "Quiet confidence.""""
 
                 response = client.responses.create(
                     model=CHATGPT5_MODEL,
