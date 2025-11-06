@@ -279,16 +279,18 @@ Return ONLY the optimized prompt. No explanations, no additional text, just the 
         description: str,
         brand_guidelines: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Create advanced fallback prompt"""
+        """Create advanced fallback prompt with HYPERREALISTIC and CINEMATIC requirements"""
         prompt_parts = [
             description,
-            "Phase One XF IQ4 150MP with Schneider-Kreuznach 80mm f/2.8 LS lens, f/2.8, ISO 64, 4500K white balance, medium format 6x7 format, 16-bit color depth",
-            "4-light setup: 27\" Profoto beauty dish key light at 45-degree creating Rembrandt triangle, large Chimera softbox fill at 3:1 ratio, 1x6' strip bank rim light for separation, hair light spotlight above, background separation light",
-            "golden ratio placement (Fibonacci spiral), depth staging (foreground 1-2m, mid-ground 3-5m, background 10m+), visual flow, strategic negative space, editorial excellence",
-            "Kodak Portra 400 emulation: warm gold and beige tones with deep neutral black, high dynamic range, accurate skin tone color science",
-            "micro-textures: visible pores at appropriate magnification, individual hair strands with natural variation, visible fabric weave, subtle surface imperfections",
-            "natural variation: skin tone micro-variations (not uniform), hair texture differences throughout, natural asymmetry in features",
-            "lens authenticity: natural chromatic aberration on high-contrast edges, realistic bokeh ball rendering with proper shape and texture, authentic vignetting, natural focus falloff",
+            "HYPERREALISTIC, CINEMATIC, photorealistic, indistinguishable from real photography, zero AI artifacts, movie-grade quality",
+            "Phase One XF IQ4 150MP with Schneider-Kreuznach 80mm f/2.8 LS lens, f/2.8, ISO 64, 4500K white balance, medium format 6x7 format, 16-bit color depth, anamorphic characteristics",
+            "CINEMATIC 4-light setup: 27\" Profoto beauty dish key light at 45-degree creating Rembrandt triangle, large Chimera softbox fill at 3:1 ratio, 1x6' strip bank rim light for separation, hair light spotlight above, background separation light, cinematic lighting ratios",
+            "CINEMATIC golden ratio placement (Fibonacci spiral), depth staging (foreground 1-2m, mid-ground 3-5m, background 10m+), visual flow, strategic negative space, editorial excellence, cinematic framing",
+            "CINEMATIC Kodak Portra 400 emulation: warm gold and beige tones with deep neutral black, high dynamic range, accurate skin tone color science, film grain texture, cinematic color grading",
+            "HYPERREALISTIC micro-textures: visible pores at appropriate magnification with natural variation, individual hair strands with natural variation and texture, visible fabric weave with thread detail, subtle surface imperfections, skin texture with natural oil",
+            "HYPERREALISTIC natural variation: skin tone micro-variations (freckles, moles, natural pigmentation - not uniform), hair texture differences throughout, natural asymmetry in features, realistic skin imperfections",
+            "HYPERREALISTIC lens authenticity: natural chromatic aberration on high-contrast edges, realistic bokeh ball rendering with proper shape and texture, authentic vignetting, natural focus falloff, anamorphic lens characteristics",
+            "CINEMATIC atmosphere: cinematic mood, atmospheric perspective, volumetric lighting, cinematic color contrast, movie-grade quality",
         ]
         return ", ".join(prompt_parts)
 
