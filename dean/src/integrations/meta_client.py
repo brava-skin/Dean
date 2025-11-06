@@ -975,12 +975,40 @@ class MetaClient:
                 logger.error(f"Fallback Graph API also failed: {e2}")
         return ads
     
+    def _count_active_from_creative_storage(self) -> Optional[int]:
+        """Count active ads from creative_storage table in Supabase (fallback method)."""
+        try:
+            from infrastructure.supabase_storage import get_validated_supabase_client
+            
+            supabase_client = get_validated_supabase_client()
+            if not supabase_client:
+                return None
+            
+            # Count rows where status = 'active'
+            response = supabase_client.table('creative_storage').select(
+                'creative_id', 
+                count='exact'
+            ).eq('status', 'active').execute()
+            
+            # Get count from response
+            count = response.count if hasattr(response, 'count') else len(response.data) if response.data else 0
+            
+            logger.debug(f"Active ads from creative_storage: {count}")
+            return count
+        except Exception as e:
+            logger.debug(f"Failed to count from creative_storage (non-critical): {e}")
+            return None
+    
     def count_active_ads_in_adset(self, adset_id: str) -> int:
         """Count active ads in an adset using multiple methods for accuracy."""
+        counts = {}
+        
         try:
             # Method 1: Direct API call - count only ACTIVE ads
             ads = self.list_ads_in_adset(adset_id)
-            active_count = sum(1 for a in ads if str(a.get("status", "")).upper() == "ACTIVE")
+            direct_count = sum(1 for a in ads if str(a.get("status", "")).upper() == "ACTIVE")
+            counts['direct'] = direct_count
+            active_count = direct_count
             
             # Method 2: Use insights API to verify (ads with recent data are definitely active)
             try:
@@ -992,6 +1020,7 @@ class MetaClient:
                     limit=500
                 )
                 insights_ad_ids = {insight.get("ad_id") for insight in insights if insight.get("ad_id")}
+                counts['insights'] = len(insights_ad_ids)
                 
                 # Count ads that are both in the list AND have insights (definitely active)
                 verified_active = sum(1 for a in ads 
@@ -1000,15 +1029,26 @@ class MetaClient:
                 
                 # Use the higher count (some ads might be active but not have insights yet)
                 active_count = max(active_count, len(insights_ad_ids))
-                
-                logger.debug(f"Active ads count: direct={sum(1 for a in ads if str(a.get('status', '')).upper() == 'ACTIVE')}, insights={len(insights_ad_ids)}, verified={verified_active}, final={active_count}")
             except Exception as e:
                 logger.debug(f"Insights verification failed (non-critical): {e}")
             
+            # Method 3: Fallback to creative_storage table
+            storage_count = self._count_active_from_creative_storage()
+            if storage_count is not None:
+                counts['storage'] = storage_count
+                # Use the highest count from all methods
+                active_count = max(active_count, storage_count)
+            
+            logger.info(f"📊 Active ads counts: {counts}, final={active_count}")
             return active_count
         except Exception as e:
             logger.error(f"Error counting active ads in adset {adset_id}: {e}")
-            # Fallback to basic count
+            # Fallback to creative_storage if available
+            storage_count = self._count_active_from_creative_storage()
+            if storage_count is not None:
+                logger.info(f"Using creative_storage fallback count: {storage_count}")
+                return storage_count
+            # Final fallback to basic count
             ads = self.list_ads_in_adset(adset_id)
             return sum(1 for a in ads if str(a.get("status", "")).upper() == "ACTIVE")
 
