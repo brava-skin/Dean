@@ -945,6 +945,8 @@ class MetaClient:
             return AdSet(adset_id).get_ads(fields=["id", "name", "status", "effective_status"])
         try:
             cursor = self._retry("list_ads", _fetch)
+            # Handle pagination properly - iterate through all pages
+            page_count = 0
             for a in cursor:
                 # Get status from effective_status if available (more accurate), otherwise use status
                 status = a.get("effective_status") or a.get("status", "")
@@ -954,25 +956,108 @@ class MetaClient:
                     "status": status,
                     "effective_status": a.get("effective_status", "")
                 })
+                page_count += 1
+            logger.debug(f"Listed {len(ads)} ads from adset {adset_id} (processed {page_count} items)")
         except Exception as e:
             logger.warning(f"Error listing ads in adset {adset_id}: {e}")
-            # Fallback: try Graph API directly
+            # Fallback: try Graph API directly with pagination
             try:
-                response = self._graph_get_object(f"{adset_id}/ads", params={
-                    "fields": "id,name,status,effective_status",
-                    "limit": 500
-                })
-                if response.get("data"):
-                    for a in response["data"]:
-                        status = a.get("effective_status") or a.get("status", "")
-                        ads.append({
-                            "id": a.get("id"),
-                            "name": a.get("name"),
-                            "status": status,
-                            "effective_status": a.get("effective_status", "")
-                        })
+                all_ads = []
+                next_url = None
+                page = 0
+                while page < 10:  # Limit to 10 pages (5000 ads max)
+                    params = {
+                        "fields": "id,name,status,effective_status",
+                        "limit": 500
+                    }
+                    if next_url:
+                        # Extract cursor from next URL if available
+                        if "after=" in next_url:
+                            after = next_url.split("after=")[1].split("&")[0]
+                            params["after"] = after
+                    
+                    response = self._graph_get_object(f"{adset_id}/ads", params=params)
+                    if response.get("data"):
+                        for a in response["data"]:
+                            status = a.get("effective_status") or a.get("status", "")
+                            all_ads.append({
+                                "id": a.get("id"),
+                                "name": a.get("name"),
+                                "status": status,
+                                "effective_status": a.get("effective_status", "")
+                            })
+                    
+                    # Check for next page
+                    paging = response.get("paging", {})
+                    next_url = paging.get("next")
+                    if not next_url:
+                        break
+                    page += 1
+                
+                ads = all_ads
+                logger.debug(f"Graph API fallback listed {len(ads)} ads from adset {adset_id}")
             except Exception as e2:
                 logger.error(f"Fallback Graph API also failed: {e2}")
+        return ads
+    
+    def list_ads_in_campaign(self, campaign_id: str) -> List[Dict[str, Any]]:
+        """List all ads in a campaign (more comprehensive than adset-level)."""
+        if self.dry_run or not USE_SDK:
+            return []
+        self._init_sdk_if_needed()
+        ads = []
+        try:
+            def _fetch():
+                return Campaign(campaign_id).get_ads(fields=["id", "name", "status", "effective_status", "adset_id"])
+            cursor = self._retry("list_ads_campaign", _fetch)
+            for a in cursor:
+                status = a.get("effective_status") or a.get("status", "")
+                ads.append({
+                    "id": a["id"],
+                    "name": a.get("name"),
+                    "status": status,
+                    "effective_status": a.get("effective_status", ""),
+                    "adset_id": a.get("adset_id", "")
+                })
+            logger.debug(f"Listed {len(ads)} ads from campaign {campaign_id}")
+        except Exception as e:
+            logger.warning(f"Error listing ads in campaign {campaign_id}: {e}")
+            # Fallback: try Graph API directly
+            try:
+                all_ads = []
+                next_url = None
+                page = 0
+                while page < 10:  # Limit to 10 pages
+                    params = {
+                        "fields": "id,name,status,effective_status,adset_id",
+                        "limit": 500
+                    }
+                    if next_url and "after=" in next_url:
+                        after = next_url.split("after=")[1].split("&")[0]
+                        params["after"] = after
+                    
+                    response = self._graph_get_object(f"{campaign_id}/ads", params=params)
+                    if response.get("data"):
+                        for a in response["data"]:
+                            status = a.get("effective_status") or a.get("status", "")
+                            all_ads.append({
+                                "id": a.get("id"),
+                                "name": a.get("name"),
+                                "status": status,
+                                "effective_status": a.get("effective_status", ""),
+                                "adset_id": a.get("adset_id", "")
+                            })
+                    
+                    paging = response.get("paging", {})
+                    next_url = paging.get("next")
+                    if not next_url:
+                        break
+                    page += 1
+                
+                ads = all_ads
+                logger.debug(f"Graph API fallback listed {len(ads)} ads from campaign {campaign_id}")
+            except Exception as e2:
+                logger.error(f"Campaign-level Graph API fallback failed: {e2}")
         return ads
     
     def _count_active_from_creative_storage(self) -> Optional[int]:
@@ -999,16 +1084,30 @@ class MetaClient:
             logger.debug(f"Failed to count from creative_storage (non-critical): {e}")
             return None
     
-    def count_active_ads_in_adset(self, adset_id: str) -> int:
+    def count_active_ads_in_adset(self, adset_id: str, campaign_id: Optional[str] = None) -> int:
         """Count active ads in an adset using multiple methods for accuracy."""
         counts = {}
         
         try:
-            # Method 1: Direct API call - count only ACTIVE ads
+            # Method 1: Direct API call from adset - count only ACTIVE ads
             ads = self.list_ads_in_adset(adset_id)
             direct_count = sum(1 for a in ads if str(a.get("status", "")).upper() == "ACTIVE")
-            counts['direct'] = direct_count
+            counts['adset_direct'] = direct_count
             active_count = direct_count
+            
+            # Method 1b: Also query by campaign (more comprehensive, catches all ads)
+            if campaign_id:
+                try:
+                    campaign_ads = self.list_ads_in_campaign(campaign_id)
+                    # Filter to ads in this specific adset
+                    adset_ads = [a for a in campaign_ads if a.get("adset_id") == adset_id]
+                    campaign_count = sum(1 for a in adset_ads if str(a.get("status", "")).upper() == "ACTIVE")
+                    counts['campaign_direct'] = campaign_count
+                    # Use the higher count (campaign query is more comprehensive)
+                    active_count = max(active_count, campaign_count)
+                    logger.debug(f"Campaign-level query found {campaign_count} active ads (vs {direct_count} from adset)")
+                except Exception as e:
+                    logger.debug(f"Campaign-level query failed (non-critical): {e}")
             
             # Method 2: Use insights API to verify (ads with recent data are definitely active)
             try:
@@ -1021,11 +1120,6 @@ class MetaClient:
                 )
                 insights_ad_ids = {insight.get("ad_id") for insight in insights if insight.get("ad_id")}
                 counts['insights'] = len(insights_ad_ids)
-                
-                # Count ads that are both in the list AND have insights (definitely active)
-                verified_active = sum(1 for a in ads 
-                                     if str(a.get("status", "")).upper() == "ACTIVE" 
-                                     and a.get("id") in insights_ad_ids)
                 
                 # Use the higher count (some ads might be active but not have insights yet)
                 active_count = max(active_count, len(insights_ad_ids))

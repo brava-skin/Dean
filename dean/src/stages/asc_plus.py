@@ -571,10 +571,10 @@ def run_asc_plus_tick(
         if not campaign_id or not adset_id:
             return {"ok": False, "error": "Failed to ensure ASC+ campaign"}
         
-        # Get current ads using improved counting method
+        # Get current ads using improved counting method (with campaign-level verification)
         try:
-            # Use the new count_active_ads_in_adset method for more accurate counting
-            active_count = client.count_active_ads_in_adset(adset_id)
+            # Use the new count_active_ads_in_adset method with campaign_id for more accurate counting
+            active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
             # Also get the full list for processing
             ads = client.list_ads_in_adset(adset_id)
             active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
@@ -760,10 +760,10 @@ def run_asc_plus_tick(
                     notify(f"⚠️ Failed to kill ad {ad_id}: {e}")
         
         # Generate new creatives if needed - SMART: Only generate 1 at a time when needed
-        # Refresh active count after kills using improved counting method
+        # Refresh active count after kills using improved counting method (with campaign-level verification)
         try:
-            # Use the new count_active_ads_in_adset method for more accurate counting
-            active_count = client.count_active_ads_in_adset(adset_id)
+            # Use the new count_active_ads_in_adset method with campaign_id for more accurate counting
+            active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
             # Also get the full list for processing
             ads = client.list_ads_in_adset(adset_id)
             active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
