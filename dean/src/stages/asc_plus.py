@@ -442,8 +442,7 @@ def _create_creative_and_ad(
                     }
                     # Import and call store_performance_data_in_supabase
                     import sys
-                    import os
-                    # Add src directory to path to import from main
+                    # Add src directory to path to import from main (use os from module level, not local import)
                     src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
                     if src_dir not in sys.path:
                         sys.path.insert(0, src_dir)
