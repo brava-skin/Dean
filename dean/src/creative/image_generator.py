@@ -1409,7 +1409,7 @@ Ensure all text meets character limits and maintains calm confidence tone."""
     ) -> Optional[str]:
         """
         Add premium text overlay to image using ffmpeg.
-        White premium font, bottom with margins, left/right margins.
+        Luxury serif font, proper wrapping, bottom positioning with margins.
         """
         try:
             # Check if ffmpeg is available
@@ -1428,20 +1428,119 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                 input_path = Path(image_path)
                 output_path = str(input_path.parent / f"{input_path.stem}_overlay{input_path.suffix}")
             
-            # Escape text for ffmpeg filter
-            escaped_text = text.replace("'", "\\'").replace(":", "\\:")
+            # Properly escape text for ffmpeg (escape single quotes, backslashes, colons, etc.)
+            escaped_text = text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("[", "\\[").replace("]", "\\]")
             
-            # Premium font styling: white, bottom with margins, left/right margins
-            # Using drawtext filter with luxury styling
-            # Font: Arial or similar premium font (you can change to specific font path)
-            # Position: bottom center with 50px margin from bottom, 50px margins on sides
-            # White text with subtle shadow/box for readability
+            # Premium font paths (try multiple options for different systems)
+            # Ubuntu/Linux: Use DejaVu Serif or Liberation Serif (premium serif fonts)
+            # macOS: Use system serif fonts
+            # Windows: Use system serif fonts
+            font_paths = [
+                "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",  # Ubuntu/Linux - premium serif
+                "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",  # Ubuntu/Linux alternative
+                "/usr/share/fonts/truetype/noto/NotoSerif-Bold.ttf",  # Ubuntu/Linux alternative
+                "/System/Library/Fonts/Supplemental/Georgia.ttf",  # macOS
+                "/System/Library/Fonts/Supplemental/Georgia Bold.ttf",  # macOS bold
+                "C:/Windows/Fonts/georgiab.ttf",  # Windows
+            ]
             
-            # Ensure 1:1 aspect ratio is preserved (scale to square: width = height)
+            # Try to find an available premium serif font
+            font_path = None
+            for fp in font_paths:
+                if Path(fp).exists():
+                    font_path = fp
+                    break
+            
+            # Calculate appropriate font size based on text length and image dimensions
+            # Get image dimensions first
+            try:
+                probe_cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", image_path]
+                probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=5)
+                if probe_result.returncode == 0:
+                    dimensions = probe_result.stdout.strip().split("x")
+                    if len(dimensions) == 2:
+                        img_width = int(dimensions[0])
+                        # Font size: ~4% of image width, but min 36, max 56
+                        base_fontsize = max(36, min(56, int(img_width * 0.04)))
+                    else:
+                        base_fontsize = 42
+                else:
+                    base_fontsize = 42
+            except Exception:
+                base_fontsize = 42
+            
+            # Adjust font size based on text length (shorter text = slightly larger)
+            text_length = len(text)
+            if text_length < 30:
+                fontsize = base_fontsize + 4
+            elif text_length < 50:
+                fontsize = base_fontsize
+            else:
+                fontsize = base_fontsize - 4
+            
+            # Ensure text fits within image width (wrap long text)
+            # Calculate max characters per line (rough estimate: ~60% of image width)
+            max_chars_per_line = max(30, int(base_fontsize * 1.2))
+            
+            # Wrap text if needed
+            if len(text) > max_chars_per_line:
+                words = text.split()
+                wrapped_lines = []
+                current_line = ""
+                for word in words:
+                    if len(current_line) + len(word) + 1 <= max_chars_per_line:
+                        current_line += (" " + word if current_line else word)
+                    else:
+                        if current_line:
+                            wrapped_lines.append(current_line)
+                        current_line = word
+                if current_line:
+                    wrapped_lines.append(current_line)
+                wrapped_text = "\\n".join(wrapped_lines)
+            else:
+                wrapped_text = text
+            
+            # Escape the wrapped text
+            escaped_wrapped = wrapped_text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:")
+            
+            # Position: bottom center with generous margins
+            # Bottom margin: 80px (more generous), side margins: 60px each
+            bottom_margin = 80
+            side_margin = 60
+            
+            # Build drawtext filter with premium styling
+            # Use elegant shadows for depth and readability
+            drawtext_filter = (
+                f"drawtext=text='{escaped_wrapped}'"
+                f":fontsize={fontsize}"
+                f":fontcolor=white"
+                f":x=(w-text_w)/2"  # Center horizontally
+                f":y=h-th-{bottom_margin}"  # Bottom with margin
+                # Premium shadow for depth (soft, elegant)
+                f":shadowcolor=black@0.8"
+                f":shadowx=2"
+                f":shadowy=2"
+                # Subtle background box for readability (very subtle, elegant)
+                f":box=1"
+                f":boxcolor=black@0.25"
+                f":boxborderw=15"
+            )
+            
+            # Add font path if available
+            if font_path:
+                drawtext_filter += f":fontfile={font_path}"
+            
+            # Ensure 1:1 aspect ratio is preserved
+            vf_filter = (
+                f"scale=iw:iw:force_original_aspect_ratio=decrease,"
+                f"pad=iw:iw:0:0:color=black@0,"
+                f"{drawtext_filter}"
+            )
+            
             cmd = [
                 "ffmpeg",
                 "-i", image_path,
-                "-vf", f"scale=iw:iw:force_original_aspect_ratio=decrease,pad=iw:iw:0:0:color=black@0,drawtext=text='{escaped_text}':fontsize=48:fontcolor=white:x=(w-text_w)/2:y=h-th-50:box=1:boxcolor=black@0.3:boxborderw=10:fontfile=/System/Library/Fonts/Helvetica.ttc",
+                "-vf", vf_filter,
                 "-y",
                 output_path,
             ]
@@ -1454,26 +1553,50 @@ Ensure all text meets character limits and maintains calm confidence tone."""
             )
             
             if result.returncode == 0 and Path(output_path).exists():
-                notify(f"✅ Premium text overlay added: {text}")
+                notify(f"✅ Premium text overlay added: {text[:50]}...")
                 return output_path
             else:
-                # Try without fontfile (system default) - still preserve 1:1 aspect ratio
-                cmd = [
+                # Fallback: Try without font path (system default) with simpler styling
+                logger.warning(f"First attempt failed, trying fallback: {result.stderr[:200]}")
+                drawtext_fallback = (
+                    f"drawtext=text='{escaped_wrapped}'"
+                    f":fontsize={fontsize}"
+                    f":fontcolor=white"
+                    f":x=(w-text_w)/2"
+                    f":y=h-th-{bottom_margin}"
+                    f":shadowcolor=black@0.8"
+                    f":shadowx=2"
+                    f":shadowy=2"
+                    f":box=1"
+                    f":boxcolor=black@0.25"
+                    f":boxborderw=15"
+                )
+                
+                vf_fallback = (
+                    f"scale=iw:iw:force_original_aspect_ratio=decrease,"
+                    f"pad=iw:iw:0:0:color=black@0,"
+                    f"{drawtext_fallback}"
+                )
+                
+                cmd_fallback = [
                     "ffmpeg",
                     "-i", image_path,
-                    "-vf", f"scale=iw:iw:force_original_aspect_ratio=decrease,pad=iw:iw:0:0:color=black@0,drawtext=text='{escaped_text}':fontsize=48:fontcolor=white:x=(w-text_w)/2:y=h-th-50:box=1:boxcolor=black@0.3:boxborderw=10",
+                    "-vf", vf_fallback,
                     "-y",
                     output_path,
                 ]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-                if result.returncode == 0 and Path(output_path).exists():
-                    notify(f"✅ Premium text overlay added: {text}")
+                
+                result_fallback = subprocess.run(cmd_fallback, capture_output=True, text=True, timeout=30)
+                if result_fallback.returncode == 0 and Path(output_path).exists():
+                    notify(f"✅ Premium text overlay added (fallback): {text[:50]}...")
                     return output_path
                 else:
-                    notify(f"⚠️ ffmpeg error: {result.stderr}")
+                    logger.error(f"ffmpeg error: {result_fallback.stderr[:500]}")
+                    notify(f"⚠️ Failed to add text overlay: {result_fallback.stderr[:100]}")
                     return None
                 
         except Exception as e:
+            logger.error(f"Error adding text overlay: {e}", exc_info=True)
             notify(f"❌ Error adding text overlay: {e}")
             return None
 
