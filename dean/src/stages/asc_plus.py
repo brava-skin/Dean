@@ -917,6 +917,7 @@ def run_asc_plus_tick(
                     created_count=0,
                     existing_creative_ids=set(),
                     ml_system=ml_system,
+                    campaign_id=campaign_id,
                 )
                 
                 if success and creative_id and ad_id:
@@ -1045,7 +1046,7 @@ def run_asc_plus_tick(
                                                     created_count=created_count,
                                                     existing_creative_ids=existing_creative_ids,
                                                     ml_system=ml_system,
-                                                    campaign_id=_campaign_id,
+                                                    campaign_id=campaign_id,
                                                 )
                                                 
                                                 if success and creative_id and ad_id:
@@ -1096,6 +1097,7 @@ def run_asc_plus_tick(
                                             created_count=created_count,
                                             existing_creative_ids=existing_creative_ids,
                                             ml_system=ml_system,
+                                            campaign_id=campaign_id,
                                         )
                                         
                                         if success and creative_id and ad_id:
@@ -1134,6 +1136,7 @@ def run_asc_plus_tick(
                                         created_count=created_count,
                                         existing_creative_ids=existing_creative_ids,
                                         ml_system=ml_system,
+                                        campaign_id=campaign_id,
                                     )
                                     
                                     if success and creative_id and ad_id:
@@ -1315,6 +1318,7 @@ def run_asc_plus_tick(
                                 created_count=created_count,
                                 existing_creative_ids=existing_creative_ids,
                                 ml_system=ml_system,
+                                campaign_id=campaign_id,
                             )
                             
                             if success and ad_id:
