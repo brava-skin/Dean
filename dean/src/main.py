@@ -2330,6 +2330,37 @@ def main() -> None:
                 for ad_id, ad_data in asc_ad_data.items():
                     if isinstance(ad_data, dict) and 'spend' in ad_data:
                         store_performance_data_in_supabase(supabase_client, ad_data, "asc_plus", ml_system)
+                        
+                        # Also store time-series data (populates time_series_data table)
+                        try:
+                            store_timeseries_data_in_supabase(supabase_client, ad_id, ad_data, "asc_plus")
+                        except Exception as e:
+                            logger.debug(f"Failed to store time-series data: {e}")
+                        
+                        # Store historical data for all metrics (populates historical_data table)
+                        try:
+                            from infrastructure.supabase_storage import SupabaseStorage
+                            storage = SupabaseStorage(supabase_client)
+                            lifecycle_id = ad_data.get('lifecycle_id', f'lifecycle_{ad_id}')
+                            
+                            # Store all key metrics as historical data
+                            metrics_to_store = {
+                                'spend': ad_data.get('spend', 0),
+                                'impressions': ad_data.get('impressions', 0),
+                                'clicks': ad_data.get('clicks', 0),
+                                'purchases': ad_data.get('purchases', 0),
+                                'roas': ad_data.get('roas', 0),
+                                'ctr': ad_data.get('ctr', 0),
+                                'cpa': ad_data.get('cpa', 0) if ad_data.get('cpa') is not None else 0,
+                            }
+                            
+                            for metric_name, metric_value in metrics_to_store.items():
+                                try:
+                                    storage.store_historical_data(ad_id, lifecycle_id, "asc_plus", metric_name, float(metric_value))
+                                except Exception as e:
+                                    logger.debug(f"Failed to store historical data for {metric_name}: {e}")
+                        except Exception as e:
+                            logger.debug(f"Failed to store historical data: {e}")
                 
                 notify("📊 ASC+ performance data stored in Supabase for ML system")
             except Exception as e:
