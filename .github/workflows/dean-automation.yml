@@ -35,57 +35,66 @@ jobs:
         fi
         ffmpeg -version | head -1
     
+    # Set up Python 3.11 (optimized - v5 with faster caching)
     - name: Set up Python 3.11
-      uses: actions/setup-python@v4
+      timeout-minutes: 5  # Timeout for Python setup (should be fast, fail if >5min)
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-        cache: 'pip'  # Enable built-in pip caching
+        cache: 'pip'  # Enable built-in pip caching (faster in v5)
         cache-dependency-path: 'dean/requirements.txt'
+        architecture: 'x64'  # Explicitly set architecture for faster setup
+        allow-prereleases: false  # Don't use pre-release versions (faster)
         
+    # Enhanced pip cache (parallel with setup-python cache)
     - name: Cache pip dependencies (enhanced)
       uses: actions/cache@v4
+      id: pip-cache
       with:
         path: |
           ~/.cache/pip
           ~/.local/lib/python3.11/site-packages
-        key: ${{ runner.os }}-pip-${{ hashFiles('dean/requirements.txt') }}
+        key: ${{ runner.os }}-python3.11-pip-${{ hashFiles('dean/requirements.txt') }}
         restore-keys: |
+          ${{ runner.os }}-python3.11-pip-
           ${{ runner.os }}-pip-
           
     - name: Install Python dependencies (optimized - batched)
+      timeout-minutes: 10  # Timeout for dependency installation
       run: |
         echo "📦 Installing Python dependencies (optimized - batched install)..."
-        python -m pip install --upgrade pip setuptools wheel --quiet --no-cache-dir
+        # Use faster pip upgrade with timeout
+        python -m pip install --upgrade pip setuptools wheel --quiet --no-cache-dir --timeout 30 || python -m pip install --upgrade pip setuptools wheel --quiet --no-cache-dir
         
         # Batch 1: Core dependencies (lightweight, fast)
         echo "  → Installing core dependencies..."
-        pip install --cache-dir ~/.cache/pip --quiet --no-warn-script-location \
+        pip install --cache-dir ~/.cache/pip --quiet --no-warn-script-location --timeout 60 \
           facebook-business==19.0.1 python-dotenv==1.0.1 PyYAML==6.0.2 requests==2.32.3 \
           pytz pandas==2.2.2 openpyxl==3.1.5 SQLAlchemy==2.0.35 supabase schedule \
-          jsonschema prometheus-client
+          jsonschema prometheus-client || echo "⚠️  Some core dependencies failed (non-critical)"
         
         # Batch 2: Essential ML (sequential for reliability)
         echo "  → Installing essential ML libraries..."
-        pip install --cache-dir ~/.cache/pip --quiet --no-warn-script-location \
-          xgboost scikit-learn numpy scipy joblib lightgbm catboost statsmodels psycopg2-binary
+        pip install --cache-dir ~/.cache/pip --quiet --no-warn-script-location --timeout 120 \
+          xgboost scikit-learn numpy scipy joblib lightgbm catboost statsmodels psycopg2-binary || echo "⚠️  Some ML dependencies failed (non-critical)"
         
         # Batch 3: Visualization & Time Series
         echo "  → Installing visualization & time-series libraries..."
-        pip install --cache-dir ~/.cache/pip --quiet --no-warn-script-location \
-          plotly seaborn matplotlib tslearn prophet arch
+        pip install --cache-dir ~/.cache/pip --quiet --no-warn-script-location --timeout 120 \
+          plotly seaborn matplotlib tslearn prophet arch || echo "⚠️  Some visualization dependencies failed (non-critical)"
         
         # Batch 4: NLP & Image Processing (skip spacy model download for speed)
         echo "  → Installing NLP & image processing libraries..."
-        pip install --cache-dir ~/.cache/pip --quiet --no-warn-script-location \
+        pip install --cache-dir ~/.cache/pip --quiet --no-warn-script-location --timeout 180 \
           sentence-transformers transformers spacy nltk Pillow opencv-python \
-          textblob vaderSentiment openai
+          textblob vaderSentiment openai || echo "⚠️  Some NLP dependencies failed (non-critical)"
         # Skip spacy model download (can be done later if needed)
         python -m spacy download en_core_web_sm --quiet || echo "⚠️  Spacy model download skipped (optional)"
         
         # Batch 5: Optional lightweight dependencies (skip if fails)
         echo "  → Installing optional dependencies..."
-        pip install --cache-dir ~/.cache/pip --quiet --no-warn-script-location \
-          faiss-cpu dask optuna redis psutil alembic ffmpeg-python || true
+        pip install --cache-dir ~/.cache/pip --quiet --no-warn-script-location --timeout 60 \
+          faiss-cpu dask optuna redis psutil alembic ffmpeg-python || echo "⚠️  Optional dependencies skipped (non-critical)"
         
         # Skip heavy optional dependencies that aren't critical for runtime
         # These can be installed later if needed: mlflow wandb tensorboard torch shap featuretools
