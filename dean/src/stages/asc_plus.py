@@ -113,6 +113,7 @@ def _create_creative_and_ad(
     created_count: int,
     existing_creative_ids: set,
     ml_system: Optional[Any] = None,
+    campaign_id: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[str], bool]:
     """
     Create a creative and ad in Meta from creative data.
@@ -402,6 +403,55 @@ def _create_creative_and_ad(
                     )
                 except (AttributeError, ValueError, TypeError) as e:
                     logger.warning(f"Failed to track creative in ML system: {e}")
+            
+            # Store initial performance data (populates performance_metrics and ad_lifecycle tables)
+            try:
+                from infrastructure.supabase_storage import get_validated_supabase_client
+                supabase_client = get_validated_supabase_client()
+                if supabase_client:
+                    # Get campaign_id if not provided
+                    final_campaign_id = campaign_id or ''
+                    if not final_campaign_id:
+                        try:
+                            # Try to get campaign_id from adset
+                            adset_info = client._graph_get_object(f"{adset_id}", params={"fields": "campaign_id"})
+                            if adset_info:
+                                final_campaign_id = adset_info.get('campaign_id', '')
+                        except Exception:
+                            pass
+                    
+                    # Create initial ad_data with zero values for new ad
+                    initial_ad_data = {
+                        'ad_id': ad_id,
+                        'creative_id': str(meta_creative_id),
+                        'campaign_id': final_campaign_id,
+                        'adset_id': adset_id,
+                        'lifecycle_id': f'lifecycle_{ad_id}',
+                        'spend': 0.0,
+                        'impressions': 0,
+                        'clicks': 0,
+                        'purchases': 0,
+                        'atc': 0,
+                        'ic': 0,
+                        'ctr': 0.0,
+                        'cpc': 0.0,
+                        'cpm': 0.0,
+                        'roas': 0.0,
+                        'cpa': None,
+                        'status': 'active',
+                    }
+                    # Import and call store_performance_data_in_supabase
+                    import sys
+                    import os
+                    # Add src directory to path to import from main
+                    src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                    if src_dir not in sys.path:
+                        sys.path.insert(0, src_dir)
+                    from main import store_performance_data_in_supabase
+                    store_performance_data_in_supabase(supabase_client, initial_ad_data, "asc_plus", ml_system)
+                    logger.debug(f"✅ Stored initial performance data for new ad {ad_id}")
+            except Exception as e:
+                logger.debug(f"Failed to store initial performance data (non-critical): {e}")
             
             return str(meta_creative_id), ad_id, True
         else:
@@ -995,6 +1045,7 @@ def run_asc_plus_tick(
                                                     created_count=created_count,
                                                     existing_creative_ids=existing_creative_ids,
                                                     ml_system=ml_system,
+                                                    campaign_id=_campaign_id,
                                                 )
                                                 
                                                 if success and creative_id and ad_id:
