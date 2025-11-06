@@ -1509,21 +1509,18 @@ Ensure all text meets character limits and maintains calm confidence tone."""
             side_margin = 60
             
             # Build drawtext filter with premium styling
-            # Use elegant shadows for depth and readability
+            # Use elegant shadows for depth and readability (no background box)
             drawtext_filter = (
                 f"drawtext=text='{escaped_wrapped}'"
                 f":fontsize={fontsize}"
                 f":fontcolor=white"
                 f":x=(w-text_w)/2"  # Center horizontally
                 f":y=h-th-{bottom_margin}"  # Bottom with margin
-                # Premium shadow for depth (soft, elegant)
+                # Premium shadow for depth and readability (soft, elegant)
                 f":shadowcolor=black@0.8"
                 f":shadowx=2"
                 f":shadowy=2"
-                # Subtle background box for readability (very subtle, elegant)
-                f":box=1"
-                f":boxcolor=black@0.25"
-                f":boxborderw=15"
+                # No background box - clean, minimal luxury aesthetic
             )
             
             # Add font path if available
@@ -1567,9 +1564,7 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                     f":shadowcolor=black@0.8"
                     f":shadowx=2"
                     f":shadowy=2"
-                    f":box=1"
-                    f":boxcolor=black@0.25"
-                    f":boxborderw=15"
+                    # No background box - clean, minimal luxury aesthetic
                 )
                 
                 vf_fallback = (
