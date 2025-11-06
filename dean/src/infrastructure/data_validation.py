@@ -76,6 +76,9 @@ class FieldValidator:
         # Apply default if value is None or empty
         if (value is None or value == '') and self.default is not None:
             return self.default
+        # Convert empty strings to None for optional fields (to match database NULL)
+        if value == '' and not self.required:
+            return None
         return value
 
 class StringValidator(FieldValidator):
@@ -113,11 +116,15 @@ class StringValidator(FieldValidator):
         
         return errors
     
-    def sanitize(self, value: Any) -> str:
+    def sanitize(self, value: Any) -> Optional[str]:
         """Sanitize string value."""
-        if value is None:
+        if value is None or value == '':
             if self.default is not None:
                 return str(self.default)
+            # For optional fields, return None (becomes NULL in database)
+            # For required fields, return empty string (will be caught by validation)
+            if not self.required:
+                return None
             return ""
         return str(value).strip()
 

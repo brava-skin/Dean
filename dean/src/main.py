@@ -555,10 +555,12 @@ def _calculate_stage_duration_hours(ad_id: str, current_stage: str) -> float:
         return 0.0
 
 
-def _get_previous_stage(ad_id: str, current_stage: str) -> str:
+def _get_previous_stage(ad_id: str, current_stage: str) -> Optional[str]:
     """Get the previous stage in the lifecycle - ASC+ only."""
-    # ASC+ is the only stage - no previous stage
-    return 'asc_plus'
+    # For new ads in ASC+ stage, there is no previous stage
+    # Only return a previous stage if the ad actually transitioned from another stage
+    # For now, ASC+ is the only stage, so new ads have no previous stage
+    return None
 
 
 def _get_stage_performance(ad_data: Dict[str, Any], stage: str) -> Dict[str, Any]:
@@ -713,6 +715,7 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             return
         
         # Prepare lifecycle data - validation will happen automatically
+        # For new ads, previous_stage should be None (not empty string)
         lifecycle_data = {
             'ad_id': ad_data.get('ad_id', ''),
             'creative_id': ad_data.get('creative_id', ''),
@@ -721,7 +724,12 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             'stage': stage,
             'status': ad_data.get('status', 'active'),
             'lifecycle_id': ad_data.get('lifecycle_id', ''),
-            'metadata': ad_data.get('metadata', {})
+            'metadata': ad_data.get('metadata', {}),
+            'previous_stage': None,  # New ads have no previous stage
+            'next_stage': None,  # Will be set when transitioning
+            'stage_duration_hours': None,  # Will be calculated over time
+            'stage_performance': None,  # Will be populated with performance data
+            'transition_reason': None,  # No transition for new ads
         }
         
         # Insert lifecycle data with automatic validation
