@@ -1041,22 +1041,28 @@ def run_asc_plus_tick(
                         except (AttributeError, ValueError, TypeError) as e:
                             logger.debug(f"Failed to get ML insights: {e}")
                 
-                # SMART: Only generate 1 creative at a time
-                remaining_needed = target_count - active_count
-                if remaining_needed > 0:
-                    logger.info(f"📸 Standard generation: Generating EXACTLY 1 smart creative using ML insights (need {remaining_needed} more, have {active_count} active)")
+                    # Generate creatives until target is reached (but max 5 attempts per tick to avoid infinite loops)
+                    remaining_needed = target_count - active_count
+                    max_attempts = min(remaining_needed, 5)  # Don't try more than 5 times per tick
+                    attempts = 0
                     
-                    try:
-                        # Generate exactly 1 creative with ML insights
-                        creative_data = image_generator.generate_creative(
-                            product_info,
-                            creative_style=f"smart_creative_{active_count + created_count + 1}",
-                        )
+                    while active_count < target_count and attempts < max_attempts:
+                        attempts += 1
+                        remaining_needed = target_count - active_count
+                        logger.info(f"📸 Standard generation: Generating creative {attempts}/{max_attempts} (need {remaining_needed} more, have {active_count} active)")
                         
-                        if not creative_data:
-                            failed_count += 1
-                            failed_reasons.append("Standard generation: Generation returned None")
-                        else:
+                        try:
+                            # Generate exactly 1 creative with ML insights
+                            creative_data = image_generator.generate_creative(
+                                product_info,
+                                creative_style=f"smart_creative_{active_count + created_count + 1}",
+                            )
+                            
+                            if not creative_data:
+                                failed_count += 1
+                                failed_reasons.append(f"Standard generation attempt {attempts}: Generation returned None")
+                                continue
+                            
                             # Create creative in Meta
                             creative_id, ad_id, success = _create_creative_and_ad(
                                 client=client,
@@ -1094,7 +1100,7 @@ def run_asc_plus_tick(
                                 active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
                                 active_count = len(active_ads)
                                 
-                                logger.info(f"✅ Created creative - now {active_count}/{target_count} active")
+                                logger.info(f"✅ Created creative {attempts}/{max_attempts} - now {active_count}/{target_count} active")
                                 
                                 # Check if we've reached target - if so, break out of loop
                                 if active_count >= target_count:
@@ -1115,10 +1121,10 @@ def run_asc_plus_tick(
                                             )
                                         except (AttributeError, ValueError, TypeError):
                                             pass
-                    except Exception as e:
-                        logger.warning(f"Failed to generate creative: {e}")
-                        failed_count += 1
-                        failed_reasons.append(f"Standard generation: {str(e)[:50]}")
+                        except Exception as e:
+                            logger.error(f"Standard generation attempt {attempts} failed: {e}", exc_info=True)
+                            failed_count += 1
+                            failed_reasons.append(f"Standard generation attempt {attempts}: {str(e)[:50]}")
             
             # Final check of active count
             ads = client.list_ads_in_adset(adset_id)
