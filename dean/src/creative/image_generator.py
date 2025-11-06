@@ -1509,13 +1509,31 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                 "C:/Windows/Fonts/arialbd.ttf",  # Windows fallback
             ]
             
-            # Try to find Poppins font (preferred) or fallback to system sans-serif
+            # Try to find Poppins Bold font (preferred for increased weight) or regular Poppins, then fallback to system sans-serif
             font_path = None
-            for fp in font_paths:
-                expanded_path = Path(fp).expanduser()  # Expand ~ to home directory
+            # First try to find Poppins Bold variants
+            bold_font_paths = [
+                "/System/Library/Fonts/Supplemental/Poppins-Bold.ttf",
+                "/usr/share/fonts/truetype/poppins/Poppins-Bold.ttf",
+                "~/.fonts/Poppins-Bold.ttf",
+                "/Library/Fonts/Poppins-Bold.ttf",
+                "C:/Windows/Fonts/poppins-bold.ttf",
+            ]
+            for fp in bold_font_paths:
+                expanded_path = Path(fp).expanduser()
                 if expanded_path.exists():
                     font_path = str(expanded_path)
+                    logger.info(f"Using Poppins Bold font: {font_path}")
                     break
+            
+            # If no bold variant found, try regular Poppins
+            if not font_path:
+                for fp in font_paths:
+                    expanded_path = Path(fp).expanduser()
+                    if expanded_path.exists():
+                        font_path = str(expanded_path)
+                        logger.info(f"Using Poppins font: {font_path}")
+                        break
             
             # Calculate appropriate font size based on text length and image dimensions
             # Get image dimensions first
@@ -1576,12 +1594,14 @@ Ensure all text meets character limits and maintains calm confidence tone."""
             
             # Build drawtext filter with premium styling and increased font weight
             # Use elegant shadows for depth and readability (no background box)
-            # Font weight: bold (700) for premium, luxury feel
+            # Font weight: Using bold font file for premium, luxury feel (ffmpeg doesn't support fontweight parameter)
+            # Add text outline/stroke for additional weight if bold font not available
             drawtext_filter = (
                 f"drawtext=text='{escaped_wrapped}'"
                 f":fontsize={fontsize}"
                 f":fontcolor=white"
-                f":fontweight=bold"  # Increased font weight for premium feel
+                f":borderw=1"  # Add subtle border for increased weight
+                f":bordercolor=black@0.3"  # Subtle border color
                 f":x=(w-text_w)/2"  # Center horizontally
                 f":y=h-th-{bottom_margin}"  # Bottom with margin
                 # Premium shadow for depth and readability (soft, elegant)
@@ -1627,7 +1647,8 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                     f"drawtext=text='{escaped_wrapped}'"
                     f":fontsize={fontsize}"
                     f":fontcolor=white"
-                    f":fontweight=bold"  # Increased font weight for premium feel
+                    f":borderw=1"  # Add subtle border for increased weight
+                    f":bordercolor=black@0.3"  # Subtle border color
                     f":x=(w-text_w)/2"
                     f":y=h-th-{bottom_margin}"
                     f":shadowcolor=black@0.8"
