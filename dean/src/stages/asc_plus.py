@@ -887,7 +887,8 @@ def run_asc_plus_tick(
                 ml_system=ml_system,
             )
             
-            # If we found a queued creative, use it instead of generating
+            # If we found a queued creative, use it first (but continue if we need more)
+            created_count = 0  # Track total ads created this tick
             if queued_creative:
                 logger.info(f"✅ Using queued creative: {queued_creative.get('creative_id')}")
                 notify(f"📦 Using queued creative (need {needed_count} more, have {active_count} active)")
@@ -928,17 +929,33 @@ def run_asc_plus_tick(
                     logger.info(f"✅ Successfully used queued creative {storage_creative_id} for ad {ad_id}")
                     notify(f"✅ Created ad {ad_id} using queued creative")
                     
-                    # Return early - we used a queued creative, no generation needed
-                    return {
-                        "campaign_id": campaign_id,
-                        "adset_id": adset_id,
-                        "active_count": active_count + 1,
-                        "target_count": target_count,
-                        "created_count": 1,
-                        "killed_count": killed_count,
-                    }
+                    # Update active count after creating ad
+                    try:
+                        active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
+                        logger.info(f"📊 Active ads after queued creative: {active_count}/{target_count}")
+                    except Exception as e:
+                        logger.debug(f"Failed to refresh active count: {e}")
+                        active_count += 1  # Fallback: increment by 1
+                    
+                    # Check if we've reached target - if so, we're done
+                    if active_count >= target_count:
+                        logger.info(f"✅ Reached target: {active_count}/{target_count} active creatives after queued creative")
+                        return {
+                            "campaign_id": campaign_id,
+                            "adset_id": adset_id,
+                            "active_count": active_count,
+                            "target_count": target_count,
+                            "created_count": 1,
+                            "killed_count": killed_count,
+                        }
+                    else:
+                        # Still need more ads - continue to generation logic below
+                        needed_count = max(0, target_count - active_count)
+                        logger.info(f"📊 Still need {needed_count} more ads (have {active_count}, target {target_count}) - continuing to generation")
+                        created_count = 1  # Track that we created 1 from queue
                 else:
                     logger.warning(f"Failed to create ad with queued creative, will generate new one")
+                    created_count = 0  # No ads created yet
                     # Continue to generation below
             
             # STEP 2: No queued creative available - generate exactly 1
@@ -978,7 +995,9 @@ def run_asc_plus_tick(
                 "target_audience": product_config.get("target_audience", "Men aged 18-54"),
             }
             
-            created_count = 0
+            # Initialize counters (created_count may already be set if we used a queued creative)
+            if 'created_count' not in locals():
+                created_count = 0
             failed_count = 0
             failed_reasons = []
             max_attempts = needed_count * 3  # Allow up to 3x attempts in case of failures
@@ -1341,17 +1360,25 @@ def run_asc_plus_tick(
                                     except Exception as e:
                                         logger.warning(f"Failed to mark creative as active: {e}")
                                 
-                                # Refresh active count after creation
-                                ads = client.list_ads_in_adset(adset_id)
-                                active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
-                                active_count = len(active_ads)
+                                # Refresh active count after creation using improved method
+                                try:
+                                    active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
+                                    logger.info(f"📊 Active ads after creation: {active_count}/{target_count}")
+                                except Exception as e:
+                                    logger.debug(f"Failed to refresh active count, using direct list: {e}")
+                                    ads = client.list_ads_in_adset(adset_id)
+                                    active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
+                                    active_count = len(active_ads)
                                 
                                 logger.info(f"✅ Created creative {attempts}/{max_attempts} - now {active_count}/{target_count} active")
                                 
                                 # Check if we've reached target - if so, break out of loop
                                 if active_count >= target_count:
-                                    logger.info(f"✅ Reached target: {active_count}/{target_count} active creatives")
+                                    logger.info(f"✅ Reached target: {active_count}/{target_count} active creatives - stopping generation")
                                     break  # Stop generating
+                                else:
+                                    remaining_needed = target_count - active_count
+                                    logger.info(f"📊 Still need {remaining_needed} more ads - continuing generation")
                             else:
                                 failed_count += 1
                                 if creative_id:
