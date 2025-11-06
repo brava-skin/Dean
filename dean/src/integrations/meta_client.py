@@ -1703,20 +1703,29 @@ class MetaClient:
                 logger.warning(f"Invalid Instagram actor ID format: {ig_id} - skipping")
         
         # Add tracking specs for shop destination/conversion tracking
+        # For Advantage+ Shopping Campaigns, shop destination is typically set at ad set level
+        # But we can also add it at ad level for explicit control
         if tracking_specs:
             payload["tracking_specs"] = tracking_specs
             logger.info(f"Adding tracking specs for shop destination: {tracking_specs}")
         else:
-            # Default tracking specs for shop destination (if pixel ID is available)
+            # For shop destination, we might need conversion_specs instead of tracking_specs
+            # But tracking_specs with pixel is also valid for conversion tracking
             pixel_id = os.getenv("FB_PIXEL_ID")
             if pixel_id:
+                # Add tracking specs for purchase conversions (shop destination)
                 payload["tracking_specs"] = [
                     {
                         "action_type": "purchase",
                         "fb_pixel": [pixel_id]
                     }
                 ]
-                logger.info(f"Added default tracking specs with pixel ID: {pixel_id}")
+                logger.info(f"Added tracking specs with pixel ID for shop destination: {pixel_id}")
+            
+            # Note: Shop destination is primarily controlled by:
+            # 1. Ad set level: catalog_id and conversion_location
+            # 2. Campaign objective: SALES with Advantage+ Shopping Campaign
+            # The tracking_specs here are for conversion tracking, not destination selection
 
         if self.dry_run or not self.cfg.enable_creative_uploads:
             # Use original_ad_id if provided for ID continuity, otherwise generate new ID
