@@ -624,7 +624,12 @@ def run_asc_plus_tick(
             
             # Initialize image generator with ML system
             from creative.image_generator import create_image_generator
-            image_generator = create_image_generator(ml_system=ml_system)
+            import os
+            image_generator = create_image_generator(
+                flux_api_key=os.getenv("FLUX_API_KEY"),
+                openai_api_key=os.getenv("OPENAI_API_KEY"),
+                ml_system=ml_system,
+            )
             
             # Initialize advanced ML system if available
             advanced_ml = None
