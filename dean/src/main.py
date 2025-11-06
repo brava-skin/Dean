@@ -2386,18 +2386,20 @@ def main() -> None:
                 now = datetime.now(local_tz)
                 midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
                 
-                # Build filtering - use ASC+ adset ID if available, otherwise filter by status only
+                # Build filtering - use ASC+ adset ID if available
+                # Note: ad.status is not a valid filter field, use ad.effective_status instead
                 asc_plus_adset_id = settings.get("ids", {}).get("asc_plus_adset_id")
-                filtering_today = [{"field": "ad.status", "operator": "IN", "value": ["ACTIVE"]}]
+                filtering_today = []
                 filtering_lifetime = []
                 
                 # Only add adset filter if we have a valid adset ID
                 if asc_plus_adset_id:
-                    filtering_today.insert(0, {"field": "adset.id", "operator": "IN", "value": [asc_plus_adset_id]})
+                    filtering_today = [{"field": "adset.id", "operator": "IN", "value": [asc_plus_adset_id]}]
                     filtering_lifetime = [{"field": "adset.id", "operator": "IN", "value": [asc_plus_adset_id]}]
+                # Note: We can't filter by ad status in insights API - we'll filter results after fetching
                 
-                # Get today's data for ACTIVE ads only
-                rows_today = client.get_ad_insights(
+                # Get today's data - filter by adset only (can't filter by status in insights API)
+                rows_today_raw = client.get_ad_insights(
                     level="ad",
                     filtering=filtering_today,
                     fields=["ad_id", "ad_name", "spend", "actions"],
@@ -2407,7 +2409,21 @@ def main() -> None:
                     },
                     action_attribution_windows=list(attr_windows),
                     paginate=True
-                )
+                ) or []
+                
+                # Filter to only ACTIVE ads (we can't do this in API filtering)
+                # Get active ad IDs from Meta API
+                try:
+                    active_ad_ids = set()
+                    if asc_plus_adset_id:
+                        active_ads = client.list_ads_in_adset(asc_plus_adset_id)
+                        active_ad_ids = {str(ad.get("id", "")) for ad in active_ads if str(ad.get("status", "")).upper() == "ACTIVE"}
+                    
+                    # Filter insights to only active ads
+                    rows_today = [r for r in rows_today_raw if str(r.get("ad_id", "")) in active_ad_ids] if active_ad_ids else rows_today_raw
+                except Exception as e:
+                    logger.warning(f"Failed to filter active ads, using all: {e}")
+                    rows_today = rows_today_raw
                 
                 # Get lifetime data
                 rows_lifetime = client.get_ad_insights(
@@ -2420,7 +2436,7 @@ def main() -> None:
                     },
                     action_attribution_windows=list(attr_windows),
                     paginate=True
-                )
+                ) or []
                 
                 # Build snapshot using helper
                 from integrations import build_ads_snapshot

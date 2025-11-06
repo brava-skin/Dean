@@ -1,9 +1,10 @@
 name: Dean ASC+ Campaign Automation
 
 on:
-  schedule:
-    # Run every 30 minutes for ASC+ campaign monitoring
-    - cron: '*/30 * * * *'
+  # DISABLED: Schedule disabled until all issues are resolved
+  # schedule:
+  #   # Run every 30 minutes for ASC+ campaign monitoring
+  #   - cron: '*/30 * * * *'
   workflow_dispatch: # Allow manual runs for testing
 
 jobs:

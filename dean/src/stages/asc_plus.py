@@ -1138,6 +1138,11 @@ def run_asc_plus_tick(
                         if len(performance_data) >= 3:
                             budget_engine = create_budget_scaling_engine()
                             current_budget = cfg_or_env_f(cfg(settings, "asc_plus") or {}, "daily_budget_eur", "ASC_PLUS_BUDGET", 50.0)
+                            # Ensure current_budget is a float (cfg_or_env_f might return string)
+                            try:
+                                current_budget = float(current_budget) if current_budget is not None else 50.0
+                            except (ValueError, TypeError):
+                                current_budget = 50.0
                             
                             decision = budget_engine.get_budget_recommendation(
                                 campaign_id=campaign_id,
@@ -1148,11 +1153,18 @@ def run_asc_plus_tick(
                                 min_budget=ASC_PLUS_BUDGET_MIN,
                             )
                             
-                            if decision.recommended_budget != current_budget and decision.confidence > 0.7:
-                                budget_change_pct = ((decision.recommended_budget - current_budget) / current_budget) * 100
+                            # Ensure recommended_budget is also a float
+                            try:
+                                recommended_budget = float(decision.recommended_budget) if decision.recommended_budget is not None else current_budget
+                            except (ValueError, TypeError, AttributeError):
+                                recommended_budget = current_budget
+                            
+                            if recommended_budget != current_budget and decision.confidence > 0.7:
+                                budget_change_pct = ((recommended_budget - current_budget) / current_budget) * 100
                                 if abs(budget_change_pct) > 10:  # Only adjust if >10% change
-                                    logger.info(f"Budget scaling recommendation: €{current_budget:.2f} -> €{decision.recommended_budget:.2f} ({budget_change_pct:+.1f}%)")
-                                    notify(f"💡 Budget scaling: €{current_budget:.2f} -> €{decision.recommended_budget:.2f} ({decision.reason}, confidence: {decision.confidence:.1%})")
+                                    logger.info(f"Budget scaling recommendation: €{current_budget:.2f} -> €{recommended_budget:.2f} ({budget_change_pct:+.1f}%)")
+                                    reason = getattr(decision, 'reason', 'performance-based')
+                                    notify(f"💡 Budget scaling: €{current_budget:.2f} -> €{recommended_budget:.2f} ({reason}, confidence: {decision.confidence:.1%})")
                 except Exception as e:
                     logger.warning(f"Budget scaling error: {e}")
             
