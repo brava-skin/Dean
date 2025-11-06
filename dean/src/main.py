@@ -2521,7 +2521,7 @@ def main() -> None:
             notify(f"⚠️ Table monitoring failed: {e}")
 
     # Console summary (logs only, not Slack)
-    from datetime import datetime
+    # datetime already imported at module level - use it directly
     import pytz
     amsterdam_tz = pytz.timezone('Europe/Amsterdam')
     amsterdam_time = datetime.now(amsterdam_tz).strftime('%Y-%m-%d %H:%M:%S %Z')
