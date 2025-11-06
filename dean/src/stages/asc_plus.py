@@ -1002,11 +1002,6 @@ def run_asc_plus_tick(
                     active_count = len(active_ads)
                     
                     # Check if we've reached the target - if so, stop
-                    # Refresh active_count to get latest status
-                    ads = client.list_ads_in_adset(adset_id)
-                    active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
-                    active_count = len(active_ads)
-                    
                     if active_count >= target_count:
                         logger.info(f"✅ Reached target: {active_count}/{target_count} active creatives - STOPPING")
                         skip_standard_generation = True
