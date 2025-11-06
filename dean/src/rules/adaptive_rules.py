@@ -782,6 +782,378 @@ class IntelligentRuleEngine:
             return False
 
 # =====================================================
+# ADVANCED RULE MINING AND GENERATION
+# =====================================================
+
+class RuleMiner:
+    """Mines rules from historical performance data."""
+    
+    def __init__(self, min_support: float = 0.3, min_confidence: float = 0.7):
+        self.min_support = min_support
+        self.min_confidence = min_confidence
+        self.logger = logging.getLogger(f"{__name__}.RuleMiner")
+    
+    def mine_rules(
+        self,
+        performance_data: pd.DataFrame,
+        target_metric: str = "should_kill",
+    ) -> List[Dict[str, Any]]:
+        """Mine rules from performance data using association rule mining."""
+        if performance_data.empty or len(performance_data) < 20:
+            return []
+        
+        try:
+            rules = []
+            
+            # Discretize continuous features
+            df_discretized = self._discretize_features(performance_data.copy())
+            
+            # Mine rules for kill decisions
+            if target_metric == "should_kill":
+                rules.extend(self._mine_kill_rules(df_discretized))
+            
+            # Mine rules for promotion decisions
+            if target_metric == "should_promote":
+                rules.extend(self._mine_promote_rules(df_discretized))
+            
+            # Filter by support and confidence
+            filtered_rules = [
+                r for r in rules
+                if r.get("support", 0) >= self.min_support
+                and r.get("confidence", 0) >= self.min_confidence
+            ]
+            
+            self.logger.info(f"Mined {len(filtered_rules)} rules from {len(performance_data)} records")
+            return filtered_rules
+            
+        except Exception as e:
+            self.logger.error(f"Rule mining failed: {e}")
+            return []
+    
+    def _discretize_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Discretize continuous features for rule mining."""
+        # Discretize CPA
+        if "cpa" in df.columns:
+            df["cpa_level"] = pd.cut(
+                df["cpa"],
+                bins=[0, 20, 30, 40, 1000],
+                labels=["low", "medium", "high", "very_high"],
+            )
+        
+        # Discretize ROAS
+        if "roas" in df.columns:
+            df["roas_level"] = pd.cut(
+                df["roas"],
+                bins=[0, 0.8, 1.5, 2.5, 100],
+                labels=["very_low", "low", "medium", "high"],
+            )
+        
+        # Discretize CTR
+        if "ctr" in df.columns:
+            df["ctr_level"] = pd.cut(
+                df["ctr"] * 100,  # Convert to percentage
+                bins=[0, 0.5, 1.0, 2.0, 100],
+                labels=["very_low", "low", "medium", "high"],
+            )
+        
+        return df
+    
+    def _mine_kill_rules(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
+        """Mine rules for kill decisions."""
+        rules = []
+        
+        # Rule: High CPA -> Kill
+        if "cpa_level" in df.columns:
+            high_cpa = df[df["cpa_level"].isin(["high", "very_high"])]
+            if len(high_cpa) > 0:
+                support = len(high_cpa) / len(df)
+                # Assume high CPA leads to kill (would need actual kill data)
+                confidence = 0.8  # Placeholder
+                rules.append({
+                    "condition": "cpa_level in ['high', 'very_high']",
+                    "action": "kill",
+                    "support": support,
+                    "confidence": confidence,
+                    "rule_type": "cpa_based",
+                })
+        
+        # Rule: Low ROAS + Low CTR -> Kill
+        if "roas_level" in df.columns and "ctr_level" in df.columns:
+            low_performance = df[
+                (df["roas_level"].isin(["very_low", "low"])) &
+                (df["ctr_level"].isin(["very_low", "low"]))
+            ]
+            if len(low_performance) > 0:
+                support = len(low_performance) / len(df)
+                confidence = 0.85
+                rules.append({
+                    "condition": "roas_level in ['very_low', 'low'] AND ctr_level in ['very_low', 'low']",
+                    "action": "kill",
+                    "support": support,
+                    "confidence": confidence,
+                    "rule_type": "performance_based",
+                })
+        
+        return rules
+    
+    def _mine_promote_rules(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
+        """Mine rules for promotion decisions."""
+        rules = []
+        
+        # Rule: High ROAS + Low Spend -> Promote
+        if "roas_level" in df.columns and "spend" in df.columns:
+            high_roas_low_spend = df[
+                (df["roas_level"] == "high") &
+                (df["spend"] < df["spend"].quantile(0.5))
+            ]
+            if len(high_roas_low_spend) > 0:
+                support = len(high_roas_low_spend) / len(df)
+                confidence = 0.75
+                rules.append({
+                    "condition": "roas_level == 'high' AND spend < median",
+                    "action": "promote",
+                    "support": support,
+                    "confidence": confidence,
+                    "rule_type": "scaling_opportunity",
+                })
+        
+        return rules
+
+
+class DynamicRuleGenerator:
+    """Dynamically generates rules based on patterns."""
+    
+    def __init__(self):
+        self.generated_rules: List[Dict[str, Any]] = []
+        self.logger = logging.getLogger(f"{__name__}.DynamicRuleGenerator")
+    
+    def generate_rules(
+        self,
+        performance_patterns: Dict[str, Any],
+        market_conditions: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Generate rules based on current patterns and market conditions."""
+        rules = []
+        
+        # Generate rules based on market conditions
+        if market_conditions.get("regime") == "volatile":
+            rules.append({
+                "rule_name": "volatile_market_ctr_threshold",
+                "rule_type": "ctr_below",
+                "threshold": 0.006,  # Lower threshold in volatile market
+                "reason": "Market volatility detected - adjusting CTR threshold",
+                "confidence": 0.7,
+            })
+        
+        # Generate rules based on performance patterns
+        if performance_patterns.get("avg_roas", 0) > 2.5:
+            rules.append({
+                "rule_name": "high_performance_roas_floor",
+                "rule_type": "roas_below",
+                "threshold": 2.0,  # Higher floor for high-performing campaigns
+                "reason": "High average ROAS - raising minimum threshold",
+                "confidence": 0.8,
+            })
+        
+        # Generate rules based on trend
+        if performance_patterns.get("trend") == "declining":
+            rules.append({
+                "rule_name": "declining_trend_cpa_ceiling",
+                "rule_type": "cpa_gte",
+                "threshold": 35.0,  # Tighter CPA in declining trend
+                "reason": "Declining trend detected - tightening CPA threshold",
+                "confidence": 0.75,
+            })
+        
+        self.generated_rules.extend(rules)
+        return rules
+
+
+class RuleConfidenceScorer:
+    """Scores rule confidence based on historical performance."""
+    
+    def __init__(self):
+        self.rule_performance_history: Dict[str, List[bool]] = {}
+        self.logger = logging.getLogger(f"{__name__}.RuleConfidenceScorer")
+    
+    def score_rule_confidence(
+        self,
+        rule: Dict[str, Any],
+        historical_outcomes: List[Dict[str, Any]],
+    ) -> float:
+        """Calculate confidence score for a rule."""
+        rule_name = rule.get("rule_name", "unknown")
+        
+        if not historical_outcomes:
+            return 0.5  # Default confidence
+        
+        # Calculate accuracy
+        correct_predictions = 0
+        total_predictions = 0
+        
+        for outcome in historical_outcomes:
+            rule_decision = outcome.get("rule_decision")
+            actual_outcome = outcome.get("actual_outcome")
+            
+            if rule_decision and actual_outcome:
+                if rule_decision == actual_outcome:
+                    correct_predictions += 1
+                total_predictions += 1
+        
+        if total_predictions == 0:
+            return 0.5
+        
+        accuracy = correct_predictions / total_predictions
+        
+        # Adjust for sample size
+        sample_size_factor = min(1.0, total_predictions / 50.0)
+        
+        confidence = accuracy * sample_size_factor
+        
+        # Store for tracking
+        if rule_name not in self.rule_performance_history:
+            self.rule_performance_history[rule_name] = []
+        self.rule_performance_history[rule_name].append(confidence > 0.7)
+        
+        return confidence
+    
+    def get_rule_reliability(self, rule_name: str) -> float:
+        """Get overall reliability of a rule."""
+        if rule_name not in self.rule_performance_history:
+            return 0.5
+        
+        history = self.rule_performance_history[rule_name]
+        if not history:
+            return 0.5
+        
+        reliability = sum(history) / len(history)
+        return reliability
+
+
+class RuleConflictResolver:
+    """Resolves conflicts between competing rules."""
+    
+    def __init__(self):
+        self.logger = logging.getLogger(f"{__name__}.RuleConflictResolver")
+    
+    def resolve_conflicts(
+        self,
+        rule_decisions: List[RuleDecision],
+        confidence_scorer: Optional[RuleConfidenceScorer] = None,
+    ) -> RuleDecision:
+        """Resolve conflicts between multiple rule decisions."""
+        if not rule_decisions:
+            return RuleDecision(
+                rule_name="no_rules",
+                decision="hold",
+                confidence=0.0,
+                reasoning="No rules to evaluate",
+                ml_predictions={},
+                threshold_adjustments={},
+                created_at=now_utc(),
+            )
+        
+        # Group by decision
+        decision_groups: Dict[str, List[RuleDecision]] = {}
+        for decision in rule_decisions:
+            decision_type = decision.decision
+            if decision_type not in decision_groups:
+                decision_groups[decision_type] = []
+            decision_groups[decision_type].append(decision)
+        
+        # Score each decision group
+        scored_groups = []
+        for decision_type, decisions in decision_groups.items():
+            # Average confidence
+            avg_confidence = np.mean([d.confidence for d in decisions])
+            
+            # Weight by rule confidence if scorer available
+            if confidence_scorer:
+                rule_confidences = [
+                    confidence_scorer.get_rule_reliability(d.rule_name)
+                    for d in decisions
+                ]
+                weighted_confidence = np.mean([
+                    d.confidence * rc
+                    for d, rc in zip(decisions, rule_confidences)
+                ])
+                avg_confidence = weighted_confidence
+            
+            # Count votes
+            vote_count = len(decisions)
+            
+            scored_groups.append({
+                "decision": decision_type,
+                "confidence": avg_confidence,
+                "votes": vote_count,
+                "decisions": decisions,
+            })
+        
+        # Select best decision
+        if not scored_groups:
+            return rule_decisions[0]
+        
+        # Sort by confidence and votes
+        scored_groups.sort(
+            key=lambda x: (x["confidence"], x["votes"]),
+            reverse=True,
+        )
+        
+        best_group = scored_groups[0]
+        
+        # Combine reasoning
+        reasoning_parts = [d.reasoning for d in best_group["decisions"]]
+        combined_reasoning = f"{best_group['decision']} (confidence: {best_group['confidence']:.2f}, votes: {best_group['votes']})"
+        combined_reasoning += ". " + "; ".join(reasoning_parts[:3])  # Limit to 3 reasons
+        
+        # Combine ML predictions
+        combined_ml = {}
+        for decision in best_group["decisions"]:
+            combined_ml.update(decision.ml_predictions)
+        
+        # Combine threshold adjustments
+        combined_thresholds = {}
+        for decision in best_group["decisions"]:
+            combined_thresholds.update(decision.threshold_adjustments)
+        
+        return RuleDecision(
+            rule_name="resolved_conflict",
+            decision=best_group["decision"],
+            confidence=best_group["confidence"],
+            reasoning=combined_reasoning,
+            ml_predictions=combined_ml,
+            threshold_adjustments=combined_thresholds,
+            created_at=now_utc(),
+        )
+    
+    def detect_conflicts(self, rule_decisions: List[RuleDecision]) -> List[Dict[str, Any]]:
+        """Detect conflicts between rule decisions."""
+        conflicts = []
+        
+        # Group by decision type
+        decision_types = set(d.decision for d in rule_decisions)
+        
+        if len(decision_types) > 1:
+            # Conflict detected
+            conflict_details = {}
+            for decision_type in decision_types:
+                matching_decisions = [d for d in rule_decisions if d.decision == decision_type]
+                conflict_details[decision_type] = {
+                    "count": len(matching_decisions),
+                    "avg_confidence": np.mean([d.confidence for d in matching_decisions]),
+                    "rules": [d.rule_name for d in matching_decisions],
+                }
+            
+            conflicts.append({
+                "conflict_type": "decision_mismatch",
+                "details": conflict_details,
+                "severity": "high" if len(decision_types) >= 3 else "medium",
+            })
+        
+        return conflicts
+
+
+# =====================================================
 # CONVENIENCE FUNCTIONS
 # =====================================================
 

@@ -397,7 +397,7 @@ def ensure_asc_plus_campaign(
             daily_budget = ASC_PLUS_BUDGET_MAX
         
         # Verify budget matches target active ads
-        target_ads = cfg(settings, "asc_plus.target_active_ads") or 5
+        target_ads = cfg(settings, "asc_plus.target_active_ads") or 10
         budget_per_creative = daily_budget / target_ads if target_ads > 0 else daily_budget
         min_budget_per_creative = cfg_or_env_f(asc_config, "min_budget_per_creative_eur", None, ASC_PLUS_MIN_BUDGET_PER_CREATIVE)
         
@@ -432,15 +432,32 @@ def ensure_asc_plus_campaign(
             notify("❌ Failed to create ASC+ adset")
             return None, None
         
-        # Verify budget was set correctly
+        # Verify budget was set correctly and ensure it's at least base budget
+        base_budget = 50.0
         try:
             adset_budget = client.get_adset_budget(adset_id)
-            if adset_budget and abs(adset_budget - daily_budget) > 0.01:
-                notify(f"⚠️ Budget mismatch: requested €{daily_budget:.2f}, got €{adset_budget:.2f}")
+            if adset_budget:
+                # If existing adset has budget below base, restore to base
+                if adset_budget < base_budget:
+                    logger.info(f"Restoring adset budget from €{adset_budget:.2f} to base €{base_budget:.2f}")
+                    try:
+                        client.update_adset_budget(
+                            adset_id=adset_id,
+                            daily_budget=base_budget,
+                            current_budget=adset_budget,
+                        )
+                        notify(f"✅ Restored adset budget to base: €{base_budget:.2f}/day")
+                        adset_budget = base_budget
+                    except Exception as e:
+                        logger.warning(f"Failed to restore base budget: {e}")
+                elif abs(adset_budget - daily_budget) > 0.01:
+                    # Budget mismatch but above base - log but don't change (might be scaled)
+                    logger.debug(f"Budget mismatch: requested €{daily_budget:.2f}, got €{adset_budget:.2f} (may be scaled)")
         except Exception:
             pass
         
-        notify(f"✅ ASC+ campaign created: {campaign_id}, adset: {adset_id}, budget: €{daily_budget:.2f}/day")
+        final_budget = adset_budget if 'adset_budget' in locals() and adset_budget else daily_budget
+        notify(f"✅ ASC+ campaign ready: {campaign_id}, adset: {adset_id}, budget: €{final_budget:.2f}/day")
         return campaign_id, adset_id
         
     except Exception as e:
@@ -514,7 +531,7 @@ def run_asc_plus_tick(
         active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
         active_count = len(active_ads)
         
-        target_count = cfg(settings, "asc_plus.target_active_ads") or 5
+        target_count = cfg(settings, "asc_plus.target_active_ads") or 10
         
         # Get insights for current ads (with caching)
         from infrastructure.caching import cache_manager
@@ -793,6 +810,15 @@ def run_asc_plus_tick(
                     ml_system=ml_system,
                 )
             
+            # Initialize template library for faster creative generation
+            template_library = None
+            try:
+                from creative.advanced_creative import create_template_library
+                template_library = create_template_library()
+                logger.info("✅ Creative template library initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize template library: {e}")
+            
             # Initialize advanced ML system if available
             advanced_ml = None
             if ADVANCED_ML_AVAILABLE and ml_system:
@@ -1057,11 +1083,87 @@ def run_asc_plus_tick(
                         logger.info(f"📸 Standard generation: Generating creative {attempts}/{max_attempts} (need {remaining_needed} more, have {active_count} active)")
                         
                         try:
-                            # Generate exactly 1 creative with ML insights
+                            # Use template library if available for faster generation
+                            template_to_use = None
+                            if template_library:
+                                try:
+                                    top_templates = template_library.get_top_templates(top_k=3)
+                                    if top_templates:
+                                        # Use top performing template
+                                        template_to_use = top_templates[0]
+                                        logger.info(f"📋 Using template: {template_to_use.name} (score: {template_to_use.performance_score:.2f})")
+                                except Exception as e:
+                                    logger.debug(f"Template selection failed: {e}")
+                            
+                            # Generate exactly 1 creative with ML insights and template
                             creative_data = image_generator.generate_creative(
                                 product_info,
                                 creative_style=f"smart_creative_{active_count + created_count + 1}",
                             )
+                            
+                            # Apply template structure if available
+                            if template_to_use and creative_data:
+                                try:
+                                    template_structure = template_to_use.structure
+                                    # Apply template structure to creative data
+                                    if "ad_copy" in template_structure:
+                                        creative_data["ad_copy"] = {**creative_data.get("ad_copy", {}), **template_structure["ad_copy"]}
+                                    if "image_prompt" in template_structure:
+                                        creative_data["image_prompt"] = template_structure["image_prompt"]
+                                    logger.info(f"✅ Applied template structure to creative")
+                                except Exception as e:
+                                    logger.warning(f"Failed to apply template: {e}")
+                            
+                            # Performance forecasting using ML system
+                            if ml_system and creative_data and hasattr(ml_system, 'predict_creative_performance'):
+                                try:
+                                    from ml.creative_dna import CreativeDNAAnalyzer
+                                    from infrastructure.supabase_storage import get_validated_supabase_client
+                                    
+                                    supabase_client = get_validated_supabase_client()
+                                    if supabase_client:
+                                        dna_analyzer = CreativeDNAAnalyzer(supabase_client=supabase_client)
+                                        
+                                        # Create DNA for new creative with enhanced metadata
+                                        enhanced_metadata = {
+                                            "format": creative_data.get("format", "static_image"),
+                                            "style": creative_data.get("style", ""),
+                                            "message_type": creative_data.get("message_type", ""),
+                                            "target_motivation": creative_data.get("target_motivation", ""),
+                                            "forecasted_roas": creative_data.get("forecasted_roas"),
+                                            "forecasted_ctr": creative_data.get("forecasted_ctr"),
+                                            "forecast_confidence": creative_data.get("forecast_confidence"),
+                                        }
+                                        
+                                        dna = dna_analyzer.create_creative_dna(
+                                            creative_id=creative_data.get("creative_id", "temp"),
+                                            ad_id="temp",
+                                            image_prompt=creative_data.get("image_prompt", ""),
+                                            text_overlay=creative_data.get("text_overlay", ""),
+                                            ad_copy=creative_data.get("ad_copy", {}),
+                                            performance_data=None,
+                                            enhanced_metadata=enhanced_metadata,
+                                        )
+                                        
+                                        # Find similar high-performing creatives
+                                        similar_creatives = dna_analyzer.find_similar_creatives(
+                                            creative_id=dna.creative_id,
+                                            top_k=5,
+                                            min_similarity=0.6,
+                                        )
+                                        
+                                        if similar_creatives:
+                                            # Forecast performance based on similar creatives
+                                            avg_roas = sum(c[0].roas for c in similar_creatives) / len(similar_creatives)
+                                            avg_ctr = sum(c[0].ctr for c in similar_creatives) / len(similar_creatives)
+                                            
+                                            creative_data["forecasted_roas"] = avg_roas
+                                            creative_data["forecasted_ctr"] = avg_ctr
+                                            creative_data["forecast_confidence"] = sum(c[1] for c in similar_creatives) / len(similar_creatives)
+                                            
+                                            logger.info(f"🔮 Performance forecast: ROAS={avg_roas:.2f}, CTR={avg_ctr:.2%}, confidence={creative_data['forecast_confidence']:.2%}")
+                                except Exception as e:
+                                    logger.debug(f"Performance forecasting failed: {e}")
                             
                             if not creative_data:
                                 failed_count += 1
@@ -1186,63 +1288,151 @@ def run_asc_plus_tick(
                                 })
                         
                         if len(performance_data) >= 3:
-                            budget_engine = create_budget_scaling_engine()
-                            current_budget = cfg_or_env_f(cfg(settings, "asc_plus") or {}, "daily_budget_eur", "ASC_PLUS_BUDGET", 50.0)
-                            # Ensure current_budget is a float (cfg_or_env_f might return string)
-                            try:
-                                current_budget = float(current_budget) if current_budget is not None else 50.0
-                            except (ValueError, TypeError):
-                                current_budget = 50.0
+                            # Get scaling configuration
+                            scaling_config = cfg(settings, "asc_plus.scaling") or {}
+                            scaling_enabled = scaling_config.get("enabled", True)
+                            min_confidence = scaling_config.get("min_confidence", 0.75)
+                            min_roas_for_scale = scaling_config.get("min_roas_for_scale", 1.5)
+                            min_purchases_for_scale = scaling_config.get("min_purchases_for_scale", 5)
+                            scale_up_threshold_pct = scaling_config.get("scale_up_threshold_pct", 20)
                             
-                            decision = budget_engine.get_budget_recommendation(
-                                campaign_id=campaign_id,
-                                performance_data=performance_data,
-                                current_budget=current_budget,
-                                strategy=ScalingStrategy.ADAPTIVE,
-                                max_budget=ASC_PLUS_BUDGET_MAX,
-                                min_budget=ASC_PLUS_BUDGET_MIN,
-                            )
-                            
-                            # Ensure recommended_budget is also a float (handle both dataclass and dict responses)
-                            try:
-                                if hasattr(decision, 'recommended_budget'):
-                                    recommended_budget = float(decision.recommended_budget) if decision.recommended_budget is not None else current_budget
-                                elif isinstance(decision, dict):
-                                    recommended_budget = float(decision.get('recommended_budget', current_budget))
+                            if not scaling_enabled:
+                                logger.debug("Budget scaling disabled in config")
+                            else:
+                                budget_engine = create_budget_scaling_engine()
+                                current_budget = cfg_or_env_f(cfg(settings, "asc_plus") or {}, "daily_budget_eur", "ASC_PLUS_BUDGET", 50.0)
+                                # Ensure current_budget is a float (cfg_or_env_f might return string)
+                                try:
+                                    current_budget = float(current_budget) if current_budget is not None else 50.0
+                                except (ValueError, TypeError):
+                                    current_budget = 50.0
+                                
+                                # Calculate aggregate performance metrics
+                                total_spend = sum(p.get("spend", 0) for p in performance_data)
+                                total_revenue = sum(p.get("revenue", 0) for p in performance_data)
+                                total_purchases = sum(p.get("purchases", 0) for p in performance_data)
+                                avg_roas = total_revenue / total_spend if total_spend > 0 else 0.0
+                                
+                                # Check if ready to scale (only scale up from €50 base budget)
+                                base_budget = 50.0
+                                ready_to_scale = (
+                                    current_budget <= base_budget and  # Only scale if at or below base budget
+                                    avg_roas >= min_roas_for_scale and  # Minimum ROAS threshold
+                                    total_purchases >= min_purchases_for_scale and  # Minimum purchases
+                                    len(performance_data) >= 3  # Minimum data points
+                                )
+                                
+                                if not ready_to_scale and current_budget <= base_budget:
+                                    logger.debug(f"Not ready to scale: ROAS={avg_roas:.2f} (need {min_roas_for_scale}), purchases={total_purchases} (need {min_purchases_for_scale})")
                                 else:
-                                    recommended_budget = current_budget
-                            except (ValueError, TypeError, AttributeError) as e:
-                                logger.warning(f"Failed to convert recommended_budget to float: {e}, using current_budget")
-                                recommended_budget = current_budget
-                            
-                            # Ensure both are floats before comparison
-                            try:
-                                current_budget_float = float(current_budget)
-                                recommended_budget_float = float(recommended_budget)
-                            except (ValueError, TypeError):
-                                logger.warning(f"Budget values not numeric: current={current_budget}, recommended={recommended_budget}")
-                                continue  # Skip this iteration
-                            
-                            if recommended_budget_float != current_budget_float and decision.confidence > 0.7:
-                                budget_change_pct = ((recommended_budget_float - current_budget_float) / current_budget_float) * 100
-                                if abs(budget_change_pct) > 10:  # Only adjust if >10% change
-                                    logger.info(f"Budget scaling recommendation: €{current_budget_float:.2f} -> €{recommended_budget_float:.2f} ({budget_change_pct:+.1f}%)")
-                                    reason = getattr(decision, 'reason', 'performance-based') if hasattr(decision, 'reason') else 'performance-based'
-                                    notify(f"💡 Budget scaling: €{current_budget_float:.2f} -> €{recommended_budget_float:.2f} ({reason}, confidence: {decision.confidence:.1%})")
+                                    decision = budget_engine.get_budget_recommendation(
+                                        campaign_id=campaign_id,
+                                        performance_data=performance_data,
+                                        current_budget=current_budget,
+                                        strategy=ScalingStrategy.ADAPTIVE,
+                                        max_budget=ASC_PLUS_BUDGET_MAX,
+                                        min_budget=base_budget,  # Don't go below base budget
+                                    )
+                                    
+                                    # Ensure recommended_budget is also a float (handle both dataclass and dict responses)
+                                    try:
+                                        if hasattr(decision, 'recommended_budget'):
+                                            recommended_budget = float(decision.recommended_budget) if decision.recommended_budget is not None else current_budget
+                                        elif isinstance(decision, dict):
+                                            recommended_budget = float(decision.get('recommended_budget', current_budget))
+                                        else:
+                                            recommended_budget = current_budget
+                                    except (ValueError, TypeError, AttributeError) as e:
+                                        logger.warning(f"Failed to convert recommended_budget to float: {e}, using current_budget")
+                                        recommended_budget = current_budget
+                                    
+                                    # Ensure both are floats before comparison
+                                    try:
+                                        current_budget_float = float(current_budget)
+                                        recommended_budget_float = float(recommended_budget)
+                                        
+                                        # Only scale up if:
+                                        # 1. Confidence is high enough
+                                        # 2. Recommended budget is higher than current (scale up only)
+                                        # 3. Change is significant (>threshold%)
+                                        # 4. At base budget or ready to scale
+                                        budget_change_pct = ((recommended_budget_float - current_budget_float) / current_budget_float) * 100
+                                        
+                                        should_scale = (
+                                            decision.confidence >= min_confidence and
+                                            recommended_budget_float > current_budget_float and  # Only scale up
+                                            budget_change_pct >= scale_up_threshold_pct and  # Significant change
+                                            ready_to_scale  # Performance criteria met
+                                        )
+                                        
+                                        if should_scale:
+                                            logger.info(f"✅ Ready to scale: €{current_budget_float:.2f} -> €{recommended_budget_float:.2f} ({budget_change_pct:+.1f}%)")
+                                            reason = getattr(decision, 'reason', 'performance-based') if hasattr(decision, 'reason') else 'performance-based'
+                                            notify(f"🚀 Budget scaling: €{current_budget_float:.2f} -> €{recommended_budget_float:.2f} ({reason}, ROAS: {avg_roas:.2f}, confidence: {decision.confidence:.1%})")
+                                            
+                                            # Actually update the budget in Meta
+                                            try:
+                                                client.update_adset_budget(
+                                                    adset_id=adset_id,
+                                                    daily_budget=recommended_budget_float,
+                                                    current_budget=current_budget_float,
+                                                )
+                                                logger.info(f"✅ Updated adset budget to €{recommended_budget_float:.2f}/day")
+                                                notify(f"✅ Budget updated: €{recommended_budget_float:.2f}/day")
+                                            except Exception as e:
+                                                logger.warning(f"Failed to update budget: {e}")
+                                        elif current_budget_float < base_budget:
+                                            # If somehow below base budget, restore to base
+                                            logger.info(f"Restoring budget to base: €{current_budget_float:.2f} -> €{base_budget:.2f}")
+                                            try:
+                                                client.update_adset_budget(
+                                                    adset_id=adset_id,
+                                                    daily_budget=base_budget,
+                                                    current_budget=current_budget_float,
+                                                )
+                                            except Exception as e:
+                                                logger.warning(f"Failed to restore base budget: {e}")
+                                        else:
+                                            logger.debug(f"Keeping budget at €{current_budget_float:.2f} (not ready to scale: ROAS={avg_roas:.2f}, purchases={total_purchases}, confidence={decision.confidence:.2%})")
+                                    except (ValueError, TypeError):
+                                        logger.warning(f"Budget values not numeric: current={current_budget}, recommended={recommended_budget}")
                 except Exception as e:
                     logger.warning(f"Budget scaling error: {e}")
             
             # Smart creative refresh - check for creatives that need refresh
+            # Enhanced with predictive fatigue detection and automated refresh execution
             if OPTIMIZATION_SYSTEMS_AVAILABLE:
                 try:
                     refresh_manager = create_creative_refresh_manager()
+                    
+                    # Get historical performance from Supabase for better fatigue prediction
+                    from infrastructure.supabase_storage import get_validated_supabase_client
+                    supabase_client = get_validated_supabase_client()
+                    historical_data = {}
+                    
+                    if supabase_client:
+                        try:
+                            # Fetch historical performance for each ad
+                            for ad in active_ads:
+                                ad_id = ad.get("id")
+                                if ad_id:
+                                    # Get last 7 days of performance data
+                                    result = supabase_client.table("performance_metrics").select(
+                                        "spend, impressions, clicks, purchases, roas, ctr, cpa, date_start"
+                                    ).eq("ad_id", ad_id).order("date_start", desc=True).limit(7).execute()
+                                    
+                                    if result.data:
+                                        historical_data[ad_id] = result.data
+                        except Exception as e:
+                            logger.warning(f"Failed to fetch historical performance: {e}")
+                    
                     creatives_for_refresh = [
                         {
                             "creative_id": ad.get("creative", {}).get("id") if isinstance(ad.get("creative"), dict) else ad.get("id"),
                             "ad_id": ad.get("id"),
                             "created_at": ad.get("created_time"),
                             "performance": next((i for i in insights if i.get("ad_id") == ad.get("id")), {}),
-                            "historical_performance": [],  # Would be populated from Supabase
+                            "historical_performance": historical_data.get(ad.get("id"), []),  # Populated from Supabase
                         }
                         for ad in active_ads
                     ]
@@ -1252,15 +1442,71 @@ def run_asc_plus_tick(
                         target_count=target_count,
                     )
                     
-                    if refresh_schedule.get("immediate_refresh") > 0:
-                        logger.info(f"Creative refresh needed: {refresh_schedule['immediate_refresh']} immediate, {refresh_schedule.get('staggered_refresh', 0)} scheduled")
+                    immediate_refresh_count = refresh_schedule.get("immediate_refresh", 0)
+                    staggered_refresh_count = refresh_schedule.get("staggered_refresh", 0)
+                    
+                    if immediate_refresh_count > 0:
+                        logger.info(f"🔄 Creative refresh needed: {immediate_refresh_count} immediate, {staggered_refresh_count} scheduled")
+                        notify(f"🔄 Refreshing {immediate_refresh_count} creatives (fatigue detected)")
+                        
+                        # Execute immediate refreshes
+                        for refresh_item in refresh_schedule.get("refresh_needed", [])[:immediate_refresh_count]:
+                            creative_id = refresh_item.get("creative_id")
+                            ad_id = refresh_item.get("ad_id")
+                            reason = refresh_item.get("reason", "fatigue")
+                            
+                            # Pause the old ad
+                            try:
+                                client._graph_post(f"{ad_id}", {"status": "PAUSED"})
+                                logger.info(f"✅ Paused ad {ad_id} for refresh: {reason}")
+                                active_count -= 1
+                                killed_count += 1
+                            except Exception as e:
+                                logger.warning(f"Failed to pause ad {ad_id} for refresh: {e}")
                     
                     # Check for scheduled refreshes due now
                     due_refreshes = refresh_manager.get_scheduled_refreshes_due()
                     if due_refreshes:
-                        logger.info(f"Executing {len(due_refreshes)} scheduled creative refreshes")
+                        logger.info(f"🔄 Executing {len(due_refreshes)} scheduled creative refreshes")
+                        notify(f"🔄 Executing {len(due_refreshes)} scheduled refreshes")
+                        
+                        # Execute scheduled refreshes
+                        for creative_id in due_refreshes:
+                            # Find the ad for this creative
+                            for ad in active_ads:
+                                ad_creative_id = ad.get("creative", {}).get("id") if isinstance(ad.get("creative"), dict) else ad.get("id")
+                                if str(ad_creative_id) == str(creative_id):
+                                    try:
+                                        client._graph_post(f"{ad.get('id')}", {"status": "PAUSED"})
+                                        logger.info(f"✅ Paused ad {ad.get('id')} for scheduled refresh")
+                                        active_count -= 1
+                                        killed_count += 1
+                                        refresh_manager.clear_scheduled_refresh(creative_id)
+                                    except Exception as e:
+                                        logger.warning(f"Failed to pause ad {ad.get('id')} for scheduled refresh: {e}")
+                                    break
+                    
+                    # Refresh buffer: Pre-generate creatives for upcoming refreshes
+                    if refresh_schedule.get("new_creatives_needed", 0) > 0:
+                        logger.info(f"📦 Pre-generating {refresh_schedule['new_creatives_needed']} creatives for refresh buffer")
+                        
+                        # Check if we should pre-generate creatives for the queue
+                        if storage_manager and storage_manager.should_pre_generate_creatives(target_count=target_count, buffer_size=3):
+                            logger.info(f"📦 Queue buffer low, will pre-generate creatives in background")
+                            notify(f"📦 Pre-generating creatives for queue buffer")
                 except Exception as e:
                     logger.warning(f"Creative refresh error: {e}")
+            
+            # Pre-generate creatives for queue if buffer is low
+            if storage_manager:
+                try:
+                    queued_count = storage_manager.get_queued_creative_count()
+                    if storage_manager.should_pre_generate_creatives(target_count=target_count, buffer_size=3):
+                        logger.info(f"📦 Queue buffer low ({queued_count} queued), pre-generating creatives")
+                        # This will be handled in the next tick or background process
+                        # For now, just log that we need more queued creatives
+                except Exception as e:
+                    logger.debug(f"Queue pre-generation check failed: {e}")
             
             # Resource optimization - optimize memory if needed
             if OPTIMIZATION_SYSTEMS_AVAILABLE:

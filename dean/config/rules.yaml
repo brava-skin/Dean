@@ -1,6 +1,6 @@
 # =====================================================
 # DEAN BUSINESS RULES - SIMPLIFIED FOR ASC+ CAMPAIGN
-# Single Advantage+ Shopping Campaign with 5 creatives
+# Single Advantage+ Shopping Campaign with 10 creatives (Andromeda requirement)
 # =====================================================
 
 version: 3.0
@@ -81,8 +81,8 @@ asc_plus:
       drop_pct: 0.25
     
     queue:
-      max_launches_per_tick: 5
-      maintain_creative_count: 5  # Always keep 5 creatives alive
+      max_launches_per_tick: 10
+      maintain_creative_count: 10  # Always keep 10 creatives alive (Andromeda requirement)
     
     attribution_windows: ["7d_click", "1d_view"]
 

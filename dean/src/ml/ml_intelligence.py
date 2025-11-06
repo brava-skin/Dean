@@ -28,6 +28,7 @@ from scipy import stats
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import time
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.preprocessing import StandardScaler, RobustScaler
 try:
@@ -47,6 +48,25 @@ except ImportError:
     VALIDATED_SUPABASE_AVAILABLE = False
 
 from infrastructure.utils import now_utc, today_ymd_account, yesterday_ymd_account
+
+# Import optimizations
+try:
+    from ml.ml_optimization import (
+        get_feature_cache, get_prediction_cache, get_optimized_trainer,
+        get_batch_predictor, get_ensemble_optimizer, get_drift_detector,
+        get_data_loader, get_performance_tracker,
+    )
+    OPTIMIZATIONS_AVAILABLE = True
+except ImportError:
+    OPTIMIZATIONS_AVAILABLE = False
+    get_feature_cache = None
+    get_prediction_cache = None
+    get_optimized_trainer = None
+    get_batch_predictor = None
+    get_ensemble_optimizer = None
+    get_drift_detector = None
+    get_data_loader = None
+    get_performance_tracker = None
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 
@@ -784,6 +804,26 @@ class XGBoostPredictor:
         self.scalers: Dict[str, StandardScaler] = {}
         self.feature_selectors: Dict[str, any] = {}
         self.feature_importance: Dict[str, Dict[str, float]] = {}
+        
+        # Optimization components
+        if OPTIMIZATIONS_AVAILABLE:
+            self.feature_cache = get_feature_cache()
+            self.prediction_cache = get_prediction_cache()
+            self.optimized_trainer = get_optimized_trainer()
+            self.batch_predictor = get_batch_predictor()
+            self.ensemble_optimizer = get_ensemble_optimizer()
+            self.drift_detector = get_drift_detector()
+            self.data_loader = get_data_loader()
+            self.performance_tracker = get_performance_tracker()
+        else:
+            self.feature_cache = None
+            self.prediction_cache = None
+            self.optimized_trainer = None
+            self.batch_predictor = None
+            self.ensemble_optimizer = None
+            self.drift_detector = None
+            self.data_loader = None
+            self.performance_tracker = None
     
     def _get_validated_client(self):
         """Get validated Supabase client for automatic data validation."""
@@ -795,15 +835,38 @@ class XGBoostPredictor:
         return self.supabase.client
     
     def prepare_training_data(self, df: pd.DataFrame, target_col: str) -> Tuple[np.ndarray, np.ndarray, List[str]]:
-        """Prepare training data for ML models with feature selection."""
+        """Prepare training data for ML models with feature selection and caching."""
         try:
-            # Create features
-            df_features = self.feature_engineer.create_rolling_features(
-                df, ['ad_id'], ['ctr', 'cpa', 'roas', 'spend', 'purchases']
-            )
-            df_features = self.feature_engineer.create_interaction_features(df_features)
-            df_features = self.feature_engineer.create_temporal_features(df_features)
-            df_features = self.feature_engineer.create_advanced_features(df_features)
+            # Check feature cache
+            feature_config = {
+                'rolling_windows': self.config.rolling_windows,
+                'target_col': target_col,
+            }
+            
+            if self.feature_cache:
+                cached_features = self.feature_cache.get(df, feature_config)
+                if cached_features is not None:
+                    self.logger.info("Using cached features")
+                    df_features = cached_features
+                else:
+                    # Create features
+                    df_features = self.feature_engineer.create_rolling_features(
+                        df, ['ad_id'], ['ctr', 'cpa', 'roas', 'spend', 'purchases']
+                    )
+                    df_features = self.feature_engineer.create_interaction_features(df_features)
+                    df_features = self.feature_engineer.create_temporal_features(df_features)
+                    df_features = self.feature_engineer.create_advanced_features(df_features)
+                    
+                    # Cache engineered features
+                    self.feature_cache.set(df, feature_config, df_features)
+            else:
+                # Create features without caching
+                df_features = self.feature_engineer.create_rolling_features(
+                    df, ['ad_id'], ['ctr', 'cpa', 'roas', 'spend', 'purchases']
+                )
+                df_features = self.feature_engineer.create_interaction_features(df_features)
+                df_features = self.feature_engineer.create_temporal_features(df_features)
+                df_features = self.feature_engineer.create_advanced_features(df_features)
             
             # Select features
             feature_cols = [col for col in df_features.columns 
@@ -858,14 +921,32 @@ class XGBoostPredictor:
         """Train XGBoost model for specific prediction task."""
         try:
             self.logger.info(f"🔧 Starting training for {model_type}_{stage}...")
-            # Get training data - try stage-specific first, then all stages if insufficient
-            df = self.supabase.get_performance_data(stages=[stage])
+            # Get training data - use optimized data loader if available
+            if self.data_loader:
+                # Use batch loading for efficiency
+                df = self.data_loader.load_data_batch(
+                    self.supabase,
+                    ad_ids=[],
+                    stages=[stage],
+                    days_back=30,
+                )
+            else:
+                df = self.supabase.get_performance_data(stages=[stage])
+            
             self.logger.info(f"🔧 Stage-specific data for {stage}: {len(df) if not df.empty else 0} rows")
             
             if df.empty or len(df) < 5:  # Need at least 5 samples for meaningful training
                 self.logger.info(f"Insufficient stage-specific data for {stage} ({len(df) if not df.empty else 0} samples), trying all stages")
                 # Fallback to all available data for training
-                df = self.supabase.get_performance_data()
+                if self.data_loader:
+                    df = self.data_loader.load_data_batch(
+                        self.supabase,
+                        ad_ids=[],
+                        stages=None,
+                        days_back=30,
+                    )
+                else:
+                    df = self.supabase.get_performance_data()
                 self.logger.info(f"🔧 All-stages data: {len(df) if not df.empty else 0} rows")
                 
                 if df.empty:
@@ -926,16 +1007,16 @@ class XGBoostPredictor:
             X_train_scaled = scaler.fit_transform(X_train)
             X_test_scaled = scaler.transform(X_test)
             
-            # Train ensemble of models for better predictions
+            # Train ensemble of models with optimizations
             models_ensemble = {}
+            training_start = time.time()
             
-            # Primary model: XGBoost or GradientBoosting with compatibility fixes
+            # Primary model: XGBoost or GradientBoosting with early stopping
             try:
                 if XGBOOST_AVAILABLE:
                     if self.parent_system:
                         primary_model = self.parent_system._create_xgboost_wrapper(**self.config.xgb_params)
                     else:
-                        # Fallback if no parent system
                         primary_model = xgb.XGBRegressor(**self.config.xgb_params)
                 else:
                     primary_model = GradientBoostingRegressor(
@@ -944,7 +1025,23 @@ class XGBoostPredictor:
                         learning_rate=self.config.xgb_params.get('learning_rate', 0.1),
                         random_state=42
                     )
-                primary_model.fit(X_train_scaled, y_train)
+                
+                # Use optimized training with early stopping
+                if self.optimized_trainer and len(X_train_scaled) >= 20:
+                    primary_model, training_info = self.optimized_trainer.train_with_early_stopping(
+                        primary_model,
+                        X_train_scaled,
+                        y_train,
+                        X_test_scaled,
+                        y_test,
+                        max_epochs=200,
+                        patience=15,
+                    )
+                    if training_info:
+                        self.logger.info(f"Training completed in {training_info.get('epochs_trained', 'unknown')} epochs")
+                else:
+                    primary_model.fit(X_train_scaled, y_train)
+                
                 models_ensemble['primary'] = primary_model
                 self.logger.info(f"✅ Successfully trained primary model for {model_type}_{stage}")
             except Exception as e:
@@ -996,22 +1093,60 @@ class XGBoostPredictor:
             except Exception:
                 pass
             
-            # Evaluate ensemble
-            ensemble_predictions = []
-            for name, mdl in models_ensemble.items():
-                y_pred_mdl = mdl.predict(X_test_scaled)
-                ensemble_predictions.append(y_pred_mdl)
+            # Evaluate ensemble with optimized weighting
+            if self.ensemble_optimizer and len(models_ensemble) > 1:
+                # Calculate dynamic weights
+                weights = self.ensemble_optimizer.calculate_dynamic_weights(
+                    models_ensemble,
+                    X_test_scaled,
+                    y_test,
+                )
+                y_pred_ensemble = self.ensemble_optimizer.weighted_ensemble_predict(
+                    models_ensemble,
+                    X_test_scaled,
+                    weights,
+                )
+                self.logger.info(f"Ensemble weights: {weights}")
+            else:
+                # Simple averaging
+                ensemble_predictions = []
+                for name, mdl in models_ensemble.items():
+                    y_pred_mdl = mdl.predict(X_test_scaled)
+                    ensemble_predictions.append(y_pred_mdl)
+                y_pred_ensemble = np.mean(ensemble_predictions, axis=0)
             
-            # Average ensemble predictions
-            y_pred_ensemble = np.mean(ensemble_predictions, axis=0)
             mae = mean_absolute_error(y_test, y_pred_ensemble)
             r2 = r2_score(y_test, y_pred_ensemble)
+            training_time = time.time() - training_start
             
-            # Cross-validation score
-            cv_scores = cross_val_score(primary_model, X_train_scaled, y_train, cv=5, scoring='r2')
-            cv_mean = cv_scores.mean()
+            # Cross-validation score (optimized - use fewer folds if data is small)
+            cv_folds = min(5, max(3, len(X_train_scaled) // 10))
+            if cv_folds >= 3:
+                cv_scores = cross_val_score(primary_model, X_train_scaled, y_train, cv=cv_folds, scoring='r2', n_jobs=-1)
+                cv_mean = cv_scores.mean()
+            else:
+                cv_mean = r2  # Use test R² as proxy
             
-            self.logger.info(f"Trained {model_type} ensemble for {stage}: MAE={mae:.4f}, R²={r2:.4f}, CV={cv_mean:.4f}")
+            self.logger.info(f"Trained {model_type} ensemble for {stage}: MAE={mae:.4f}, R²={r2:.4f}, CV={cv_mean:.4f}, Time={training_time:.2f}s")
+            
+            # Track performance
+            if self.performance_tracker:
+                from ml.ml_optimization import ModelPerformanceMetrics
+                metrics = ModelPerformanceMetrics(
+                    model_id=f"{model_type}_{stage}",
+                    accuracy=r2,
+                    precision=0.0,  # Not applicable for regression
+                    recall=0.0,
+                    f1_score=0.0,
+                    mae=mae,
+                    rmse=np.sqrt(mean_squared_error(y_test, y_pred_ensemble)),
+                    r2_score=r2,
+                    training_time_seconds=training_time,
+                    inference_time_ms=0.0,  # Will be updated during inference
+                    last_trained=datetime.now(),
+                    prediction_count=0,
+                )
+                self.performance_tracker.track_performance(f"{model_type}_{stage}", metrics)
             
             # Store all models and scaler
             model_key = f"{model_type}_{stage}"
@@ -1057,9 +1192,17 @@ class XGBoostPredictor:
     
     def predict(self, model_type: str, stage: str, ad_id: str, 
                 features: Dict[str, float]) -> Optional[PredictionResult]:
-        """Make prediction using trained model."""
+        """Make prediction using trained model with caching."""
         try:
+            # Check prediction cache
+            if self.prediction_cache:
+                cached_prediction = self.prediction_cache.get(model_type, stage, features)
+                if cached_prediction is not None:
+                    self.logger.debug(f"Using cached prediction for {ad_id}")
+                    return cached_prediction
+            
             model_key = f"{model_type}_{stage}"
+            inference_start = time.time()
             
             if model_key not in self.models:
                 self.logger.warning(f"Model {model_key} not found, attempting to load from Supabase")
@@ -1488,6 +1631,8 @@ class XGBoostPredictor:
                 interval_lower = prediction - interval_width
                 interval_upper = prediction + interval_width
             
+            inference_time = (time.time() - inference_start) * 1000  # Convert to ms
+            
             result = PredictionResult(
                 predicted_value=float(prediction),
                 confidence_score=float(confidence),
@@ -1498,6 +1643,23 @@ class XGBoostPredictor:
                 prediction_horizon_hours=self.config.prediction_horizon_hours,
                 created_at=now_utc()
             )
+            
+            # Cache prediction
+            if self.prediction_cache:
+                self.prediction_cache.set(model_type, stage, features, result)
+            
+            # Update performance tracker
+            if self.performance_tracker:
+                from ml.ml_optimization import ModelPerformanceMetrics
+                # Get existing metrics or create new
+                existing_metrics = self.performance_tracker.metrics_history.get(f"{model_type}_{stage}", [])
+                if existing_metrics:
+                    latest = existing_metrics[-1]
+                    # Update inference time
+                    latest.inference_time_ms = (latest.inference_time_ms * latest.prediction_count + inference_time) / (latest.prediction_count + 1)
+                    latest.prediction_count += 1
+            
+            self.logger.debug(f"Prediction completed in {inference_time:.2f}ms for {ad_id}")
             
             return result
             

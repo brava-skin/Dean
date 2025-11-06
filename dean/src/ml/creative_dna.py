@@ -32,7 +32,7 @@ except ImportError:
 
 @dataclass
 class CreativeDNA:
-    """Creative DNA representation with embeddings and metadata."""
+    """Creative DNA representation with embeddings and enhanced metadata."""
     creative_id: str
     ad_id: str
     image_prompt: str
@@ -46,12 +46,29 @@ class CreativeDNA:
     ctr: float = 0.0
     created_at: Optional[datetime] = None
     metadata: Dict[str, Any] = None
+    # Enhanced metadata fields for Andromeda optimization
+    format: str = "static_image"  # static_image, carousel, video
+    style: str = ""  # luxury, minimalist, editorial, etc.
+    message_type: str = ""  # product_focus, lifestyle, social_proof, educational
+    target_motivation: str = ""  # aspiration, problem_solving, status, self_care
+    forecasted_roas: Optional[float] = None
+    forecasted_ctr: Optional[float] = None
+    forecast_confidence: Optional[float] = None
     
     def __post_init__(self):
         if self.metadata is None:
             self.metadata = {}
         if self.created_at is None:
             self.created_at = datetime.now()
+        # Extract format, style, message type from metadata if available
+        if self.metadata:
+            self.format = self.metadata.get("format", self.format)
+            self.style = self.metadata.get("style", self.style)
+            self.message_type = self.metadata.get("message_type", self.message_type)
+            self.target_motivation = self.metadata.get("target_motivation", self.target_motivation)
+            self.forecasted_roas = self.metadata.get("forecasted_roas", self.forecasted_roas)
+            self.forecasted_ctr = self.metadata.get("forecasted_ctr", self.forecasted_ctr)
+            self.forecast_confidence = self.metadata.get("forecast_confidence", self.forecast_confidence)
 
 
 class CreativeDNAAnalyzer:
@@ -107,6 +124,7 @@ class CreativeDNAAnalyzer:
         text_overlay: str,
         ad_copy: Dict[str, str],
         performance_data: Optional[Dict[str, Any]] = None,
+        enhanced_metadata: Optional[Dict[str, Any]] = None,
     ) -> CreativeDNA:
         """Create Creative DNA for a creative."""
         # Combine all text elements
@@ -150,6 +168,18 @@ class CreativeDNAAnalyzer:
                     (purchases / spend * 10 * 0.2)
                 )
         
+        # Merge enhanced metadata with performance data
+        merged_metadata = {**(performance_data or {}), **(enhanced_metadata or {})}
+        
+        # Extract format, style, message type, target motivation from enhanced metadata
+        format_type = enhanced_metadata.get("format", "static_image") if enhanced_metadata else "static_image"
+        style_type = enhanced_metadata.get("style", "") if enhanced_metadata else ""
+        message_type = enhanced_metadata.get("message_type", "") if enhanced_metadata else ""
+        target_motivation = enhanced_metadata.get("target_motivation", "") if enhanced_metadata else ""
+        forecasted_roas = enhanced_metadata.get("forecasted_roas") if enhanced_metadata else None
+        forecasted_ctr = enhanced_metadata.get("forecasted_ctr") if enhanced_metadata else None
+        forecast_confidence = enhanced_metadata.get("forecast_confidence") if enhanced_metadata else None
+        
         dna = CreativeDNA(
             creative_id=creative_id,
             ad_id=ad_id,
@@ -162,7 +192,14 @@ class CreativeDNAAnalyzer:
             performance_score=performance_score,
             roas=roas,
             ctr=ctr,
-            metadata=performance_data or {},
+            metadata=merged_metadata,
+            format=format_type,
+            style=style_type,
+            message_type=message_type,
+            target_motivation=target_motivation,
+            forecasted_roas=forecasted_roas,
+            forecasted_ctr=forecasted_ctr,
+            forecast_confidence=forecast_confidence,
         )
         
         # Store in memory

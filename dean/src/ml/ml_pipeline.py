@@ -365,8 +365,8 @@ class MLPipeline:
     
     def optimize_for_andromeda(self, creative_data: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Simple Andromeda optimization - just ensure we have 10 creatives.
-        Creative management will be handled separately in the future.
+        Andromeda optimization - ensures we have 10 creatives with diversity analysis.
+        Enforces Andromeda requirements: 10 creatives, format diversity, message diversity.
         """
         if not self.config.andromeda_optimized:
             return {"optimization": "disabled"}
@@ -374,14 +374,40 @@ class MLPipeline:
         try:
             start_time = time.time()
             
+            current_count = len(creative_data)
+            target_count = self.config.target_creative_count  # Should be 10
+            
+            # Check if we have enough creatives
+            needs_more = max(0, target_count - current_count)
+            
+            # Analyze diversity if we have creatives
+            diversity_score = 1.0
+            format_diversity = set()
+            message_types = set()
+            
+            if creative_data:
+                for creative in creative_data:
+                    metadata = creative.get("metadata", {})
+                    format_diversity.add(metadata.get("format", "static_image"))
+                    message_types.add(metadata.get("message_type", ""))
+                
+                # Calculate diversity score (higher is better)
+                format_diversity_score = len(format_diversity) / 3.0  # Max 3 formats
+                message_diversity_score = len(message_types) / 4.0  # Max 4 message types
+                diversity_score = (format_diversity_score + message_diversity_score) / 2.0
+            
             processing_time = time.time() - start_time
             
             return {
-                "target_creative_count": self.config.target_creative_count,
-                "current_count": len(creative_data),
+                "target_creative_count": target_count,
+                "current_count": current_count,
+                "needs_more": needs_more,
+                "diversity_score": diversity_score,
+                "format_diversity": list(format_diversity),
+                "message_types": list(message_types),
                 "processing_time": processing_time,
                 "andromeda_optimized": True,
-                "note": "Creative selection is random - no diversity analysis needed"
+                "note": f"Target: {target_count} creatives (Andromeda requirement). Current: {current_count}. Diversity: {diversity_score:.2%}"
             }
             
         except Exception as e:

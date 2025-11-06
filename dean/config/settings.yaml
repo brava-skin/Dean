@@ -71,23 +71,31 @@ placements:
 
 # ── ASC+ Campaign Configuration ──────────────────────
 asc_plus:
-  daily_budget_eur: 50
-  keep_ads_live: 5
-  max_active_ads: 5
-  target_active_ads: 5                     # Always maintain 5 creatives live
+  daily_budget_eur: 50                     # Base budget: €50/day (€5 per creative for 10 creatives)
+  keep_ads_live: 10
+  max_active_ads: 10
+  target_active_ads: 10                    # Always maintain 10 creatives live (Andromeda requirement)
   optimization_goal: "PURCHASE"
   naming_prefix: "[ASC+]"
   
-  # Budget allocation for 5 creatives
-  budget_per_creative_eur: 10.0            # €10 per creative (€50 ÷ 5)
+  # Budget allocation for 10 creatives (base: €50, scales up when ready)
+  budget_per_creative_eur: 5.0             # €5 per creative (€50 ÷ 10) - base budget
   min_budget_per_creative_eur: 5.0        # Minimum budget per creative
-  max_budget_per_creative_eur: 15.0        # Maximum budget per creative
+  max_budget_per_creative_eur: 15.0        # Maximum budget per creative (scales up to €150/day when ready)
+  
+  # Scaling configuration
+  scaling:
+    enabled: true
+    min_confidence: 0.75                   # Only scale if ML confidence > 75%
+    min_roas_for_scale: 1.5                 # Minimum ROAS to consider scaling
+    min_purchases_for_scale: 5              # Minimum purchases before scaling
+    scale_up_threshold_pct: 20              # Only scale up if recommendation is >20% increase
   
   queue:
     enable_rotation: true
     refill_on_kill: true
-    max_launches_per_day: 5                # Always keep 5 creatives running
-    maintain_creative_count: 5              # Always maintain 5 creatives
+    max_launches_per_day: 10                # Always keep 10 creatives running
+    maintain_creative_count: 10             # Always maintain 10 creatives (Andromeda requirement)
     # Creative selection is now random - no diversity checking needed
   
   # Product information for creative generation

@@ -128,6 +128,19 @@ class CreativeStorageManager:
             
             # Store metadata in creative_storage table
             # Status: "queue" when first uploaded, "active" when used in campaign, "killed" when ad is killed
+            # Enhanced metadata includes format, style, message_type, target_motivation, forecasts
+            enhanced_metadata = metadata or {}
+            
+            # Ensure enhanced metadata fields are included
+            if "format" not in enhanced_metadata:
+                enhanced_metadata["format"] = "static_image"
+            if "style" not in enhanced_metadata:
+                enhanced_metadata["style"] = ""
+            if "message_type" not in enhanced_metadata:
+                enhanced_metadata["message_type"] = ""
+            if "target_motivation" not in enhanced_metadata:
+                enhanced_metadata["target_motivation"] = ""
+            
             storage_data = {
                 "creative_id": creative_id,
                 "ad_id": ad_id,
@@ -138,7 +151,7 @@ class CreativeStorageManager:
                 "status": "queue",  # Start as "queue" - will be "active" when used in campaign
                 "last_used_at": datetime.now(timezone.utc).isoformat(),
                 "usage_count": 0,  # Will be incremented when used
-                "metadata": metadata or {},
+                "metadata": enhanced_metadata,  # Enhanced metadata with format, style, message_type, etc.
             }
             
             try:
@@ -211,6 +224,41 @@ class CreativeStorageManager:
         except Exception as e:
             logger.error(f"Error getting queued creative: {e}")
             return None
+    
+    def get_queued_creative_count(self) -> int:
+        """
+        Get count of queued creatives available for use.
+        
+        Returns:
+            Number of queued creatives
+        """
+        try:
+            if not self.client:
+                return 0
+            
+            result = self.client.table("creative_storage").select(
+                "creative_id", count="exact"
+            ).eq("status", "queue").execute()
+            
+            return result.count if hasattr(result, 'count') else len(result.data or [])
+            
+        except Exception as e:
+            logger.error(f"Error getting queued creative count: {e}")
+            return 0
+    
+    def should_pre_generate_creatives(self, target_count: int = 10, buffer_size: int = 3) -> bool:
+        """
+        Determine if we should pre-generate creatives for the queue.
+        
+        Args:
+            target_count: Target number of active creatives
+            buffer_size: Number of queued creatives to maintain as buffer
+            
+        Returns:
+            True if we should pre-generate, False otherwise
+        """
+        queued_count = self.get_queued_creative_count()
+        return queued_count < buffer_size
     
     def get_recently_created_creative(self, minutes_back: int = 5) -> Optional[Dict[str, Any]]:
         """

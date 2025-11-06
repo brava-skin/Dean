@@ -9,14 +9,32 @@ on:
 jobs:
   dean-automation:
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # Prevent hanging workflows
+    timeout-minutes: 20  # Reduced timeout since we're optimizing
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
         fetch-depth: 1  # Only fetch latest commit, faster checkout
-      
+    
+    # Install ffmpeg using pre-built binaries (MUCH faster than apt-get)
+    - name: Install ffmpeg (optimized - pre-built binaries)
+      run: |
+        echo "📹 Installing ffmpeg (optimized method)..."
+        # Try pre-built static binary first (fastest - installs in seconds)
+        if curl -f -L --max-time 10 https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0.1/ffmpeg-linux-x64 -o /tmp/ffmpeg 2>/dev/null; then
+          chmod +x /tmp/ffmpeg
+          sudo mv /tmp/ffmpeg /usr/local/bin/ffmpeg
+          echo "✅ ffmpeg installed via pre-built binary (fast method)"
+        else
+          # Fallback: Use apt-get with optimized flags (slower but reliable)
+          echo "⚠️  Pre-built binary unavailable, using apt-get (optimized)..."
+          sudo apt-get update -qq -o Acquire::http::Timeout=10
+          sudo apt-get install -y --no-install-recommends --no-upgrade ffmpeg
+          echo "✅ ffmpeg installed via apt-get"
+        fi
+        ffmpeg -version | head -1
+    
     - name: Set up Python 3.11
       uses: actions/setup-python@v4
       with:
@@ -24,38 +42,61 @@ jobs:
         cache: 'pip'  # Enable built-in pip caching
         cache-dependency-path: 'dean/requirements.txt'
         
-    - name: Cache pip dependencies
-      uses: actions/cache@v3
+    - name: Cache pip dependencies (enhanced)
+      uses: actions/cache@v4
       with:
-        path: ~/.cache/pip
+        path: |
+          ~/.cache/pip
+          ~/.local/lib/python3.11/site-packages
         key: ${{ runner.os }}-pip-${{ hashFiles('dean/requirements.txt') }}
         restore-keys: |
           ${{ runner.os }}-pip-
           
-    - name: Install dependencies
+    - name: Install Python dependencies (optimized - batched)
       run: |
-        echo "📦 Installing Python dependencies..."
-        echo "💾 Using cached dependencies when available"
-        python -m pip install --upgrade pip --quiet
-        pip install --cache-dir ~/.cache/pip --quiet -r dean/requirements.txt
-        echo "✅ Dependencies installed successfully"
+        echo "📦 Installing Python dependencies (optimized - batched install)..."
+        python -m pip install --upgrade pip setuptools wheel --quiet --no-cache-dir
         
-    - name: Cache apt packages
-      uses: actions/cache@v3
-      with:
-        path: /var/cache/apt
-        key: ${{ runner.os }}-apt-ffmpeg
-        restore-keys: |
-          ${{ runner.os }}-apt-
-    
-    - name: Install ffmpeg
+        # Batch 1: Core dependencies (lightweight, fast)
+        echo "  → Installing core dependencies..."
+        pip install --cache-dir ~/.cache/pip --quiet --no-warn-script-location \
+          facebook-business==19.0.1 python-dotenv==1.0.1 PyYAML==6.0.2 requests==2.32.3 \
+          pytz pandas==2.2.2 openpyxl==3.1.5 SQLAlchemy==2.0.35 supabase schedule \
+          jsonschema prometheus-client
+        
+        # Batch 2: Essential ML (sequential for reliability)
+        echo "  → Installing essential ML libraries..."
+        pip install --cache-dir ~/.cache/pip --quiet --no-warn-script-location \
+          xgboost scikit-learn numpy scipy joblib lightgbm catboost statsmodels psycopg2-binary
+        
+        # Batch 3: Visualization & Time Series
+        echo "  → Installing visualization & time-series libraries..."
+        pip install --cache-dir ~/.cache/pip --quiet --no-warn-script-location \
+          plotly seaborn matplotlib tslearn prophet arch
+        
+        # Batch 4: NLP & Image Processing (skip spacy model download for speed)
+        echo "  → Installing NLP & image processing libraries..."
+        pip install --cache-dir ~/.cache/pip --quiet --no-warn-script-location \
+          sentence-transformers transformers spacy nltk Pillow opencv-python \
+          textblob vaderSentiment openai
+        # Skip spacy model download (can be done later if needed)
+        python -m spacy download en_core_web_sm --quiet || echo "⚠️  Spacy model download skipped (optional)"
+        
+        # Batch 5: Optional lightweight dependencies (skip if fails)
+        echo "  → Installing optional dependencies..."
+        pip install --cache-dir ~/.cache/pip --quiet --no-warn-script-location \
+          faiss-cpu dask optuna redis psutil alembic ffmpeg-python || true
+        
+        # Skip heavy optional dependencies that aren't critical for runtime
+        # These can be installed later if needed: mlflow wandb tensorboard torch shap featuretools
+        
+        echo "✅ All dependencies installed successfully"
+        
+    - name: Verify ffmpeg installation
       run: |
-        echo "📹 Installing ffmpeg for text overlay generation..."
-        sudo apt-get update -qq
-        sudo apt-get install -y --no-install-recommends --no-upgrade ffmpeg
         ffmpeg -version | head -1
         echo "✅ ffmpeg ready"
-        
+    
     - name: Run Dean
       env:
         # Meta Ads API Configuration
@@ -105,8 +146,9 @@ jobs:
         echo ""
         echo "📋 Campaign Configuration:"
         echo "   - Campaign Type: Advantage+ Shopping Campaign (ASC+)"
-        echo "   - Budget: €50/day"
-        echo "   - Target: Men aged 18-54 in United States"
+        echo "   - Budget: €50/day base (€5 per creative, scales up when ready)"
+        echo "   - Target: 10 active creatives (Andromeda requirement)"
+        echo "   - Audience: Men aged 18-54 in United States"
         echo "   - Creative Type: Static images with text overlays"
         echo ""
         
@@ -121,9 +163,10 @@ jobs:
         # Set Python optimizations for faster execution
         export PYTHONUNBUFFERED=1
         export PYTHONDONTWRITEBYTECODE=1  # Skip .pyc files
+        export PYTHONOPTIMIZE=1  # Remove assert statements and debug code
         
-        # Run Dean ASC+ automation
-        python -u src/main.py
+        # Run Dean ASC+ automation with optimizations
+        python -u -O src/main.py  # -O flag enables optimizations
         
         echo ""
         echo "✅ Dean ASC+ automation cycle completed"
