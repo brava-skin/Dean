@@ -87,8 +87,12 @@ class SupabaseStorage:
                 epoch_id = int(created_at.timestamp())
                 
             # Ensure lifecycle_id is properly formatted
-            if not lifecycle_id or lifecycle_id == 'lifecycle_001':
+            # If lifecycle_id is None, empty string, or invalid, generate it from ad_id
+            if not lifecycle_id or (isinstance(lifecycle_id, str) and lifecycle_id.strip() == '') or lifecycle_id == 'lifecycle_001':
                 lifecycle_id = f'lifecycle_{ad_id}' if ad_id else ''
+            # Ensure it's not empty after generation
+            if not lifecycle_id and ad_id:
+                lifecycle_id = f'lifecycle_{ad_id}'
                 
             data = {
                 'ad_id': ad_id,

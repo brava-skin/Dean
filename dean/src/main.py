@@ -530,10 +530,12 @@ def _calculate_fatigue_index(ad_data: Dict[str, Any]) -> float:
         return 0.0
 
 
-def _get_next_stage(current_stage: str) -> str:
+def _get_next_stage(current_stage: str) -> Optional[str]:
     """Get the next stage in the lifecycle - ASC+ only."""
-    # ASC+ is the only stage - no transitions
-    return 'asc_plus'
+    # For new ads in ASC+ stage, there is no next stage yet
+    # Only return a next stage when the ad is actually transitioning
+    # For now, ASC+ is the only stage, so new ads have no next stage
+    return None
 
 
 def _calculate_stage_duration_hours(ad_id: str, current_stage: str) -> float:
@@ -563,25 +565,43 @@ def _get_previous_stage(ad_id: str, current_stage: str) -> Optional[str]:
     return None
 
 
-def _get_stage_performance(ad_data: Dict[str, Any], stage: str) -> Dict[str, Any]:
+def _get_stage_performance(ad_data: Dict[str, Any], stage: str) -> Optional[Dict[str, Any]]:
     """Get performance metrics for the current stage."""
+    # For new ads with zero performance, return None (will be populated as data comes in)
     try:
+        spend = safe_float(ad_data.get('spend', 0))
+        impressions = int(ad_data.get('impressions', 0))
+        purchases = int(ad_data.get('purchases', 0))
+        
+        # If ad has no performance data yet (all zeros), return None
+        if spend == 0 and impressions == 0 and purchases == 0:
+            return None
+        
         return {
             'ctr': safe_float(ad_data.get('ctr', 0)),
             'cpa': safe_float(ad_data.get('cpa', 0)),
             'roas': safe_float(ad_data.get('roas', 0)),
-            'spend': safe_float(ad_data.get('spend', 0)),
-            'purchases': int(ad_data.get('purchases', 0)),
+            'spend': spend,
+            'purchases': purchases,
             'stage': stage
         }
     except (ValueError, TypeError, KeyError) as e:
         logger.error(f"Error getting stage performance: {e}", exc_info=True)
-        return {'stage': stage}
+        return None
 
 
-def _get_transition_reason(ad_data: Dict[str, Any], stage: str) -> str:
+def _get_transition_reason(ad_data: Dict[str, Any], stage: str) -> Optional[str]:
     """Get the reason for stage transition - ASC+ only."""
+    # For new ads, there is no transition reason yet
+    # Only return a reason when the ad actually transitions between stages
     try:
+        spend = safe_float(ad_data.get('spend', 0))
+        impressions = int(ad_data.get('impressions', 0))
+        
+        # If ad has no performance data yet (all zeros), return None
+        if spend == 0 and impressions == 0:
+            return None
+        
         ctr = safe_float(ad_data.get('ctr', 0))
         cpa = safe_float(ad_data.get('cpa', 0))
         roas = safe_float(ad_data.get('roas', 0))
@@ -592,10 +612,10 @@ def _get_transition_reason(ad_data: Dict[str, Any], stage: str) -> str:
             else:
                 return 'ASC+ campaign - monitoring performance'
         else:
-            return 'ASC+ campaign'
+            return None
     except (KeyError, ValueError, TypeError):
-        # Fallback to default reason
-        return 'ASC+ campaign'
+        # For new ads with no data, return None
+        return None
 
 
 def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any], stage: str, ml_system=None) -> None:

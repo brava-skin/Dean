@@ -605,6 +605,7 @@ class SupabaseDataValidator:
             
             'ad_creation_times': TableValidator('ad_creation_times', {
                 'ad_id': StringValidator('ad_id', required=True, max_length=100),
+                'lifecycle_id': StringValidator('lifecycle_id', max_length=100),  # Optional but should be populated
                 'stage': StringValidator('stage', required=True,
                                        allowed_values=['asc_plus']),
                 'created_at_iso': DateValidator('created_at_iso', date_format="%Y-%m-%dT%H:%M:%S"),
