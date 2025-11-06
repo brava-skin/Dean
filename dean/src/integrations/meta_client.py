@@ -936,16 +936,81 @@ class MetaClient:
         return rows
 
     def list_ads_in_adset(self, adset_id: str) -> List[Dict[str, Any]]:
+        """List all ads in an adset with proper pagination."""
         if self.dry_run or not USE_SDK:
             return [{"id": f"{adset_id}_AD_{i}", "name": f"[TEST] Mock_{i}", "status": "ACTIVE"} for i in range(1, 5)]
         self._init_sdk_if_needed()
         ads = []
         def _fetch():
-            return AdSet(adset_id).get_ads(fields=["id", "name", "status"])
-        cursor = self._retry("list_ads", _fetch)
-        for a in cursor:
-            ads.append({"id": a["id"], "name": a.get("name"), "status": a.get("status")})
+            return AdSet(adset_id).get_ads(fields=["id", "name", "status", "effective_status"])
+        try:
+            cursor = self._retry("list_ads", _fetch)
+            for a in cursor:
+                # Get status from effective_status if available (more accurate), otherwise use status
+                status = a.get("effective_status") or a.get("status", "")
+                ads.append({
+                    "id": a["id"], 
+                    "name": a.get("name"), 
+                    "status": status,
+                    "effective_status": a.get("effective_status", "")
+                })
+        except Exception as e:
+            logger.warning(f"Error listing ads in adset {adset_id}: {e}")
+            # Fallback: try Graph API directly
+            try:
+                response = self._graph_get_object(f"{adset_id}/ads", params={
+                    "fields": "id,name,status,effective_status",
+                    "limit": 500
+                })
+                if response.get("data"):
+                    for a in response["data"]:
+                        status = a.get("effective_status") or a.get("status", "")
+                        ads.append({
+                            "id": a.get("id"),
+                            "name": a.get("name"),
+                            "status": status,
+                            "effective_status": a.get("effective_status", "")
+                        })
+            except Exception as e2:
+                logger.error(f"Fallback Graph API also failed: {e2}")
         return ads
+    
+    def count_active_ads_in_adset(self, adset_id: str) -> int:
+        """Count active ads in an adset using multiple methods for accuracy."""
+        try:
+            # Method 1: Direct API call
+            ads = self.list_ads_in_adset(adset_id)
+            active_count = sum(1 for a in ads if str(a.get("status", "")).upper() in ("ACTIVE", "PAUSED"))
+            
+            # Method 2: Use insights API to verify (ads with recent data are definitely active)
+            try:
+                insights = self.get_ad_insights(
+                    level="ad",
+                    fields=["ad_id"],
+                    filtering=[{"field": "adset.id", "operator": "EQUAL", "value": adset_id}],
+                    date_preset="today",
+                    limit=500
+                )
+                insights_ad_ids = {insight.get("ad_id") for insight in insights if insight.get("ad_id")}
+                
+                # Count ads that are both in the list AND have insights (definitely active)
+                verified_active = sum(1 for a in ads 
+                                     if str(a.get("status", "")).upper() == "ACTIVE" 
+                                     and a.get("id") in insights_ad_ids)
+                
+                # Use the higher count (some ads might be active but not have insights yet)
+                active_count = max(active_count, len(insights_ad_ids))
+                
+                logger.debug(f"Active ads count: direct={sum(1 for a in ads if str(a.get('status', '')).upper() == 'ACTIVE')}, insights={len(insights_ad_ids)}, verified={verified_active}, final={active_count}")
+            except Exception as e:
+                logger.debug(f"Insights verification failed (non-critical): {e}")
+            
+            return active_count
+        except Exception as e:
+            logger.error(f"Error counting active ads in adset {adset_id}: {e}")
+            # Fallback to basic count
+            ads = self.list_ads_in_adset(adset_id)
+            return sum(1 for a in ads if str(a.get("status", "")).upper() == "ACTIVE")
 
     # ----- Helper: get current ad set budget (account currency, e.g., EUR) -----
     def get_adset_budget(self, adset_id: str) -> Optional[float]:

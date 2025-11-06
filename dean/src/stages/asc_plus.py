@@ -571,10 +571,19 @@ def run_asc_plus_tick(
         if not campaign_id or not adset_id:
             return {"ok": False, "error": "Failed to ensure ASC+ campaign"}
         
-        # Get current ads
-        ads = client.list_ads_in_adset(adset_id)
-        active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
-        active_count = len(active_ads)
+        # Get current ads using improved counting method
+        try:
+            # Use the new count_active_ads_in_adset method for more accurate counting
+            active_count = client.count_active_ads_in_adset(adset_id)
+            # Also get the full list for processing
+            ads = client.list_ads_in_adset(adset_id)
+            active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
+            logger.info(f"📊 Active ads count: {active_count} (from improved method), {len(active_ads)} (from direct list)")
+        except Exception as e:
+            logger.warning(f"Failed to use improved ad counting, falling back to basic method: {e}")
+            ads = client.list_ads_in_adset(adset_id)
+            active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
+            active_count = len(active_ads)
         
         target_count = cfg(settings, "asc_plus.target_active_ads") or 10
         
@@ -751,10 +760,19 @@ def run_asc_plus_tick(
                     notify(f"⚠️ Failed to kill ad {ad_id}: {e}")
         
         # Generate new creatives if needed - SMART: Only generate 1 at a time when needed
-        # Refresh active count after kills
-        ads = client.list_ads_in_adset(adset_id)
-        active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
-        active_count = len(active_ads)
+        # Refresh active count after kills using improved counting method
+        try:
+            # Use the new count_active_ads_in_adset method for more accurate counting
+            active_count = client.count_active_ads_in_adset(adset_id)
+            # Also get the full list for processing
+            ads = client.list_ads_in_adset(adset_id)
+            active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
+            logger.info(f"📊 Active ads count after kills: {active_count} (from improved method), {len(active_ads)} (from direct list)")
+        except Exception as e:
+            logger.warning(f"Failed to use improved ad counting, falling back to basic method: {e}")
+            ads = client.list_ads_in_adset(adset_id)
+            active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
+            active_count = len(active_ads)
         needed_count = max(0, target_count - active_count)
         
         # HARD STOP: If we already have the target count, do NOT generate anything
