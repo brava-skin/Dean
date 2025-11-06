@@ -307,7 +307,7 @@ class FluxClient:
     
     def _poll_for_result(self, polling_url: str, request_id: str) -> Optional[str]:
         """
-        Poll for image generation result.
+        Poll for image generation result with exponential backoff and better error handling.
         
         Args:
             polling_url: URL to poll for results
@@ -318,10 +318,16 @@ class FluxClient:
         """
         start_time = time.time()
         attempt = 0
+        consecutive_errors = 0
+        max_consecutive_errors = 5  # Max errors before giving up
+        base_interval = POLLING_INTERVAL
+        max_interval = 5.0  # Max 5 seconds between polls
         
         while attempt < MAX_POLLING_ATTEMPTS:
             try:
-                time.sleep(POLLING_INTERVAL)
+                # Exponential backoff for polling interval (starts at 0.5s, increases on errors)
+                current_interval = min(base_interval * (2 ** min(consecutive_errors, 3)), max_interval)
+                time.sleep(current_interval)
                 attempt += 1
                 
                 response = requests.get(
@@ -330,7 +336,7 @@ class FluxClient:
                         "accept": "application/json",
                         "x-key": self.api_key,
                     },
-                    timeout=10,
+                    timeout=15,  # Increased timeout
                 )
                 
                 response.raise_for_status()
@@ -343,6 +349,8 @@ class FluxClient:
                     if sample:
                         # Invalidate credits cache after successful generation
                         self.invalidate_credits_cache()
+                        elapsed = time.time() - start_time
+                        logger.info(f"✅ FLUX image generated: {request_id} (took {elapsed:.1f}s)")
                         notify(f"✅ FLUX image generated: {request_id}")
                         return sample
                     else:
@@ -354,20 +362,38 @@ class FluxClient:
                     notify(f"❌ FLUX generation failed: {error_msg} (request_id: {request_id})")
                     return None
                 
+                # Reset consecutive errors on successful poll (even if not ready)
+                consecutive_errors = 0
+                
                 # Continue polling for PENDING, PROCESSING, etc.
                 elapsed = time.time() - start_time
-                if attempt % 20 == 0:  # Log every 10 seconds
-                    notify(f"⏳ FLUX polling... (attempt {attempt}, {elapsed:.1f}s)")
+                if attempt % 20 == 0:  # Log every 10 seconds (20 * 0.5s)
+                    logger.debug(f"⏳ FLUX polling... (attempt {attempt}, {elapsed:.1f}s, status: {status})")
                 
+            except requests.exceptions.Timeout:
+                consecutive_errors += 1
+                if consecutive_errors >= max_consecutive_errors:
+                    notify(f"❌ FLUX polling: Too many consecutive timeouts ({consecutive_errors}), giving up")
+                    return None
+                logger.warning(f"⚠️ FLUX polling timeout (attempt {attempt}, consecutive errors: {consecutive_errors})")
+                continue
             except requests.exceptions.RequestException as e:
-                notify(f"⚠️ FLUX polling error: {e}")
-                # Continue polling despite error
+                consecutive_errors += 1
+                if consecutive_errors >= max_consecutive_errors:
+                    notify(f"❌ FLUX polling: Too many consecutive errors ({consecutive_errors}), giving up: {e}")
+                    return None
+                logger.warning(f"⚠️ FLUX polling error (attempt {attempt}, consecutive errors: {consecutive_errors}): {e}")
                 continue
             except Exception as e:
-                notify(f"⚠️ FLUX polling exception: {e}")
+                consecutive_errors += 1
+                if consecutive_errors >= max_consecutive_errors:
+                    notify(f"❌ FLUX polling: Too many consecutive exceptions ({consecutive_errors}), giving up: {e}")
+                    return None
+                logger.warning(f"⚠️ FLUX polling exception (attempt {attempt}, consecutive errors: {consecutive_errors}): {e}")
                 continue
         
-        notify(f"⏰ FLUX polling timeout after {MAX_POLLING_ATTEMPTS} attempts")
+        elapsed = time.time() - start_time
+        notify(f"⏰ FLUX polling timeout after {MAX_POLLING_ATTEMPTS} attempts ({elapsed:.1f}s)")
         return None
     
     def download_image(self, image_url: str, output_path: Optional[str] = None) -> Optional[str]:
