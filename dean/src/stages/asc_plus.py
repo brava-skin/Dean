@@ -150,7 +150,7 @@ def _create_creative_and_ad(
             storage_creative_id = f"creative_{int(time.time())}"
     
     try:
-        creative_name = f"[ASC+] Creative {active_count + created_count + 1}"
+        creative_name = f"ASC Plus Creative {active_count + created_count + 1}"
         
         # Use Supabase Storage URL if available, otherwise fallback to image_path
         supabase_storage_url = creative_data.get("supabase_storage_url")
