@@ -42,10 +42,11 @@ class ValidationResult:
 class FieldValidator:
     """Base class for field validators."""
     
-    def __init__(self, field_name: str, required: bool = False, severity: ValidationSeverity = ValidationSeverity.ERROR):
+    def __init__(self, field_name: str, required: bool = False, severity: ValidationSeverity = ValidationSeverity.ERROR, default: Any = None):
         self.field_name = field_name
         self.required = required
         self.severity = severity
+        self.default = default
     
     def validate(self, value: Any, data: Dict[str, Any]) -> List[str]:
         """Validate a field value. Return list of error messages."""
@@ -72,6 +73,9 @@ class FieldValidator:
     
     def sanitize(self, value: Any) -> Any:
         """Sanitize/clean the field value. Override in subclasses."""
+        # Apply default if value is None or empty
+        if (value is None or value == '') and self.default is not None:
+            return self.default
         return value
 
 class StringValidator(FieldValidator):
@@ -112,6 +116,8 @@ class StringValidator(FieldValidator):
     def sanitize(self, value: Any) -> str:
         """Sanitize string value."""
         if value is None:
+            if self.default is not None:
+                return str(self.default)
             return ""
         return str(value).strip()
 
@@ -144,10 +150,14 @@ class IntegerValidator(FieldValidator):
     def sanitize(self, value: Any) -> Optional[int]:
         """Sanitize integer value."""
         if value is None or value == '':
+            if self.default is not None:
+                return int(self.default)
             return None
         try:
             return int(value)
         except (ValueError, TypeError):
+            if self.default is not None:
+                return int(self.default)
             return None
 
 class FloatValidator(FieldValidator):
@@ -190,6 +200,8 @@ class FloatValidator(FieldValidator):
     def sanitize(self, value: Any) -> Optional[float]:
         """Sanitize float value."""
         if value is None or value == '':
+            if self.default is not None:
+                return float(self.default)
             return None
         try:
             float_value = float(value)
@@ -370,6 +382,10 @@ class TableValidator:
         for field_name, validator in self.validators.items():
             value = data.get(field_name)
             
+            # Apply default if value is missing and default is set
+            if value is None and validator.default is not None:
+                value = validator.default
+            
             # Validate field
             field_errors = validator.validate(value, data)
             
@@ -382,12 +398,14 @@ class TableValidator:
                 else:
                     info.append(f"{field_name}: {error}")
             
-            # Sanitize field
-            sanitized_data[field_name] = validator.sanitize(value)
+            # Sanitize field (will apply default if needed)
+            sanitized_value = validator.sanitize(value)
+            if sanitized_value is not None or field_name in data:  # Include if in data or has default
+                sanitized_data[field_name] = sanitized_value
         
-        # Check for missing required fields
+        # Check for missing required fields (but allow defaults)
         for field_name, validator in self.validators.items():
-            if validator.required and field_name not in data:
+            if validator.required and field_name not in data and validator.default is None:
                 errors.append(f"Required field '{field_name}' is missing")
         
         is_valid = len(errors) == 0

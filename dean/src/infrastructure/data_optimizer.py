@@ -246,15 +246,17 @@ class CreativeIntelligenceOptimizer:
                     skipped += 1
                     continue
                 
-                # Check if metrics are missing
+                # Check if metrics are missing or need recalculation
                 avg_ctr = creative.get('avg_ctr')
                 avg_cpa = creative.get('avg_cpa')
                 avg_roas = creative.get('avg_roas')
                 
+                # Always update if any metric is missing, null, or all are zero (likely missing data)
                 needs_update = (
-                    avg_ctr is None or avg_ctr == 0.0 or
-                    avg_cpa is None or avg_cpa == 0.0 or
-                    avg_roas is None or avg_roas == 0.0
+                    avg_ctr is None or 
+                    avg_cpa is None or 
+                    avg_roas is None or
+                    (avg_ctr == 0.0 and avg_cpa == 0.0 and avg_roas == 0.0)  # All zeros = likely missing data
                 )
                 
                 if needs_update:
