@@ -128,16 +128,13 @@ class AdvancedMLSystem:
         """Generate optimized creatives using the full pipeline."""
         if self.creative_pipeline:
             # For testing: generate only 1 if target is 1, otherwise use normal logic
-            if target_count == 1:
-                generate_count = 1  # Test mode: only generate 1
-            else:
-                # Generate fewer variations to avoid timeout (max 10, but aim for target_count + 2)
-                generate_count = min(target_count + 2, 10)
-            logger.info(f"Generating {generate_count} creatives to filter to top {target_count}")
+            # Only generate what's needed: target_count + 1 extra for filtering (no wasteful AI usage)
+            # Don't pass generate_count - let pipeline auto-calculate
+            logger.info(f"Generating creatives to reach target of {target_count} (minimal AI usage)")
             return self.creative_pipeline.generate_creatives_batch(
                 product_info,
                 target_count=target_count,
-                generate_count=generate_count,  # Reduced from 20 to avoid timeout
+                generate_count=None,  # Auto-calculate: only generate what's needed
             )
         elif self.image_generator:
             # Fallback to simple generation

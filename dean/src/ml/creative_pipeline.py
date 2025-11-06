@@ -34,7 +34,7 @@ class CreativeGenerationPipeline:
         self,
         product_info: Dict[str, Any],
         target_count: int = 5,
-        generate_count: int = 20,
+        generate_count: Optional[int] = None,  # Auto-calculate if None
     ) -> List[Dict[str, Any]]:
         """Generate a batch of creatives through the pipeline."""
         # TESTING: If target_count is 1, only generate 1 creative (no filtering needed)
@@ -68,8 +68,12 @@ class CreativeGenerationPipeline:
             logger.info(f"Test mode complete: {len(generated_creatives)} creative generated")
             return generated_creatives
         
-        # Stage 1: Generate variations (normal mode)
-        logger.info(f"Stage 1: Generating {generate_count} creative variations")
+        # Stage 1: Generate only what's needed (no wasteful generation)
+        # Auto-calculate generate_count: only generate target_count + 1 extra for filtering
+        if generate_count is None:
+            generate_count = target_count + 1  # Only generate 1 extra for filtering
+        
+        logger.info(f"Stage 1: Generating {generate_count} creatives (target: {target_count})")
         generated_creatives = []
         
         # Get advanced ML system if available

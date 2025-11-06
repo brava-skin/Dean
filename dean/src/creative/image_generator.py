@@ -32,14 +32,14 @@ CHATGPT5_MODEL = "gpt-5"
 
 # Calm confidence text options
 CREATIVE_TEXT_OPTIONS = [
-    "Refined, not complicated.",
-    "Elevate your baseline.",
-    "Consistency builds presence.",
-    "Maintenance, not vanity.",
-    "Take care.",
-    "Presence over convenience.",
-    "Discipline, not hype.",
-    "Quiet confidence.",
+    "Refined skincare, not complicated.",
+    "Elevate your skin.",
+    "Consistency builds clear skin.",
+    "Skincare, not vanity.",
+    "Take care of skin.",
+    "Clear skin, quiet confidence.",
+    "Discipline for better skin.",
+    "Skincare with purpose.",
 ]
 
 HEADLINE_OPTIONS = [
@@ -907,7 +907,8 @@ Now generate the scenario following ALL requirements above."""
 
 CRITICAL REQUIREMENTS:
 - MAXIMUM 4 WORDS (must be short, simple, premium)
-- Examples: "Refined, not complicated." | "Elevate your baseline." | "Consistency builds presence." | "Quiet confidence."
+- MUST hint at skincare (use words like: skin, skincare, routine, care, face, clear, refined)
+- Examples: "Refined skincare, not complicated." | "Elevate your skin." | "Consistency builds clear skin." | "Skincare, not vanity."
 - Calm confidence tone: self-respect, not convenience; discipline, not vanity
 - Must complement the scenario and ad copy theme
 - White text on image (premium, luxury feel)
@@ -947,7 +948,7 @@ GENERATION PROCESS:
 5. Verify it matches calm confidence tone
 
 Return ONLY the text overlay (no explanations, no quotes, just the text).
-The text MUST be 4 words or less. Examples: "Refined, not complicated." | "Elevate your baseline." | "Quiet confidence.""""
+The text MUST be 4 words or less and MUST hint at skincare. Examples: "Refined skincare, not complicated." | "Elevate your skin." | "Clear skin, quiet confidence.""""
 
                 response = client.responses.create(
                     model=CHATGPT5_MODEL,
@@ -1455,17 +1456,23 @@ Ensure all text meets character limits and maintains calm confidence tone."""
             # Properly escape text for ffmpeg (escape single quotes, backslashes, colons, etc.)
             escaped_text = text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("[", "\\[").replace("]", "\\]")
             
-            # Premium font paths (try multiple options for different systems)
-            # Ubuntu/Linux: Use DejaVu Serif or Liberation Serif (premium serif fonts)
-            # macOS: Use system serif fonts
-            # Windows: Use system serif fonts
+            # Poppins font paths (try multiple options for different systems)
+            # Ubuntu/Linux: Poppins from Google Fonts or system
+            # macOS: Poppins from Google Fonts or system
+            # Windows: Poppins from Google Fonts or system
             font_paths = [
-                "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",  # Ubuntu/Linux - premium serif
-                "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",  # Ubuntu/Linux alternative
-                "/usr/share/fonts/truetype/noto/NotoSerif-Bold.ttf",  # Ubuntu/Linux alternative
-                "/System/Library/Fonts/Supplemental/Georgia.ttf",  # macOS
-                "/System/Library/Fonts/Supplemental/Georgia Bold.ttf",  # macOS bold
-                "C:/Windows/Fonts/georgiab.ttf",  # Windows
+                "/usr/share/fonts/truetype/poppins/Poppins-Bold.ttf",  # Ubuntu/Linux - Poppins
+                "/usr/share/fonts/truetype/Poppins-Bold.ttf",  # Ubuntu/Linux alternative path
+                "/usr/local/share/fonts/Poppins-Bold.ttf",  # Linux alternative
+                "~/.fonts/Poppins-Bold.ttf",  # User fonts
+                "/System/Library/Fonts/Supplemental/Poppins-Bold.ttf",  # macOS
+                "~/Library/Fonts/Poppins-Bold.ttf",  # macOS user fonts
+                "C:/Windows/Fonts/Poppins-Bold.ttf",  # Windows
+                "C:/Users/*/AppData/Local/Microsoft/Windows/Fonts/Poppins-Bold.ttf",  # Windows user fonts
+                # Fallback to system sans-serif if Poppins not found
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",  # Ubuntu/Linux fallback
+                "/System/Library/Fonts/Supplemental/Helvetica-Bold.ttf",  # macOS fallback
+                "C:/Windows/Fonts/arialbd.ttf",  # Windows fallback
             ]
             
             # Try to find an available premium serif font
