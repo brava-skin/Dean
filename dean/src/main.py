@@ -943,6 +943,27 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         except (KeyError, ValueError, TypeError) as e:
             logger.error(f"Failed to store creative intelligence for {ad_data.get('ad_id')}: {e}", exc_info=True)
         
+        # Track creative performance (populates creative_performance table)
+        try:
+            creative_id = ad_data.get('creative_id', '')
+            if creative_id and supabase_client:
+                from creative.creative_intelligence import create_creative_intelligence_system
+                creative_system = create_creative_intelligence_system(
+                    supabase_client=supabase_client,
+                    openai_api_key=os.getenv("OPENAI_API_KEY"),
+                    settings=None
+                )
+                if creative_system:
+                    creative_ids = {'image': creative_id}  # ASC+ uses static images
+                    creative_system.track_creative_performance(
+                        ad_id=ad_data.get('ad_id', ''),
+                        creative_ids=creative_ids,
+                        performance_data=ad_data,
+                        stage=stage
+                    )
+        except Exception as e:
+            logger.debug(f"Failed to track creative performance: {e}")
+        
         # Make ML predictions for this ad after data is stored
         if ml_system:
             try:

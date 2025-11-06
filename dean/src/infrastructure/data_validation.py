@@ -543,7 +543,7 @@ class SupabaseDataValidator:
                 'creative_id': StringValidator('creative_id', required=True, max_length=100),
                 'ad_id': StringValidator('ad_id', required=True, max_length=100),
                 'stage': StringValidator('stage', required=True,
-                                       allowed_values=['testing', 'validation', 'scaling', 'completed']),
+                                       allowed_values=['asc_plus', 'testing', 'validation', 'scaling', 'completed']),
                 'date_start': DateValidator('date_start', required=True),
                 'date_end': DateValidator('date_end', required=True),
                 'impressions': IntegerValidator('impressions', min_value=0),
@@ -601,6 +601,15 @@ class SupabaseDataValidator:
                 'metric_name': StringValidator('metric_name', required=True, max_length=100),
                 'metric_value': FloatValidator('metric_value', required=True),
                 'timestamp': DateValidator('timestamp', date_format="%Y-%m-%dT%H:%M:%S"),
+                'window_type': StringValidator('window_type', max_length=10),  # e.g., '1h', '1d'
+                'window_size': IntegerValidator('window_size', min_value=1),
+                'time_period': StringValidator('time_period', max_length=10),  # e.g., '1d', '7d'
+                'trend_direction': StringValidator('trend_direction', max_length=20),  # e.g., 'increasing', 'decreasing', 'stable'
+                'anomalies_detected': BooleanValidator('anomalies_detected'),
+                'seasonality_detected': BooleanValidator('seasonality_detected'),
+                'metadata': JSONValidator('metadata'),
+                'timestamps': CustomValidator('timestamps', self._validate_array, self._sanitize_array),
+                'values': CustomValidator('values', self._validate_array, self._sanitize_array),
             }),
             
             'ad_creation_times': TableValidator('ad_creation_times', {
@@ -728,6 +737,36 @@ class SupabaseDataValidator:
         
         if isinstance(value, list):
             return [str(x).strip() for x in value if str(x).strip()]
+        
+        return None
+    
+    def _validate_array(self, value: Any, data: Dict[str, Any]) -> List[str]:
+        """Validate array field (for timestamps, values, etc.)."""
+        errors = []
+        
+        if value is None or value == '':
+            return errors  # Optional field
+        
+        if not isinstance(value, list):
+            errors.append("Field must be a list/array")
+        
+        return errors
+    
+    def _sanitize_array(self, value: Any) -> Optional[List]:
+        """Sanitize array field."""
+        if value is None or value == '':
+            return None
+        
+        if isinstance(value, list):
+            return value
+        
+        # Try to convert string representation of list
+        if isinstance(value, str):
+            try:
+                import json
+                return json.loads(value)
+            except:
+                pass
         
         return None
     
