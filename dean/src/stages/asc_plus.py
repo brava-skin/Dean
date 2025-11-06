@@ -1229,10 +1229,12 @@ def run_asc_plus_tick(
                         except (AttributeError, ValueError, TypeError) as e:
                             logger.debug(f"Failed to get ML insights: {e}")
                 
-                    # Generate creatives until target is reached (but max 5 attempts per tick to avoid infinite loops)
+                    # Generate creatives until target is reached (allow enough attempts to reach target)
                     remaining_needed = target_count - active_count
-                    max_attempts = min(remaining_needed, 5)  # Don't try more than 5 times per tick
+                    max_attempts = min(remaining_needed * 2, 10)  # Allow up to 10 attempts or 2x needed count (whichever is less)
                     attempts = 0
+                    
+                    logger.info(f"🎯 Starting generation loop: need {remaining_needed} more ads (current: {active_count}, target: {target_count}, max attempts: {max_attempts})")
                     
                     while active_count < target_count and attempts < max_attempts:
                         attempts += 1
