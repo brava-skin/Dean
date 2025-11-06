@@ -519,7 +519,7 @@ class ImageCreativeGenerator:
         # Store scenario description for inclusion in result (for ML tracking)
         self._last_scenario_description = scenario_description
         
-            brand_guidelines = {
+        brand_guidelines = {
             "brand_name": "Brava",
             "target_audience": "premium American men aged 18-54 who value discipline",
             "style": "premium, sophisticated, calm confidence",
