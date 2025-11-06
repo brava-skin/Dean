@@ -448,12 +448,19 @@ class LearningEventsOptimizer:
             if complete_data.get('event_type') not in valid_event_types:
                 complete_data['event_type'] = 'unknown'
             
-            # Update if needed
+            # Update if needed (only update fields that can be updated, not read-only ones like id, created_at)
             if complete_data != existing_data:
-                self.client.table('learning_events').update({
-                    **complete_data,
+                update_fields = {
+                    'confidence_score': complete_data.get('confidence_score', 0.5),
+                    'impact_score': complete_data.get('impact_score', 0.5),
+                    'learning_data': complete_data.get('learning_data', {}),
+                    'event_data': complete_data.get('event_data', {}),
                     'updated_at': datetime.now(timezone.utc).isoformat(),
-                }).eq('id', event_id).execute()
+                }
+                # Only update if values actually changed
+                if (update_fields['confidence_score'] != existing_data.get('confidence_score') or
+                    update_fields['impact_score'] != existing_data.get('impact_score')):
+                    self.client.table('learning_events').update(update_fields).eq('id', event_id).execute()
             
             return complete_data
         except Exception as e:
@@ -597,12 +604,25 @@ class MLDataOptimizer:
             event_results = self.learning_events_optimizer.backfill_event_scores()
             results['learning_events'] = event_results
             
-            # Validate creative_storage (report only, don't auto-fix unless needed)
-            logger.info("Validating creative_storage table...")
+            # Validate and auto-fix creative_storage
+            logger.info("Validating and fixing creative_storage table...")
             storage_issues = self._validate_all_storage()
+            fixed_count = 0
+            # Auto-fix missing metadata fields
+            for issue in storage_issues:
+                if 'Missing metadata field' in issue:
+                    # Extract creative_id from issue string
+                    creative_id = issue.split(':')[0] if ':' in issue else None
+                    if creative_id:
+                        try:
+                            if self.creative_storage_optimizer.fix_storage_data(creative_id):
+                                fixed_count += 1
+                        except Exception:
+                            pass
             results['creative_storage'] = {
                 'validated': len(storage_issues) == 0,
                 'issues_found': len(storage_issues),
+                'fixed': fixed_count,
                 'issues': storage_issues[:10],  # Limit to first 10
             }
             

@@ -771,6 +771,15 @@ def run_asc_plus_tick(
                 except Exception as e:
                     logger.warning(f"Failed to check creative queue: {e}")
             
+            # Initialize image generator early (needed for both queued and new creatives)
+            from creative.image_generator import create_image_generator
+            import os
+            image_generator = create_image_generator(
+                flux_api_key=os.getenv("FLUX_API_KEY"),
+                openai_api_key=os.getenv("OPENAI_API_KEY"),
+                ml_system=ml_system,
+            )
+            
             # If we found a queued creative, use it instead of generating
             if queued_creative:
                 logger.info(f"✅ Using queued creative: {queued_creative.get('creative_id')}")
@@ -794,7 +803,7 @@ def run_asc_plus_tick(
                 # Create ad with queued creative
                 creative_id, ad_id, success = _create_creative_and_ad(
                     client=client,
-                    image_generator=None,  # Not needed for queued creative
+                    image_generator=image_generator,  # Now always available
                     creative_data=creative_data,
                     adset_id=adset_id,
                     active_count=active_count,
@@ -827,15 +836,6 @@ def run_asc_plus_tick(
             # STEP 2: No queued creative available - generate exactly 1
             if not queued_creative:
                 notify(f"📸 Generating EXACTLY 1 new creative (need {needed_count} more to reach {target_count}, currently {active_count} active)")
-                
-                # Initialize image generator with ML system
-                from creative.image_generator import create_image_generator
-                import os
-                image_generator = create_image_generator(
-                    flux_api_key=os.getenv("FLUX_API_KEY"),
-                    openai_api_key=os.getenv("OPENAI_API_KEY"),
-                    ml_system=ml_system,
-                )
             
             # Initialize template library for faster creative generation
             template_library = None

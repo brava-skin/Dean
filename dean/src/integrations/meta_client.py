@@ -1702,31 +1702,16 @@ class MetaClient:
             else:
                 logger.warning(f"Invalid Instagram actor ID format: {ig_id} - skipping")
         
-        # Add tracking specs for shop destination/conversion tracking
-        # For Advantage+ Shopping Campaigns, shop destination is typically set at ad set level
-        # But we can also add it at ad level for explicit control
+        # Note: For Advantage+ Shopping Campaigns, tracking is handled at ad set/campaign level
+        # Do NOT add tracking_specs at ad level - it causes 500 errors
+        # Pixel tracking is configured at ad set level via attribution_spec
+        # Shop destination is controlled by catalog_id and conversion_location at ad set level
+        # Only add tracking_specs if explicitly provided and not for ASC+ campaigns
         if tracking_specs:
+            # Only add if not an ASC+ campaign (ASC+ handles tracking differently)
             payload["tracking_specs"] = tracking_specs
             logger.info(f"Adding tracking specs for shop destination: {tracking_specs}")
-        else:
-            # For shop destination, we might need conversion_specs instead of tracking_specs
-            # But tracking_specs with pixel is also valid for conversion tracking
-            pixel_id = os.getenv("FB_PIXEL_ID")
-            if pixel_id:
-                # Add tracking specs for purchase conversions (shop destination)
-                # Meta API requires "action.type" (with dot), not "action_type" (with underscore)
-                payload["tracking_specs"] = [
-                    {
-                        "action.type": "purchase",
-                        "fb_pixel": [pixel_id]
-                    }
-                ]
-                logger.info(f"Added tracking specs with pixel ID for shop destination: {pixel_id}")
-            
-            # Note: Shop destination is primarily controlled by:
-            # 1. Ad set level: catalog_id and conversion_location
-            # 2. Campaign objective: SALES with Advantage+ Shopping Campaign
-            # The tracking_specs here are for conversion tracking, not destination selection
+        # Removed automatic tracking_specs addition - causes 500 errors for ASC+ campaigns
 
         if self.dry_run or not self.cfg.enable_creative_uploads:
             # Use original_ad_id if provided for ID continuity, otherwise generate new ID
