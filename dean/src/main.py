@@ -2375,7 +2375,7 @@ def main() -> None:
         
         # Collect ad insights and post as thread reply
         try:
-            if stage_choice in ("all", "testing"):
+            if stage_choice in ("all", "asc_plus", "testing"):
                 # Get today's insights with local timezone
                 import zoneinfo
                 
@@ -2386,13 +2386,20 @@ def main() -> None:
                 now = datetime.now(local_tz)
                 midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
                 
+                # Build filtering - use ASC+ adset ID if available, otherwise filter by status only
+                asc_plus_adset_id = settings.get("ids", {}).get("asc_plus_adset_id")
+                filtering_today = [{"field": "ad.status", "operator": "IN", "value": ["ACTIVE"]}]
+                filtering_lifetime = []
+                
+                # Only add adset filter if we have a valid adset ID
+                if asc_plus_adset_id:
+                    filtering_today.insert(0, {"field": "adset.id", "operator": "IN", "value": [asc_plus_adset_id]})
+                    filtering_lifetime = [{"field": "adset.id", "operator": "IN", "value": [asc_plus_adset_id]}]
+                
                 # Get today's data for ACTIVE ads only
                 rows_today = client.get_ad_insights(
                     level="ad",
-                    filtering=[
-                        {"field": "adset.id", "operator": "IN", "value": [settings.get("ids", {}).get("testing_adset_id")]},
-                        {"field": "ad.status", "operator": "IN", "value": ["ACTIVE"]}
-                    ],
+                    filtering=filtering_today,
                     fields=["ad_id", "ad_name", "spend", "actions"],
                     time_range={
                         "since": midnight.strftime("%Y-%m-%d"),
@@ -2405,7 +2412,7 @@ def main() -> None:
                 # Get lifetime data
                 rows_lifetime = client.get_ad_insights(
                     level="ad",
-                    filtering=[{"field": "adset.id", "operator": "IN", "value": [settings.get("ids", {}).get("testing_adset_id")]}],
+                    filtering=filtering_lifetime,
                     fields=["ad_id", "spend", "actions"],
                     time_range={
                         "since": "2024-01-01",  # Far back enough to capture all lifetime
