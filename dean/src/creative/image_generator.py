@@ -494,27 +494,32 @@ class ImageCreativeGenerator:
             return None
     
     def _get_ml_insights(self) -> Dict[str, Any]:
-        """Get ML insights about what works from ASC+ campaign"""
+        """Get ML insights about what works and what doesn't from ASC+ campaign.
+        Uses insights from killed creatives to inform new generation."""
         if not self.ml_system:
             return {}
         
         try:
-            # Get top performing creatives from ML system
-            insights = {
-                "top_performing_creatives": [],
-                "best_prompts": [],
-                "best_text_overlays": [],
-                "best_ad_copy": [],
-            }
-            
-            # Query ML system for insights
-            # This would query the Supabase database for top performers
-            # For now, return empty structure that can be populated
-            
-            return insights
+            # Get comprehensive insights from ML system
+            # This includes best/worst performers, scenarios, text overlays, ad copy
+            if hasattr(self.ml_system, 'get_creative_insights'):
+                insights = self.ml_system.get_creative_insights()
+                logger.info(f"✅ Retrieved ML insights: {len(insights.get('best_scenarios', []))} best scenarios, {len(insights.get('worst_scenarios', []))} worst scenarios")
+                return insights
+            else:
+                # Fallback structure
+                return {
+                    "top_performing_creatives": [],
+                    "best_prompts": [],
+                    "best_text_overlays": [],
+                    "best_ad_copy": [],
+                    "worst_ad_copy": [],
+                    "best_scenarios": [],
+                    "worst_scenarios": [],
+                }
             
         except Exception as e:
-            notify(f"⚠️ Error getting ML insights: {e}")
+            logger.warning(f"⚠️ Error getting ML insights: {e}")
             return {}
     
     def _generate_image_prompt(
