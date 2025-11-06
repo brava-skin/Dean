@@ -272,13 +272,18 @@ def _create_creative_and_ad(
         if len(ad_name) > 100:
             ad_name = f"[ASC+] {headline_snippet[:20]} - {date_str} - #{seq_num}"
         
-        logger.info(f"Creating ad with name='{ad_name}', adset_id='{adset_id}', creative_id='{meta_creative_id}'")
+        # Get Instagram actor ID for ad level (alternative approach)
+        instagram_actor_id = os.getenv("IG_ACTOR_ID")
+        
+        logger.info(f"Creating ad with name='{ad_name}', adset_id='{adset_id}', creative_id='{meta_creative_id}', instagram_actor_id={bool(instagram_actor_id)}")
         try:
             ad = client.create_ad(
                 adset_id=adset_id,
                 name=ad_name,
                 creative_id=meta_creative_id,  # Use Meta's creative ID
                 status="ACTIVE",
+                instagram_actor_id=instagram_actor_id,  # Add Instagram at ad level (alternative approach)
+                tracking_specs=None,  # Will use default pixel-based tracking if pixel ID is set
             )
             logger.info(f"Meta API create_ad response: {ad}")
         except Exception as e:

@@ -1672,7 +1672,17 @@ class MetaClient:
             notify(f"❌ Failed to upload image: {e}")
             raise
 
-    def create_ad(self, adset_id: str, name: str, creative_id: str, status: str = "PAUSED", *, original_ad_id: Optional[str] = None) -> Dict[str, Any]:
+    def create_ad(
+        self, 
+        adset_id: str, 
+        name: str, 
+        creative_id: str, 
+        status: str = "PAUSED", 
+        *, 
+        original_ad_id: Optional[str] = None,
+        instagram_actor_id: Optional[str] = None,  # Instagram account at ad level (alternative approach)
+        tracking_specs: Optional[List[Dict[str, Any]]] = None,  # For shop destination/conversion tracking
+    ) -> Dict[str, Any]:
         self._check_names(ad=_s(name))
 
         payload = {
@@ -1681,11 +1691,37 @@ class MetaClient:
             "creative": {"creative_id": _s(creative_id)},
             "status": _s(status),
         }
+        
+        # Add Instagram actor ID at ad level (alternative approach if creative level doesn't work)
+        ig_id = instagram_actor_id or os.getenv("IG_ACTOR_ID") or None
+        if ig_id:
+            ig_id = str(ig_id).strip()
+            if ig_id and ig_id.isdigit() and ig_id != "17841477094913251":  # Valid Instagram ID
+                payload["instagram_actor_id"] = ig_id
+                logger.info(f"Adding Instagram actor ID at ad level: {ig_id}")
+            else:
+                logger.warning(f"Invalid Instagram actor ID format: {ig_id} - skipping")
+        
+        # Add tracking specs for shop destination/conversion tracking
+        if tracking_specs:
+            payload["tracking_specs"] = tracking_specs
+            logger.info(f"Adding tracking specs for shop destination: {tracking_specs}")
+        else:
+            # Default tracking specs for shop destination (if pixel ID is available)
+            pixel_id = os.getenv("FB_PIXEL_ID")
+            if pixel_id:
+                payload["tracking_specs"] = [
+                    {
+                        "action_type": "purchase",
+                        "fb_pixel": [pixel_id]
+                    }
+                ]
+                logger.info(f"Added default tracking specs with pixel ID: {pixel_id}")
 
         if self.dry_run or not self.cfg.enable_creative_uploads:
             # Use original_ad_id if provided for ID continuity, otherwise generate new ID
             ad_id = original_ad_id if original_ad_id else f"AD_{abs(hash(_s(name))) % 10_000_000}"
-            return {"id": ad_id, "name": _s(name), "mock": True, "status": status}
+            return {"id": ad_id, "name": _s(name), "mock": True, "status": status, **payload}
 
         self._cooldown()
         try:
