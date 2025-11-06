@@ -85,9 +85,9 @@ META_BUC_HEADERS = {
 }
 
 # Naming & compliance
-CAMPAIGN_NAME_RE = re.compile(r"^\[(TEST|VALID|SCALE|SCALE-CBO)\]\s+Brava\s+-\s+(ABO|CBO)\s+-\s+US Men$")
-ADSET_NAME_RE    = re.compile(r"^\[(TEST|VALID|SCALE)\]\s+.+$")
-AD_NAME_RE       = re.compile(r"^\[(TEST|VALID|SCALE)\]\s+.+$")
+CAMPAIGN_NAME_RE = re.compile(r"^\[(TEST|VALID|SCALE|SCALE-CBO|ASC\+)\]\s+Brava\s+-\s+(ABO|CBO)\s+-\s+US Men$")
+ADSET_NAME_RE    = re.compile(r"^\[(TEST|VALID|SCALE|ASC\+)\]\s+.+$")
+AD_NAME_RE       = re.compile(r"^\[(TEST|VALID|SCALE|ASC\+)\]\s+.+$")
 FORBIDDEN_TERMS  = tuple(x.strip().lower() for x in os.getenv("FORBIDDEN_TERMS", "cures,miracle,guaranteed").split(","))
 
 HUMAN_CONFIRM_JUMP_PCT = float(os.getenv("HUMAN_CONFIRM_JUMP_PCT", "200") or 200.0)
