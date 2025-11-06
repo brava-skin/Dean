@@ -448,18 +448,19 @@ class LearningEventsOptimizer:
                 complete_data['event_type'] = 'unknown'
             
             # Update if needed (only update fields that can be updated, not read-only ones like id, created_at)
+            # Note: learning_events table doesn't have updated_at field
             if complete_data != existing_data:
                 update_fields = {
-                    'confidence_score': complete_data.get('confidence_score', 0.5),
-                    'impact_score': complete_data.get('impact_score', 0.5),
-                    'learning_data': complete_data.get('learning_data', {}),
-                    'event_data': complete_data.get('event_data', {}),
-                    'updated_at': datetime.now(timezone.utc).isoformat(),
+                    'confidence_score': float(complete_data.get('confidence_score', 0.5)),
+                    'impact_score': float(complete_data.get('impact_score', 0.5)),
                 }
                 # Only update if values actually changed
-                if (update_fields['confidence_score'] != existing_data.get('confidence_score') or
-                    update_fields['impact_score'] != existing_data.get('impact_score')):
-                    self.client.table('learning_events').update(update_fields).eq('id', event_id).execute()
+                if (abs(update_fields['confidence_score'] - existing_data.get('confidence_score', 0.5)) > 0.01 or
+                    abs(update_fields['impact_score'] - existing_data.get('impact_score', 0.5)) > 0.01):
+                    try:
+                        self.client.table('learning_events').update(update_fields).eq('id', event_id).execute()
+                    except Exception as e:
+                        logger.debug(f"Failed to update learning event {event_id}: {e}")
             
             return complete_data
         except Exception as e:
@@ -550,13 +551,15 @@ class LearningEventsOptimizer:
                 
                 if abs(confidence - current_confidence) > 0.01 or abs(impact - current_impact) > 0.01:
                     try:
-                        self.client.table('learning_events').update({
-                            'confidence_score': confidence,
-                            'impact_score': impact,
-                            'updated_at': datetime.now(timezone.utc).isoformat(),
-                        }).eq('id', event_id).execute()
+                        # Only update score fields (learning_events table doesn't have updated_at field)
+                        update_data = {
+                            'confidence_score': float(confidence),
+                            'impact_score': float(impact),
+                        }
+                        self.client.table('learning_events').update(update_data).eq('id', event_id).execute()
                         updated += 1
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to update learning event {event_id}: {e}")
                         errors += 1
                 else:
                     skipped += 1
@@ -608,16 +611,22 @@ class MLDataOptimizer:
             storage_issues = self._validate_all_storage()
             fixed_count = 0
             # Auto-fix missing metadata fields
+            # Issue format: "creative_id: Missing metadata field: field_name"
+            fixed_creatives = set()  # Track which creatives we've already fixed
             for issue in storage_issues:
                 if 'Missing metadata field' in issue:
-                    # Extract creative_id from issue string
-                    creative_id = issue.split(':')[0] if ':' in issue else None
-                    if creative_id:
-                        try:
-                            if self.creative_storage_optimizer.fix_storage_data(creative_id):
-                                fixed_count += 1
-                        except Exception:
-                            pass
+                    # Extract creative_id from issue string (format: "creative_id: Missing metadata field: field_name")
+                    parts = issue.split(':')
+                    if len(parts) >= 1:
+                        creative_id = parts[0].strip()
+                        # Validate creative_id format (should start with "creative_")
+                        if creative_id.startswith('creative_') and creative_id not in fixed_creatives:
+                            try:
+                                if self.creative_storage_optimizer.fix_storage_data(creative_id):
+                                    fixed_creatives.add(creative_id)
+                                    fixed_count += 1
+                            except Exception as e:
+                                logger.debug(f"Failed to fix creative {creative_id}: {e}")
             results['creative_storage'] = {
                 'validated': len(storage_issues) == 0,
                 'issues_found': len(storage_issues),

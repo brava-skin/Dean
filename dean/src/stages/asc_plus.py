@@ -277,15 +277,33 @@ def _create_creative_and_ad(
         
         logger.info(f"Creating ad with name='{ad_name}', adset_id='{adset_id}', creative_id='{meta_creative_id}', instagram_actor_id={bool(instagram_actor_id)}")
         try:
+            # Ensure creative_id is a string (Meta API requires string format)
+            creative_id_str = str(meta_creative_id).strip()
+            if not creative_id_str or not creative_id_str.isdigit():
+                logger.error(f"Invalid creative_id format: {meta_creative_id} (expected numeric string)")
+                return None, None, False
+            
             ad = client.create_ad(
                 adset_id=adset_id,
                 name=ad_name,
-                creative_id=meta_creative_id,  # Use Meta's creative ID
+                creative_id=creative_id_str,  # Use Meta's creative ID (ensure string format)
                 status="ACTIVE",
                 instagram_actor_id=instagram_actor_id,  # Add Instagram at ad level (alternative approach)
                 tracking_specs=None,  # Will use default pixel-based tracking if pixel ID is set
             )
             logger.info(f"Meta API create_ad response: {ad}")
+        except ValueError as ve:
+            logger.error(f"Validation error creating ad: {ve}")
+            return None, None, False
+        except RuntimeError as re:
+            error_str = str(re)
+            if "500" in error_str or "unknown error" in error_str.lower():
+                logger.warning(f"Meta API 500 error (may be transient): {re}")
+                # Don't fail completely on 500 errors - might be transient
+                return None, None, False
+            else:
+                logger.error(f"Meta API error creating ad: {re}")
+                return None, None, False
         except Exception as e:
             logger.error(f"Meta API create_ad failed: {e}", exc_info=True)
             return str(meta_creative_id), None, False

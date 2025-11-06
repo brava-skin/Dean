@@ -1685,10 +1685,18 @@ class MetaClient:
     ) -> Dict[str, Any]:
         self._check_names(ad=_s(name))
 
+        # Validate required fields before creating payload
+        if not adset_id or not creative_id:
+            raise ValueError(f"Missing required fields: adset_id={bool(adset_id)}, creative_id={bool(creative_id)}")
+        
+        # Validate creative_id format (should be numeric string)
+        if not str(creative_id).strip().isdigit():
+            logger.warning(f"Invalid creative_id format: {creative_id} (expected numeric string)")
+        
         payload = {
             "name": _s(name),
             "adset_id": _s(adset_id),
-            "creative": {"creative_id": _s(creative_id)},
+            "creative": {"creative_id": str(creative_id).strip()},  # Ensure string format
             "status": _s(status),
         }
         
@@ -1720,10 +1728,33 @@ class MetaClient:
 
         self._cooldown()
         try:
-            return self._graph_post("ads", payload)
-        except Exception:
+            # Try graph API first
+            result = self._graph_post("ads", payload)
+            return result
+        except RuntimeError as e:
+            # If graph API fails with 500, try SDK as fallback
+            error_str = str(e)
+            if "500" in error_str or "unknown error" in error_str.lower():
+                logger.warning(f"Graph API returned 500 error, trying SDK fallback: {e}")
+                if USE_SDK:
+                    self._init_sdk_if_needed()
+                    def _create_sdk():
+                        return AdAccount(self.ad_account_id_act).create_ad(fields=[], params=_sanitize(payload))
+                    try:
+                        return dict(self._retry("create_ad", _create_sdk))
+                    except Exception as sdk_error:
+                        logger.error(f"SDK fallback also failed: {sdk_error}")
+                        raise RuntimeError(f"Both Graph API and SDK failed. Graph: {e}, SDK: {sdk_error}")
+                else:
+                    raise
+            else:
+                # Re-raise non-500 errors
+                raise
+        except Exception as e:
+            # For other exceptions, try SDK if available
             if not USE_SDK:
                 raise
+            logger.warning(f"Graph API failed, trying SDK fallback: {e}")
             self._init_sdk_if_needed()
             def _create_sdk():
                 return AdAccount(self.ad_account_id_act).create_ad(fields=[], params=_sanitize(payload))
