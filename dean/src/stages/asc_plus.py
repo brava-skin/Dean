@@ -150,7 +150,7 @@ def _create_creative_and_ad(
             storage_creative_id = f"creative_{int(time.time())}"
     
     try:
-        creative_name = f"ASC Creative {active_count + created_count + 1}"
+        creative_name = f"[ASC+] Creative {active_count + created_count + 1}"
         
         # Use Supabase Storage URL if available, otherwise fallback to image_path
         supabase_storage_url = creative_data.get("supabase_storage_url")
@@ -200,7 +200,7 @@ def _create_creative_and_ad(
             return str(meta_creative_id), None, False
         
         # Create ad
-        ad_name = f"ASC Plus Ad {active_count + created_count + 1}"
+        ad_name = f"[ASC+] Ad {active_count + created_count + 1}"
         logger.info(f"Creating ad with name='{ad_name}', adset_id='{adset_id}', creative_id='{meta_creative_id}'")
         try:
             ad = client.create_ad(
