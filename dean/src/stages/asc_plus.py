@@ -904,9 +904,17 @@ def run_asc_plus_tick(
                                                         except Exception as e:
                                                             logger.warning(f"Failed to mark creative as active: {e}")
                                                     
-                                                    # HARD STOP: We created 1 ad, STOP immediately
-                                                    skip_standard_generation = True
-                                                    logger.info(f"🛑 HARD STOP: Created 1 ad - stopping all further generation")
+                                                    # Refresh active count and check if we need more
+                                                    ads = client.list_ads_in_adset(adset_id)
+                                                    active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
+                                                    active_count = len(active_ads)
+                                                    
+                                                    if active_count >= target_count:
+                                                        logger.info(f"✅ Reached target: {active_count}/{target_count} active creatives - stopping")
+                                                        skip_standard_generation = True
+                                                    else:
+                                                        logger.info(f"✅ Created 1 ad, but still need {target_count - active_count} more (active: {active_count}, target: {target_count})")
+                                                        skip_standard_generation = False  # Allow standard generation to continue
                                                 else:
                                                     failed_count += 1
                                                     failed_reasons.append(f"Failed to create (creative_id={creative_id}, ad_id={ad_id})")
@@ -993,13 +1001,21 @@ def run_asc_plus_tick(
                     active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
                     active_count = len(active_ads)
                     
-                    # HARD STOP: If we've generated 1 creative, STOP - don't fallback or retry
-                    if created_count >= 1:
-                        logger.info(f"✅ Generated 1 creative as requested - STOPPING (active: {active_count}, target: {target_count})")
-                        # Set flag to skip standard generation
-                        advanced_ml = None  # This will prevent fallback
-                        # Skip standard generation by setting a flag
+                    # Check if we've reached the target - if so, stop
+                    # Refresh active_count to get latest status
+                    ads = client.list_ads_in_adset(adset_id)
+                    active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
+                    active_count = len(active_ads)
+                    
+                    if active_count >= target_count:
+                        logger.info(f"✅ Reached target: {active_count}/{target_count} active creatives - STOPPING")
                         skip_standard_generation = True
+                        advanced_ml = None
+                    elif created_count >= 1 and active_count < target_count:
+                        # Generated 1, but still need more - allow standard generation to continue
+                        logger.info(f"✅ Generated 1 creative via advanced ML, but still need {target_count - active_count} more (active: {active_count}, target: {target_count})")
+                        skip_standard_generation = False  # Allow standard generation to fill the gap
+                        advanced_ml = None  # Don't use advanced ML again this tick
                     else:
                         # Fallback to standard generation ONLY if we haven't generated anything yet
                         if active_count < target_count and created_count == 0:
