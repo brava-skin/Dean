@@ -1369,7 +1369,7 @@ class MetaClient:
         self._cooldown()
 
         image_data: Dict[str, Any] = {
-            "message": _s(primary_text),
+            "message": _s(primary_text),  # Primary text (main ad copy)
         }
         
         # Use image_hash if it's a hash, otherwise use image_url
@@ -1378,10 +1378,15 @@ class MetaClient:
         else:
             image_data["image_hash"] = _s(final_image_url)
         
+        # Headline goes in "name" field for single image creatives
         if headline:
-            image_data["link_description"] = _s(headline)[:100]
+            image_data["name"] = _s(headline)[:100]
+        
+        # Description (optional)
         if description:
             image_data["description"] = _s(description)[:150]
+        
+        # "Shop now" CTA
         if final_link:
             image_data["call_to_action"] = {"type": _s(call_to_action or "SHOP_NOW"), "value": {"link": _s(final_link)}}
 

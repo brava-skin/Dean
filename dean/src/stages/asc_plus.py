@@ -187,25 +187,26 @@ def _create_creative_and_ad(
                 if len(primary_text) > 150:
                     primary_text = primary_text[:147] + "..."
             
-            # Create carousel creative with main image and catalog products
-            # Note: Catalog products are automatically pulled from the catalog configured in the ad set
-            # The main image (our generated creative) will be the first card, catalog products will be additional cards
-            product_catalog_id = os.getenv("PRODUCT_CATALOG_ID")  # Optional - Meta will use ad set's catalog if not provided
+            # Create single image creative with catalog products
+            # Note: For ASC+ campaigns, the catalog is configured at the ad set level
+            # Meta will automatically show product cards from the catalog below the single image
+            # The creative is a single image with primary text, headline, and "Shop now" CTA
             
-            creative = client.create_carousel_creative(
+            creative = client.create_image_creative(
                 page_id=page_id,
                 name=creative_name,
                 supabase_storage_url=supabase_storage_url,  # Use Supabase Storage URL
-                main_image_path=image_path if not supabase_storage_url else None,
+                image_path=image_path if not supabase_storage_url else None,
                 primary_text=primary_text,
                 headline=ad_copy_dict.get("headline", ""),
                 description=ad_copy_dict.get("description", ""),
+                call_to_action="SHOP_NOW",  # "Shop now" CTA
                 instagram_actor_id=instagram_actor_id,  # Add Instagram account
-                product_catalog_id=product_catalog_id,  # Optional - Meta uses ad set's catalog
+                creative_id=storage_creative_id,  # Pass storage creative_id for tracking
             )
-            logger.info(f"Meta API create_carousel_creative response: {creative}")
+            logger.info(f"Meta API create_image_creative response: {creative}")
         except Exception as e:
-            logger.error(f"Meta API create_carousel_creative failed: {e}", exc_info=True)
+            logger.error(f"Meta API create_image_creative failed: {e}", exc_info=True)
             return None, None, False
         
         meta_creative_id = creative.get("id")
