@@ -1010,11 +1010,16 @@ def run_asc_plus_tick(
                     logger.error(f"Advanced pipeline failed with exception, using standard generation: {e}", exc_info=True)
                     advanced_ml = None
             
-            # Standard generation (fallback) - SMART: Generate exactly 1 creative
+            # Standard generation (fallback) - Continue generating until target is reached
             if not skip_standard_generation and (not advanced_ml or not advanced_ml.creative_pipeline):
-                # HARD STOP: If we already generated 1 creative, STOP
-                if created_count >= 1:
-                    logger.info(f"✅ Already generated 1 creative - STOPPING standard generation")
+                # Refresh active_count before standard generation
+                ads = client.list_ads_in_adset(adset_id)
+                active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
+                active_count = len(active_ads)
+                
+                # Only generate if we still need more
+                if active_count >= target_count:
+                    logger.info(f"✅ Target reached: {active_count}/{target_count} active creatives - skipping standard generation")
                 else:
                     # Get ML insights from killed creatives to inform generation
                     ml_insights = None
@@ -1153,18 +1158,32 @@ def run_asc_plus_tick(
                                 min_budget=ASC_PLUS_BUDGET_MIN,
                             )
                             
-                            # Ensure recommended_budget is also a float
+                            # Ensure recommended_budget is also a float (handle both dataclass and dict responses)
                             try:
-                                recommended_budget = float(decision.recommended_budget) if decision.recommended_budget is not None else current_budget
-                            except (ValueError, TypeError, AttributeError):
+                                if hasattr(decision, 'recommended_budget'):
+                                    recommended_budget = float(decision.recommended_budget) if decision.recommended_budget is not None else current_budget
+                                elif isinstance(decision, dict):
+                                    recommended_budget = float(decision.get('recommended_budget', current_budget))
+                                else:
+                                    recommended_budget = current_budget
+                            except (ValueError, TypeError, AttributeError) as e:
+                                logger.warning(f"Failed to convert recommended_budget to float: {e}, using current_budget")
                                 recommended_budget = current_budget
                             
-                            if recommended_budget != current_budget and decision.confidence > 0.7:
-                                budget_change_pct = ((recommended_budget - current_budget) / current_budget) * 100
+                            # Ensure both are floats before comparison
+                            try:
+                                current_budget_float = float(current_budget)
+                                recommended_budget_float = float(recommended_budget)
+                            except (ValueError, TypeError):
+                                logger.warning(f"Budget values not numeric: current={current_budget}, recommended={recommended_budget}")
+                                continue  # Skip this iteration
+                            
+                            if recommended_budget_float != current_budget_float and decision.confidence > 0.7:
+                                budget_change_pct = ((recommended_budget_float - current_budget_float) / current_budget_float) * 100
                                 if abs(budget_change_pct) > 10:  # Only adjust if >10% change
-                                    logger.info(f"Budget scaling recommendation: €{current_budget:.2f} -> €{recommended_budget:.2f} ({budget_change_pct:+.1f}%)")
-                                    reason = getattr(decision, 'reason', 'performance-based')
-                                    notify(f"💡 Budget scaling: €{current_budget:.2f} -> €{recommended_budget:.2f} ({reason}, confidence: {decision.confidence:.1%})")
+                                    logger.info(f"Budget scaling recommendation: €{current_budget_float:.2f} -> €{recommended_budget_float:.2f} ({budget_change_pct:+.1f}%)")
+                                    reason = getattr(decision, 'reason', 'performance-based') if hasattr(decision, 'reason') else 'performance-based'
+                                    notify(f"💡 Budget scaling: €{current_budget_float:.2f} -> €{recommended_budget_float:.2f} ({reason}, confidence: {decision.confidence:.1%})")
                 except Exception as e:
                     logger.warning(f"Budget scaling error: {e}")
             
