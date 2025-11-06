@@ -123,30 +123,27 @@ class AdvancedMLSystem:
     def generate_optimized_creatives(
         self,
         product_info: Dict[str, Any],
-        target_count: int = 5,
+        target_count: int = 1,  # Default to 1 - always generate exactly 1 smart creative
     ) -> List[Dict[str, Any]]:
-        """Generate optimized creatives using the full pipeline."""
+        """Generate optimized creatives using the full pipeline - SMART: Always generates exactly 1."""
         if self.creative_pipeline:
-            # For testing: generate only 1 if target is 1, otherwise use normal logic
-            # Only generate what's needed: target_count + 1 extra for filtering (no wasteful AI usage)
-            # Don't pass generate_count - let pipeline auto-calculate
-            logger.info(f"Generating creatives to reach target of {target_count} (minimal AI usage)")
+            # SMART GENERATION: Always generate exactly 1 creative using ML insights
+            # The ML system will use insights from killed creatives to generate the best possible creative
+            # This prevents overusage of Flux and ChatGPT
+            logger.info(f"Generating 1 smart creative using ML insights (target_count={target_count}, but always generating 1)")
             return self.creative_pipeline.generate_creatives_batch(
                 product_info,
-                target_count=target_count,
-                generate_count=None,  # Auto-calculate: only generate what's needed
+                target_count=1,  # Always generate exactly 1
+                generate_count=1,  # Explicitly set to 1 - no batch generation
             )
         elif self.image_generator:
-            # Fallback to simple generation
-            creatives = []
-            for i in range(target_count):
-                creative = self.image_generator.generate_creative(
-                    product_info,
-                    creative_style=f"creative_{i}",
-                )
-                if creative:
-                    creatives.append(creative)
-            return creatives
+            # Fallback to simple generation - generate exactly 1
+            creative = self.image_generator.generate_creative(
+                product_info,
+                creative_style="smart_creative",
+            )
+            if creative:
+                return [creative]
         return []
     
     def analyze_creative_performance(

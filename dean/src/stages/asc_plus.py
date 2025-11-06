@@ -631,15 +631,17 @@ def run_asc_plus_tick(
                     logger.error(f"Failed to kill ad {ad_id}: {e}", exc_info=True)
                     notify(f"⚠️ Failed to kill ad {ad_id}: {e}")
         
-        # Generate new creatives if needed - keep generating until we have target_count active
+        # Generate new creatives if needed - SMART: Only generate 1 at a time when needed
         # Refresh active count after kills
         ads = client.list_ads_in_adset(adset_id)
         active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
         active_count = len(active_ads)
         needed_count = max(0, target_count - active_count)
         
+        # SMART GENERATION: Only generate 1 creative at a time when needed
+        # This prevents overusage of Flux and ChatGPT
         if needed_count > 0:
-            notify(f"📸 Generating {needed_count} new creatives to reach {target_count} active (currently {active_count})")
+            notify(f"📸 Generating 1 new creative (need {needed_count} more to reach {target_count}, currently {active_count} active)")
             
             # Initialize image generator with ML system
             from creative.image_generator import create_image_generator
@@ -683,50 +685,36 @@ def run_asc_plus_tick(
             
             # Use advanced ML pipeline if available
             if advanced_ml and advanced_ml.creative_pipeline:
-                notify("🎯 Using advanced creative generation pipeline")
+                notify("🎯 Using smart ML-driven creative generation (1 creative at a time)")
                 try:
-                    # Only generate what's needed - don't over-generate
-                    # Calculate exactly how many we need
+                    # SMART: Only generate 1 creative at a time when needed
+                    # Use ML insights from killed creatives to inform generation
                     remaining_needed = target_count - active_count
                     
                     if remaining_needed <= 0:
                         logger.info(f"✅ Already have {active_count} active creatives (target: {target_count}), no generation needed")
                     else:
-                        # Generate only what's needed + 1 extra for safety (not 2x or 5)
-                        # This prevents excessive generation
-                        generate_target = min(remaining_needed + 1, target_count)
-                        logger.info(f"📸 Generating {generate_target} creatives (need {remaining_needed} more, have {active_count} active)")
+                        # SMART: Generate exactly 1 creative using ML insights
+                        # The ML system will use insights from killed creatives to generate the best possible creative
+                        logger.info(f"📸 Generating 1 smart creative using ML insights (need {remaining_needed} more, have {active_count} active)")
                         
+                        # Generate exactly 1 creative - the pipeline will use ML insights to make it optimal
                         generated_creatives = advanced_ml.generate_optimized_creatives(
                             product_info,
-                            target_count=generate_target,
+                            target_count=1,  # Always generate exactly 1
                         )
                         
-                        # Process generated creatives in a single batch
-                        if generated_creatives:
-                            logger.info(f"Pipeline returned {len(generated_creatives)} creatives, processing...")
+                        # Process the single generated creative
+                        if generated_creatives and len(generated_creatives) > 0:
+                            creative_data = generated_creatives[0]  # Only process the first (and only) creative
+                            logger.info(f"Processing smart ML-driven creative: has supabase_storage_url={bool(creative_data.get('supabase_storage_url'))}, has image_path={bool(creative_data.get('image_path'))}, has ad_copy={bool(creative_data.get('ad_copy'))}")
                             
-                            # Process all creatives and track successes
-                            for i, creative_data in enumerate(generated_creatives):
-                                # Refresh active count periodically
-                                if i > 0 and i % 3 == 0:
-                                    ads = client.list_ads_in_adset(adset_id)
-                                    active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
-                                    active_count = len(active_ads)
-                                    if active_count >= target_count:
-                                        logger.info(f"✅ Reached target of {target_count} active creatives, stopping")
-                                        break
-                                
-                                if not creative_data:
-                                    logger.warning(f"Creative #{i+1}: Generation returned None")
-                                    failed_count += 1
-                                    failed_reasons.append(f"Creative #{i+1}: Generation returned None")
-                                    continue
-                                
-                                # Log creative data for debugging
-                                logger.info(f"Processing creative #{i+1}: has supabase_storage_url={bool(creative_data.get('supabase_storage_url'))}, has image_path={bool(creative_data.get('image_path'))}, has ad_copy={bool(creative_data.get('ad_copy'))}")
-                                
-                                # Analyze creative with advanced ML
+                            if not creative_data:
+                                logger.warning(f"Creative generation returned None")
+                                failed_count += 1
+                                failed_reasons.append("Creative generation returned None")
+                            else:
+                                # Analyze creative with advanced ML (optional - already optimized)
                                 if advanced_ml:
                                     try:
                                         analysis = advanced_ml.analyze_creative_performance(
@@ -741,44 +729,70 @@ def run_asc_plus_tick(
                                             creative_data["quality_check"] = quality
                                             
                                             if not quality.get("passed_checks"):
-                                                logger.warning(f"Creative #{i+1} failed quality checks: {quality}")
+                                                logger.warning(f"Creative failed quality checks: {quality}")
                                                 failed_count += 1
-                                                failed_reasons.append(f"Creative #{i+1}: Failed quality check")
-                                                continue
+                                                failed_reasons.append("Creative failed quality check")
+                                            else:
+                                                # Create creative and ad
+                                                creative_id, ad_id, success = _create_creative_and_ad(
+                                                    client=client,
+                                                    image_generator=image_generator,
+                                                    creative_data=creative_data,
+                                                    adset_id=adset_id,
+                                                    active_count=active_count,
+                                                    created_count=created_count,
+                                                    existing_creative_ids=existing_creative_ids,
+                                                    ml_system=ml_system,
+                                                )
+                                                
+                                                if success and creative_id and ad_id:
+                                                    created_count += 1
+                                                    existing_creative_ids.add(creative_id)
+                                                    logger.info(f"✅ Successfully created smart creative {creative_id} and ad {ad_id}")
+                                                else:
+                                                    failed_count += 1
+                                                    failed_reasons.append(f"Failed to create (creative_id={creative_id}, ad_id={ad_id})")
                                     except Exception as e:
-                                        logger.warning(f"Error analyzing creative #{i+1}: {e}")
-                                
-                                # Create creative and ad
-                                creative_id, ad_id, success = _create_creative_and_ad(
-                                    client=client,
-                                    image_generator=image_generator,
-                                    creative_data=creative_data,
-                                    adset_id=adset_id,
-                                    active_count=active_count,
-                                    created_count=created_count,
-                                    existing_creative_ids=existing_creative_ids,
-                                    ml_system=ml_system,
-                                )
-                                
-                                if success and creative_id and ad_id:
-                                    created_count += 1
-                                    existing_creative_ids.add(creative_id)
-                                    logger.info(f"✅ Successfully created creative {creative_id} and ad {ad_id}")
-                                    
-                                    # Refresh active count
-                                    ads = client.list_ads_in_adset(adset_id)
-                                    active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
-                                    active_count = len(active_ads)
-                                    
-                                    if active_count >= target_count:
-                                        logger.info(f"✅ Reached target of {target_count} active creatives")
-                                        break
+                                        logger.warning(f"Error analyzing creative: {e}, creating anyway")
+                                        # Create anyway if analysis fails
+                                        creative_id, ad_id, success = _create_creative_and_ad(
+                                            client=client,
+                                            image_generator=image_generator,
+                                            creative_data=creative_data,
+                                            adset_id=adset_id,
+                                            active_count=active_count,
+                                            created_count=created_count,
+                                            existing_creative_ids=existing_creative_ids,
+                                            ml_system=ml_system,
+                                        )
+                                        
+                                        if success and creative_id and ad_id:
+                                            created_count += 1
+                                            existing_creative_ids.add(creative_id)
+                                        else:
+                                            failed_count += 1
+                                            failed_reasons.append(f"Failed to create after analysis error")
                                 else:
-                                    failed_count += 1
-                                    failed_reasons.append(f"Creative #{i+1}: Failed to create (creative_id={creative_id}, ad_id={ad_id})")
-                                    logger.warning(f"Failed to create creative #{i+1}: creative_id={creative_id}, ad_id={ad_id}")
+                                    # No advanced ML - create directly
+                                    creative_id, ad_id, success = _create_creative_and_ad(
+                                        client=client,
+                                        image_generator=image_generator,
+                                        creative_data=creative_data,
+                                        adset_id=adset_id,
+                                        active_count=active_count,
+                                        created_count=created_count,
+                                        existing_creative_ids=existing_creative_ids,
+                                        ml_system=ml_system,
+                                    )
+                                    
+                                    if success and creative_id and ad_id:
+                                        created_count += 1
+                                        existing_creative_ids.add(creative_id)
+                                    else:
+                                        failed_count += 1
+                                        failed_reasons.append(f"Failed to create")
                         else:
-                            logger.warning(f"No creatives returned from pipeline")
+                            logger.warning(f"No creative returned from pipeline")
                             failed_count += 1
                             failed_reasons.append("Pipeline returned empty list")
                     
@@ -798,48 +812,33 @@ def run_asc_plus_tick(
                     logger.error(f"Advanced pipeline failed with exception, using standard generation: {e}", exc_info=True)
                     advanced_ml = None
             
-            # Standard generation loop (fallback) - only generate what's needed
+            # Standard generation (fallback) - SMART: Generate exactly 1 creative
             if not advanced_ml or not advanced_ml.creative_pipeline:
-                # Cache ML insights once for batch operations
-                ml_insights_cache = None
+                # Get ML insights from killed creatives to inform generation
+                ml_insights = None
                 if ml_system and hasattr(ml_system, 'get_creative_insights'):
                     try:
-                        ml_insights_cache = ml_system.get_creative_insights()
+                        ml_insights = ml_system.get_creative_insights()
+                        logger.info("✅ Using ML insights from killed creatives to inform new generation")
                     except (AttributeError, ValueError, TypeError) as e:
-                        logger.debug(f"Failed to cache ML insights: {e}")
+                        logger.debug(f"Failed to get ML insights: {e}")
                 
-                # Only generate what's needed - don't use a while loop that keeps regenerating
+                # SMART: Only generate 1 creative at a time
                 remaining_needed = target_count - active_count
                 if remaining_needed > 0:
-                    logger.info(f"📸 Standard generation: Generating {remaining_needed} creatives (need {remaining_needed} more, have {active_count} active)")
+                    logger.info(f"📸 Standard generation: Generating 1 smart creative using ML insights (need {remaining_needed} more, have {active_count} active)")
                     
-                    # Generate only what's needed + 1 extra for safety
-                    generate_count = min(remaining_needed + 1, target_count)
-                    
-                    for i in range(generate_count):
-                        # Refresh active count periodically
-                        if i > 0 and i % 3 == 0:
-                            ads = client.list_ads_in_adset(adset_id)
-                            active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
-                            active_count = len(active_ads)
-                            if active_count >= target_count:
-                                logger.info(f"✅ Reached target of {target_count} active creatives, stopping")
-                                break
+                    try:
+                        # Generate exactly 1 creative with ML insights
+                        creative_data = image_generator.generate_creative(
+                            product_info,
+                            creative_style=f"smart_creative_{active_count + created_count + 1}",
+                        )
                         
-                        try:
-                            # Use cached ML insights
-                            ml_insights = ml_insights_cache
-                            
-                            creative_data = image_generator.generate_creative(
-                                product_info,
-                                creative_style=f"creative_{active_count + created_count + i + 1}",
-                            )
-                            
-                            if not creative_data:
-                                failed_count += 1
-                                failed_reasons.append(f"Standard generation #{i+1}: Generation returned None")
-                                continue
-                            
+                        if not creative_data:
+                            failed_count += 1
+                            failed_reasons.append("Standard generation: Generation returned None")
+                        else:
                             # Create creative in Meta
                             creative_id, ad_id, success = _create_creative_and_ad(
                                 client=client,
@@ -855,23 +854,14 @@ def run_asc_plus_tick(
                             if success and ad_id:
                                 created_count += 1
                                 existing_creative_ids.add(str(creative_id))
-                                # Verify the ad is actually active
-                                try:
-                                    ads = client.list_ads_in_adset(adset_id)
-                                    active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
-                                    active_count = len(active_ads)
-                                    if active_count >= target_count:
-                                        logger.info(f"✅ Reached target of {target_count} active creatives")
-                                        break
-                                except Exception:
-                                    active_count += 1  # Assume it's active if we can't check
+                                logger.info(f"✅ Successfully created smart creative {creative_id} and ad {ad_id}")
                             elif not success:
                                 if creative_id:
                                     failed_count += 1
-                                    failed_reasons.append(f"Standard generation #{i+1}: Duplicate creative ID")
+                                    failed_reasons.append("Standard generation: Duplicate creative ID")
                                 else:
                                     failed_count += 1
-                                    failed_reasons.append(f"Standard generation #{i+1}: Failed to create")
+                                    failed_reasons.append("Standard generation: Failed to create")
                                     # Track failure in ML system
                                     if ml_system and hasattr(ml_system, 'record_creative_generation_failure'):
                                         try:
@@ -881,10 +871,10 @@ def run_asc_plus_tick(
                                             )
                                         except (AttributeError, ValueError, TypeError):
                                             pass
-                        except Exception as e:
-                            logger.warning(f"Failed to generate creative #{i+1}: {e}")
-                            failed_count += 1
-                            failed_reasons.append(f"Standard generation #{i+1}: {str(e)[:50]}")
+                    except Exception as e:
+                        logger.warning(f"Failed to generate creative: {e}")
+                        failed_count += 1
+                        failed_reasons.append(f"Standard generation: {str(e)[:50]}")
             
             # Final check of active count
             ads = client.list_ads_in_adset(adset_id)

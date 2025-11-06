@@ -68,12 +68,13 @@ class CreativeGenerationPipeline:
             logger.info(f"Test mode complete: {len(generated_creatives)} creative generated")
             return generated_creatives
         
-        # Stage 1: Generate only what's needed (no wasteful generation)
-        # Auto-calculate generate_count: only generate target_count + 1 extra for filtering
+        # SMART GENERATION: Always generate exactly 1 creative when target_count is 1
+        # This prevents overusage of Flux and ChatGPT
+        # The ML system will use insights from killed creatives to generate the best possible creative
         if generate_count is None:
-            generate_count = target_count + 1  # Only generate 1 extra for filtering
+            generate_count = 1  # Always generate exactly 1 creative (no wasteful batch generation)
         
-        logger.info(f"Stage 1: Generating {generate_count} creatives (target: {target_count})")
+        logger.info(f"Stage 1: Generating {generate_count} smart creative using ML insights (target: {target_count})")
         generated_creatives = []
         
         # Get advanced ML system if available
@@ -82,30 +83,30 @@ class CreativeGenerationPipeline:
             # Try to get from parent
             advanced_ml = getattr(self, 'advanced_ml', None)
         
-        for i in range(generate_count):
-            try:
-                logger.info(f"Generating creative variation {i+1}/{generate_count}")
-                creative = self.image_generator.generate_creative(
-                    product_info,
-                    creative_style=f"variation_{i}",
-                    advanced_ml=advanced_ml,
-                )
-                
-                if creative:
-                    creative["generation_stage"] = "generated"
-                    creative["generation_index"] = i
-                    generated_creatives.append(creative)
-                    logger.info(f"✅ Creative {i+1} generated successfully")
-                else:
-                    logger.warning(f"⚠️ Creative {i+1} generation returned None")
-            except Exception as e:
-                logger.error(f"Error generating creative {i+1}: {e}", exc_info=True)
+        # Generate exactly 1 creative - the ML system will use insights to make it optimal
+        try:
+            logger.info(f"Generating 1 smart creative using ML insights from killed creatives")
+            creative = self.image_generator.generate_creative(
+                product_info,
+                creative_style="smart_ml_driven",
+                advanced_ml=advanced_ml,
+            )
+            
+            if creative:
+                creative["generation_stage"] = "smart_generated"
+                creative["generation_index"] = 0
+                generated_creatives.append(creative)
+                logger.info(f"✅ Smart creative generated successfully using ML insights")
+            else:
+                logger.warning(f"⚠️ Creative generation returned None")
+        except Exception as e:
+            logger.error(f"Error generating smart creative: {e}", exc_info=True)
         
         if not generated_creatives:
             logger.warning("No creatives generated in Stage 1")
             return []
         
-        logger.info(f"Stage 1 complete: {len(generated_creatives)} creatives generated")
+        logger.info(f"Stage 1 complete: {len(generated_creatives)} smart creative generated")
         
         # Stage 2: Pre-filter using ML predictions
         logger.info(f"Stage 2: Pre-filtering {len(generated_creatives)} creatives")
