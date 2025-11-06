@@ -1714,9 +1714,10 @@ class MetaClient:
             pixel_id = os.getenv("FB_PIXEL_ID")
             if pixel_id:
                 # Add tracking specs for purchase conversions (shop destination)
+                # Meta API requires "action.type" (with dot), not "action_type" (with underscore)
                 payload["tracking_specs"] = [
                     {
-                        "action_type": "purchase",
+                        "action.type": "purchase",
                         "fb_pixel": [pixel_id]
                     }
                 ]
