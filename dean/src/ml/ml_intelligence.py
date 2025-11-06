@@ -519,14 +519,11 @@ class SupabaseMLClient:
                 impact_score = random.uniform(0.4, 0.7)
             
             # Generate stage progression if not provided
-            if not from_stage and not to_stage:
-                stages = ['testing', 'validation', 'scaling']
-                if event.event_type == 'stage_transition':
-                    from_stage = random.choice(stages[:-1])
-                    to_stage = random.choice(stages[stages.index(from_stage)+1:])
-                else:
-                    from_stage = random.choice(stages)
-                    to_stage = from_stage
+            # For ASC+ only system, default to asc_plus
+            if not from_stage:
+                from_stage = event.stage if hasattr(event, 'stage') and event.stage else 'asc_plus'
+            if not to_stage:
+                to_stage = from_stage
             
             # Generate ad and lifecycle IDs if not provided
             if not ad_id:
@@ -2604,19 +2601,22 @@ def track_asc_plus_creative_data(
         # Track ad copy performance
         ad_copy = creative_data.get("ad_copy", {})
         if ad_copy:
-            ml_system.save_learning_event(
+            ml_system.supabase.save_learning_event(
                 event=LearningEvent(
                     event_type="creative_created",
                     stage="asc_plus",
                     ad_id=ad_id,
-                    metadata={
+                    lifecycle_id="",
+                    learning_data={
                         "ad_copy": ad_copy,
                         "text_overlay": creative_data.get("text_overlay"),
                         "image_prompt": creative_data.get("image_prompt"),
                         "scenario_description": creative_data.get("scenario_description"),  # Track scenario for ML learning
                         "creative_type": "static_image",
                     },
-                    timestamp=now_utc(),
+                    confidence_score=0.8,
+                    impact_score=0.5,
+                    created_at=now_utc(),
                 ),
                 ad_id=ad_id,
             )
@@ -2640,16 +2640,19 @@ def track_asc_plus_creative_kill(
 ) -> None:
     """Track ASC+ creative kill for ML learning."""
     try:
-        ml_system.save_learning_event(
+        ml_system.supabase.save_learning_event(
             event=LearningEvent(
                 event_type="creative_killed",
                 stage="asc_plus",
                 ad_id=ad_id,
-                metadata={
+                lifecycle_id="",
+                learning_data={
                     "kill_reason": reason,
                     "performance_at_kill": performance_data,
                 },
-                timestamp=now_utc(),
+                confidence_score=0.7,
+                impact_score=0.3,
+                created_at=now_utc(),
             ),
             ad_id=ad_id,
         )
@@ -2680,15 +2683,19 @@ def _add_asc_plus_tracking_methods():
     def record_creative_generation_failure(self, reason: str, product_info: Dict[str, Any]):
         """Record creative generation failure for ML learning."""
         try:
-            self.save_learning_event(
+            self.supabase.save_learning_event(
                 event=LearningEvent(
                     event_type="creative_generation_failed",
                     stage="asc_plus",
-                    metadata={
+                    ad_id="",
+                    lifecycle_id="",
+                    learning_data={
                         "failure_reason": reason,
                         "product_info": product_info,
                     },
-                    timestamp=now_utc(),
+                    confidence_score=0.0,
+                    impact_score=0.0,
+                    created_at=now_utc(),
                 ),
                 ad_id="",
             )
@@ -2698,14 +2705,14 @@ def _add_asc_plus_tracking_methods():
     def get_creative_insights(self) -> Dict[str, Any]:
         """Get ML insights about top performing creatives for creative generation."""
         try:
-            if not self.supabase_client:
+            if not self.supabase or not self.supabase.client:
                 return {}
             
             # Get top performing creatives from last 30 days
             cutoff_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
             
             # Query for top performing creatives by ROAS
-            query = self.supabase_client.table('creative_performance').select(
+            query = self.supabase.client.table('creative_performance').select(
                 'creative_id,ad_copy,text_overlay,image_prompt,roas,ctr,purchases'
             ).eq('stage', 'asc_plus').gte('date_start', cutoff_date).order('roas', desc=True).limit(5).execute()
             
@@ -2717,7 +2724,7 @@ def _add_asc_plus_tracking_methods():
             scenarios_map = {}
             if creative_ids:
                 try:
-                    scenario_query = self.supabase_client.table('creative_intelligence').select(
+                    scenario_query = self.supabase.client.table('creative_intelligence').select(
                         'creative_id,metadata'
                     ).in_('creative_id', creative_ids).execute()
                     
@@ -2741,13 +2748,13 @@ def _add_asc_plus_tracking_methods():
             
             # Get worst performing scenarios (low ROAS)
             try:
-                worst_query = self.supabase_client.table('creative_performance').select(
+                worst_query = self.supabase.client.table('creative_performance').select(
                     'creative_id,roas'
                 ).eq('stage', 'asc_plus').gte('date_start', cutoff_date).order('roas', desc=False).limit(3).execute()
                 
                 worst_creative_ids = [c.get("creative_id") for c in worst_query.data if c.get("creative_id")]
                 if worst_creative_ids:
-                    worst_scenario_query = self.supabase_client.table('creative_intelligence').select(
+                    worst_scenario_query = self.supabase.client.table('creative_intelligence').select(
                         'creative_id,metadata'
                     ).in_('creative_id', worst_creative_ids).execute()
                     
@@ -2766,7 +2773,7 @@ def _add_asc_plus_tracking_methods():
             
             try:
                 # Get text overlays from creative_intelligence
-                text_query = self.supabase_client.table('creative_intelligence').select(
+                text_query = self.supabase.client.table('creative_intelligence').select(
                     'creative_id,text_overlay_content'
                 ).in_('creative_id', creative_ids).not_.is_('text_overlay_content', 'null').execute()
                 
@@ -2781,7 +2788,7 @@ def _add_asc_plus_tracking_methods():
                         best_text_overlays.append(text_overlay)
                 
                 # Get worst performing text overlays
-                worst_text_query = self.supabase_client.table('creative_intelligence').select(
+                worst_text_query = self.supabase.client.table('creative_intelligence').select(
                     'creative_id,text_overlay_content'
                 ).in_('creative_id', worst_creative_ids if worst_creative_ids else []).not_.is_('text_overlay_content', 'null').execute()
                 
@@ -2802,7 +2809,7 @@ def _add_asc_plus_tracking_methods():
             
             try:
                 # Get ad copy from creative_intelligence metadata or ad_copy field
-                ad_copy_query = self.supabase_client.table('creative_intelligence').select(
+                ad_copy_query = self.supabase.client.table('creative_intelligence').select(
                     'creative_id,metadata,headline,primary_text'
                 ).in_('creative_id', creative_ids).execute()
                 
@@ -2822,7 +2829,7 @@ def _add_asc_plus_tracking_methods():
                                 best_ad_copy_list.append(copy_dict)
                 
                 # Get worst ad copy
-                worst_ad_copy_query = self.supabase_client.table('creative_intelligence').select(
+                worst_ad_copy_query = self.supabase.client.table('creative_intelligence').select(
                     'creative_id,metadata,headline,primary_text'
                 ).in_('creative_id', worst_creative_ids if worst_creative_ids else []).execute()
                 

@@ -1,10 +1,9 @@
 name: Dean ASC+ Campaign Automation
 
 on:
-  # DISABLED: Schedule temporarily disabled while fixing creative/ad creation issues
-  # schedule:
-  #   # Run every 30 minutes for ASC+ campaign monitoring
-  #   - cron: '*/30 * * * *'
+  schedule:
+    # Run every 30 minutes for ASC+ campaign monitoring
+    - cron: '*/30 * * * *'
   workflow_dispatch: # Allow manual runs for testing
 
 jobs:
@@ -80,6 +79,7 @@ jobs:
         
         # Business Configuration
         STORE_URL: ${{ secrets.STORE_URL }}
+        SHOPIFY_STORE_URL: ${{ secrets.STORE_URL }}
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         BREAKEVEN_CPA: ${{ secrets.BREAKEVEN_CPA }}
         COGS_PER_PURCHASE: ${{ secrets.COGS_PER_PURCHASE }}

@@ -447,6 +447,7 @@ class ImageCreativeGenerator:
                                     "image_prompt": image_prompt,
                                     "text_overlay": overlay_text,
                                     "ad_copy": ad_copy,
+                                    "scenario_description": scenario_description,  # Include scenario for queue lookup
                                     "flux_request_id": request_id,
                                 }
                             )
@@ -590,12 +591,22 @@ class ImageCreativeGenerator:
             contrast_logic = ""
             if self.recent_scenarios:
                 last_scenario = self.recent_scenarios[-1].lower()
-                if "indoor" in last_scenario or "studio" in last_scenario or "room" in last_scenario:
-                    contrast_logic += "\n- CONTRAST REQUIREMENT: Last scenario was indoors - this one MUST be outdoors\n"
-                elif "outdoor" in last_scenario or "street" in last_scenario or "park" in last_scenario or "grass" in last_scenario:
-                    contrast_logic += "\n- CONTRAST REQUIREMENT: Last scenario was outdoors - this one MUST be indoors or enclosed space\n"
                 
-                if "minimalist" in last_scenario or "simple" in last_scenario or "clean" in last_scenario:
+                # CRITICAL: Background diversity enforcement - NO dark streets
+                if "street" in last_scenario or "urban" in last_scenario or ("city" in last_scenario and "rooftop" not in last_scenario) or "dark" in last_scenario:
+                    contrast_logic += "\n- CRITICAL BACKGROUND REQUIREMENT: Last scenario had street/urban/dark background - this one MUST use a luxury setting (studio, gallery, hotel, café, library, rooftop terrace, beach, garden, retail, workspace, loft) - ABSOLUTELY NO streets, NO urban backgrounds, NO dark scenes\n"
+                elif "studio" in last_scenario:
+                    contrast_logic += "\n- CONTRAST REQUIREMENT: Last scenario was studio - this one MUST use a different luxury setting (gallery, hotel, café, library, rooftop, beach, garden, retail, workspace, loft)\n"
+                elif "gallery" in last_scenario:
+                    contrast_logic += "\n- CONTRAST REQUIREMENT: Last scenario was gallery - this one MUST use a different luxury setting (studio, hotel, café, library, rooftop, beach, garden, retail, workspace, loft)\n"
+                elif "hotel" in last_scenario or "café" in last_scenario or "cafe" in last_scenario:
+                    contrast_logic += "\n- CONTRAST REQUIREMENT: Last scenario was hotel/café - this one MUST use a different luxury setting (studio, gallery, library, rooftop, beach, garden, retail, workspace, loft)\n"
+                elif "indoor" in last_scenario or "room" in last_scenario:
+                    contrast_logic += "\n- CONTRAST REQUIREMENT: Last scenario was indoors - this one MUST be outdoors (rooftop terrace, beach, garden) or a different indoor luxury space\n"
+                elif "outdoor" in last_scenario or "park" in last_scenario or "grass" in last_scenario or "rooftop" in last_scenario or "beach" in last_scenario:
+                    contrast_logic += "\n- CONTRAST REQUIREMENT: Last scenario was outdoors - this one MUST be indoors (studio, gallery, hotel, café, library, workspace, loft) or a different outdoor luxury setting\n"
+                
+                if "minimalist" in last_scenario or "simple" in last_scenario or "clean" in last_scenario or "white" in last_scenario:
                     contrast_logic += "\n- CONTRAST REQUIREMENT: Last scenario was minimalist - this one MUST be bold, vibrant, or rich\n"
                 elif "bold" in last_scenario or "vibrant" in last_scenario or "colorful" in last_scenario:
                     contrast_logic += "\n- CONTRAST REQUIREMENT: Last scenario was bold - this one MUST be minimalist, refined, or subtle\n"
@@ -647,10 +658,11 @@ SETTING VARIATIONS:
 - A man in his 40s with a full beard and short textured hair, walking through a modern art gallery with white walls and high ceilings, wearing a navy wool coat over a gray merino sweater, contemplative pose examining a large abstract painting, natural gallery lighting, medium format composition, Louis Vuitton menswear aesthetic
 - A man in his 30s with a fade and mustache, positioned in a luxury hotel lobby with marble floors and brass details, wearing a camel-colored overcoat with brown leather Chelsea boots, sitting in a modern armchair reading, warm ambient lighting, lifestyle photography, luxury brand campaign
 
-URBAN/STREET VARIATIONS:
-- A man in his 20s with curly black hair and stubble, walking through a bustling Tokyo intersection at rush hour, wearing a black leather jacket with distressed jeans, blurred background of neon signs and rushing pedestrians, cinematic depth, street fashion aesthetic
-- A man in his 40s with silver-flecked hair and a trimmed beard, standing on a New York rooftop at golden hour, wearing a navy blazer with white sneakers, city skyline in background with bokeh lights, wide-angle composition, contemporary luxury aesthetic
-- A man in his 30s with a modern fade and clean-shaven, positioned on a London street corner in the rain, wearing a dark green waxed cotton coat, umbrella creating visual interest, blurred double-decker buses in background, editorial street style
+LUXURY SETTING VARIATIONS (NO DARK STREETS):
+- A man in his 20s with curly black hair and stubble, positioned in a minimalist photo studio with seamless white background, wearing a black leather jacket with distressed jeans, dramatic key lighting creating strong shadows, high fashion editorial aesthetic, Dior Homme style
+- A man in his 40s with silver-flecked hair and a trimmed beard, standing on a luxury rooftop terrace at golden hour, wearing a navy blazer with white sneakers, city skyline in soft-focus background with bokeh lights, wide-angle composition, contemporary luxury aesthetic, Louis Vuitton campaign style
+- A man in his 30s with a modern fade and clean-shaven, positioned in a luxury hotel lobby with marble floors and brass details, wearing a dark green waxed cotton coat, sitting in a modern armchair, warm ambient lighting, lifestyle photography, Aesop store aesthetic
+- A man in his 30s with textured hair and light beard, in a modern art gallery with white walls and high ceilings, wearing a camel-colored overcoat, contemplative pose examining a large abstract painting, natural gallery lighting, medium format composition, luxury brand campaign aesthetic
 
 LIFESTYLE VARIATIONS:
 - A man in his 30s with a full beard and long hair in a bun, sitting in a minimalist artist's studio with high ceilings and large windows, wearing a paint-stained white shirt with black trousers, surrounded by canvases and art supplies, natural north light, creative professional aesthetic
@@ -673,11 +685,13 @@ SPECIFIC DETAILED EXAMPLES:
             user_prompt = f"""You are a creative director at a luxury fashion agency (like Dior, Louis Vuitton, Aesop). Your task is to generate an EXTREMELY DETAILED, DIVERSE, FASHION-FORWARD creative scenario for a premium men's skincare brand campaign.
 
 CRITICAL REQUIREMENTS:
-- This is NOT a standard skincare product photo - think luxury fashion brand campaigns
+- This is NOT a standard skincare product photo - think luxury fashion brand campaigns (Dior, Louis Vuitton, Aesop, Vogue, GQ, Esquire)
 - Create a UNIQUE, CINEMATIC scenario that stands out dramatically from typical skincare ads
 - NO bathroom settings, NO selfie-style photos, NO standard product shots, NO generic portraits
+- NO dark street backgrounds, NO repetitive urban street scenes, NO generic city backgrounds
 - Think luxury fashion brand aesthetic: editorial, cinematic, sophisticated, aspirational
 - The scenario must be EXTREMELY DETAILED - specify pose, outfit details, background details, lighting, composition, everything
+- BACKGROUND DIVERSITY IS CRITICAL: Rotate through luxury settings (photo studios, art galleries, luxury hotels, minimalist penthouses, modern cafés, libraries, rooftop terraces, beach locations, gardens, luxury retail spaces, modern workspaces, artist studios) - NEVER repeat the same background type
 
 {recent_scenarios_text}
 
@@ -694,10 +708,12 @@ CHAIN-OF-THOUGHT PROCESS - Follow this reasoning:
    - Ensure representation: different American ethnicities, facial hair styles (clean-shaven, stubble, beard, mustache, goatee), hair types (short, long, curly, straight, wavy, textured, afro, braided), ages (20s, 30s, 40s, 50s), body types (athletic, lean, average, robust), lifestyles (athlete, artist, creative professional, entrepreneur, student)
    - AVOID: Formal suits, business attire, blazers, ties - prefer casual luxury, streetwear, athleisure, minimalist fashion
 
-2. SETTING SELECTION:
-   - Choose dramatically different from recent scenarios
-   - Consider: indoor (studio, gallery, hotel, café, library, workspace) vs outdoor (street, park, rooftop, beach, urban)
-   - Specify exact location details (city, type of space, architectural style)
+2. SETTING SELECTION (CRITICAL - BACKGROUND DIVERSITY):
+   - Choose dramatically different from recent scenarios - NEVER repeat background types
+   - AVOID: Dark streets, generic urban backgrounds, repetitive city scenes
+   - PREFER: Luxury fashion brand settings (photo studios with seamless backgrounds, art galleries with white walls, luxury hotel lobbies, minimalist penthouses, modern cafés, libraries, rooftop terraces, beach locations, Japanese gardens, luxury retail spaces, modern workspaces, artist studios, minimalist lofts)
+   - Rotate through: Studio (seamless white/colored backgrounds), Gallery (white walls, art), Hotel (luxury lobbies, rooms), Café (modern, minimalist), Library (traditional or modern), Rooftop (city views, terraces), Beach (sunrise, sunset), Garden (Japanese, minimalist), Retail (luxury stores), Workspace (modern, creative), Loft (industrial, minimalist)
+   - Specify exact location details (city, type of space, architectural style, specific design elements)
 
 3. MOOD & EMOTION:
    - Choose psychological trigger: aspiration, confidence, sophistication, contemplation, energy, relaxation
@@ -742,16 +758,22 @@ NEGATIVE EXAMPLES - DON'T CREATE SCENARIOS LIKE THESE:
 - "A man in a bathroom" (explicitly forbidden)
 - "A man taking a selfie" (forbidden)
 - "A man with a skincare product" (no products)
+- "A man on a dark street" (NO dark street backgrounds - use luxury settings instead)
+- "A man walking through a city street" (NO generic urban backgrounds - use specific luxury locations)
 - Generic portraits without specific details
 - Scenarios that lack depth and specificity
+- Repetitive backgrounds (if last was street, this MUST be studio/gallery/hotel/etc.)
 
 VALIDATION CHECKLIST - Before finalizing, ensure:
 ✓ Is this dramatically different from recent scenarios?
+✓ Is the BACKGROUND completely different from recent backgrounds? (NO dark streets, NO repetitive urban scenes)
+✓ Is this a luxury fashion brand setting? (studio, gallery, hotel, café, library, rooftop, beach, garden, retail, workspace, loft)
 ✓ Does it include extremely specific details (pose, outfit, background, lighting)?
 ✓ Does it represent diverse model characteristics?
 ✓ Does it align with "calm confidence" brand value?
-✓ Is it cinematic and editorial in style?
+✓ Is it cinematic and editorial in style (Dior/LV/Vogue/GQ/Esquire aesthetic)?
 ✓ Does it avoid bathroom/selfie/product shots?
+✓ Does it avoid dark street backgrounds and generic urban scenes?
 ✓ Does it follow contrast logic (if applicable)?
 ✓ Does it include psychological triggers?
 ✓ Does it specify technical composition details?

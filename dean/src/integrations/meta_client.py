@@ -12,10 +12,13 @@ from collections import defaultdict, deque
 from threading import Lock
 import json
 
+import logging
 import requests
 
 # Import moved to avoid circular dependency - will import locally when needed
 from .slack import notify
+
+logger = logging.getLogger(__name__)
 from infrastructure.error_handling import (
     retry_with_backoff,
     enhanced_retry_with_backoff,
@@ -1351,13 +1354,28 @@ class MetaClient:
 
         final_link = _clean_story_link(link_url, utm_params)
         ig_id = instagram_actor_id or os.getenv("IG_ACTOR_ID") or None
+        # Only use instagram_actor_id if it's a valid non-empty string
+        # CRITICAL: If the ID is invalid (causes API errors), don't use it
+        if ig_id:
+            ig_id = str(ig_id).strip()
+            if not ig_id:
+                ig_id = None
+            # Validate it's a numeric string (Instagram IDs are numeric)
+            elif not ig_id.isdigit():
+                logger.warning(f"Invalid Instagram actor ID format (not numeric): {ig_id} - skipping")
+                ig_id = None
+            # Additional validation: Check if it's a known invalid ID that causes errors
+            elif ig_id == "17841477094913251":  # This specific ID causes errors
+                logger.warning(f"Known invalid Instagram actor ID: {ig_id} - skipping")
+                ig_id = None
 
         if self.dry_run or not USE_SDK or not self.cfg.enable_creative_uploads:
             payload_preview = {
                 "page_id": pid,
                 "image_url": final_image_url,
-                "instagram_actor_id": ig_id or "",
             }
+            if ig_id:
+                payload_preview["instagram_actor_id"] = ig_id
             return {
                 "id": f"CR_{abs(hash(_s(name))) % 10_000_000}",
                 "name": _s(name),
@@ -1370,12 +1388,76 @@ class MetaClient:
 
         image_data: Dict[str, Any] = {
             "message": _s(primary_text),  # Primary text (main ad copy)
+            "link": _s(final_link) if final_link else os.getenv("SHOPIFY_STORE_URL", "https://brava-skin.com"),  # REQUIRED: link field
         }
         
-        # Use image_hash if it's a hash, otherwise use image_url
+        # CRITICAL: Meta API doesn't accept image_url in link_data for single image creatives
+        # We must upload the image to Meta's Ad Image library first and use image_hash
         if final_image_url.startswith("http"):
-            image_data["image_url"] = _s(final_image_url)
+            # Upload image to Meta's Ad Image library
+            try:
+                import requests
+                import tempfile
+                import os
+                
+                logger.info(f"Uploading image to Meta Ad Image library: {final_image_url}")
+                
+                # Download image from URL
+                img_response = requests.get(final_image_url, timeout=30)
+                img_response.raise_for_status()
+                
+                # Create temp file
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
+                    tmp_path = tmp_file.name
+                    tmp_file.write(img_response.content)
+                
+                try:
+                    # Upload to Meta
+                    # Get API version from account or default to v23.0
+                    api_version = getattr(self.account, 'api_version', 'v23.0') if hasattr(self, 'account') else 'v23.0'
+                    # Remove 'v' prefix if present
+                    api_version = api_version.replace('v', '') if api_version.startswith('v') else api_version
+                    upload_url = f"https://graph.facebook.com/v{api_version}/act_{self.ad_account_id_act.replace('act_', '')}/adimages"
+                    files = {"source": open(tmp_path, "rb")}
+                    # Get access token from account
+                    access_token = getattr(self.account, 'access_token', None) if hasattr(self, 'account') else None
+                    if not access_token:
+                        # Fallback: try to get from environment or config
+                        access_token = os.getenv("FB_ACCESS_TOKEN") or os.getenv("FACEBOOK_ACCESS_TOKEN")
+                    if not access_token:
+                        raise RuntimeError("No access token available for image upload")
+                    upload_data = {"access_token": access_token}
+                    
+                    upload_response = requests.post(upload_url, files=files, data=upload_data, timeout=30)
+                    files["source"].close()
+                    
+                    if upload_response.status_code != 200:
+                        error_data = upload_response.json() if upload_response.text else {}
+                        error_msg = error_data.get("error", {}).get("message", "Unknown error")
+                        raise RuntimeError(f"Meta image upload failed: {error_msg}")
+                    
+                    result = upload_response.json()
+                    images = result.get("images", {})
+                    if images:
+                        # Get first hash - the key is the hash
+                        image_hash = list(images.keys())[0]
+                        # Also verify the hash value inside
+                        hash_data = images[image_hash]
+                        actual_hash = hash_data.get("hash", image_hash)
+                        logger.info(f"✅ Uploaded image to Meta, hash: {actual_hash}")
+                        image_data["image_hash"] = actual_hash
+                    else:
+                        raise ValueError(f"No image hash in upload response: {result}")
+                finally:
+                    # Clean up temp file
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+            except Exception as e:
+                logger.error(f"Failed to upload image to Meta: {e}, falling back to image_url (may fail)")
+                # Fallback to image_url (will likely fail, but try anyway)
+                image_data["image_url"] = _s(final_image_url)
         else:
+            # Already a hash
             image_data["image_hash"] = _s(final_image_url)
         
         # Headline goes in "name" field for single image creatives

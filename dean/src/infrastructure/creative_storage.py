@@ -127,6 +127,7 @@ class CreativeStorageManager:
                 return None
             
             # Store metadata in creative_storage table
+            # Status: "queue" when first uploaded, "active" when used in campaign, "killed" when ad is killed
             storage_data = {
                 "creative_id": creative_id,
                 "ad_id": ad_id,
@@ -134,9 +135,9 @@ class CreativeStorageManager:
                 "storage_url": public_url,
                 "file_size_bytes": file_size,
                 "file_type": file_type,
-                "status": "active",
+                "status": "queue",  # Start as "queue" - will be "active" when used in campaign
                 "last_used_at": datetime.now(timezone.utc).isoformat(),
-                "usage_count": 1,
+                "usage_count": 0,  # Will be incremented when used
                 "metadata": metadata or {},
             }
             
@@ -182,6 +183,109 @@ class CreativeStorageManager:
             
         except Exception as e:
             logger.error(f"Error marking creative {creative_id} as killed: {e}")
+            return False
+    
+    def get_queued_creative(self) -> Optional[Dict[str, Any]]:
+        """
+        Get the most recently created queued creative (FIFO - oldest first).
+        
+        Returns:
+            Creative data dict with storage_url, creative_id, metadata, etc. or None if none available
+        """
+        try:
+            if not self.client:
+                return None
+            
+            # Get the oldest queued creative (FIFO)
+            result = self.client.table("creative_storage").select(
+                "creative_id, storage_url, storage_path, metadata, created_at"
+            ).eq("status", "queue").order("created_at", desc=False).limit(1).execute()
+            
+            if result.data and len(result.data) > 0:
+                creative = result.data[0]
+                logger.info(f"✅ Found queued creative: {creative.get('creative_id')}")
+                return creative
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting queued creative: {e}")
+            return None
+    
+    def get_recently_created_creative(self, minutes_back: int = 5) -> Optional[Dict[str, Any]]:
+        """
+        Get the most recently created creative (within last N minutes).
+        Used to find a creative that was just generated.
+        
+        Args:
+            minutes_back: How many minutes back to look (default 5)
+            
+        Returns:
+            Creative data dict or None if none found
+        """
+        try:
+            if not self.client:
+                return None
+            
+            cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=minutes_back)
+            
+            # Get most recently created creative (any status, but prefer queue)
+            result = self.client.table("creative_storage").select(
+                "creative_id, storage_url, storage_path, metadata, status, created_at"
+            ).gte("created_at", cutoff_time.isoformat()).order("created_at", desc=True).limit(1).execute()
+            
+            if result.data and len(result.data) > 0:
+                creative = result.data[0]
+                logger.info(f"✅ Found recently created creative: {creative.get('creative_id')} (status: {creative.get('status')})")
+                return creative
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting recently created creative: {e}")
+            return None
+    
+    def mark_creative_active(self, creative_id: str, ad_id: Optional[str] = None) -> bool:
+        """
+        Mark a creative as active (used in campaign).
+        
+        Args:
+            creative_id: Creative ID to mark as active
+            ad_id: Optional ad ID associated with this creative
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if not self.client:
+                return False
+            
+            update_data = {
+                "status": "active",
+                "last_used_at": datetime.now(timezone.utc).isoformat(),
+            }
+            
+            if ad_id:
+                update_data["ad_id"] = ad_id
+            
+            # Increment usage count
+            result = self.client.table("creative_storage").select("usage_count").eq(
+                "creative_id", creative_id
+            ).execute()
+            
+            if result.data:
+                current_count = result.data[0].get("usage_count", 0) or 0
+                update_data["usage_count"] = current_count + 1
+            
+            self.client.table("creative_storage").update(update_data).eq(
+                "creative_id", creative_id
+            ).execute()
+            
+            logger.info(f"✅ Marked creative {creative_id} as active")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error marking creative {creative_id} as active: {e}")
             return False
     
     def update_usage(self, creative_id: str) -> bool:

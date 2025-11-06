@@ -956,7 +956,7 @@ def store_timeseries_data_in_supabase(supabase_client, ad_id: str, ad_data: Dict
     
     try:
         # Store current metrics as time-series data point
-        from datetime import datetime, timedelta
+        from datetime import timedelta
         import random
         
         metrics_to_track = ['ctr', 'cpa', 'roas', 'spend', 'purchases', 'cpc', 'cpm']
@@ -1696,7 +1696,7 @@ def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dic
 def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[str, Any]:
     try:
         # Get today-only comprehensive metrics
-        from datetime import datetime
+        # datetime already imported at module level
         import zoneinfo
         
         # Use account timezone for today's data
@@ -2377,7 +2377,6 @@ def main() -> None:
         try:
             if stage_choice in ("all", "testing"):
                 # Get today's insights with local timezone
-                from datetime import datetime, timezone
                 import zoneinfo
                 
                 # Define attribution windows for consistency

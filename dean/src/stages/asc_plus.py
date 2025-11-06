@@ -690,19 +690,103 @@ def run_asc_plus_tick(
         active_count = len(active_ads)
         needed_count = max(0, target_count - active_count)
         
-        # SMART GENERATION: Only generate 1 creative at a time when needed
+        # HARD STOP: If we already have the target count, do NOT generate anything
+        if active_count >= target_count:
+            logger.info(f"✅ Already have {active_count} active creatives (target: {target_count}), STOPPING - no generation needed")
+            notify(f"✅ Target reached: {active_count}/{target_count} active creatives - NO GENERATION")
+            return {
+                "campaign_id": campaign_id,
+                "adset_id": adset_id,
+                "active_count": active_count,
+                "target_count": target_count,
+                "created_count": 0,
+                "killed_count": killed_count,
+            }
+        
+        # SMART GENERATION: Check queue first, only generate if needed
         # This prevents overusage of Flux and ChatGPT
         if needed_count > 0:
-            notify(f"📸 Generating 1 new creative (need {needed_count} more to reach {target_count}, currently {active_count} active)")
+            # STEP 1: Check for queued creatives first
+            from infrastructure.creative_storage import create_creative_storage_manager
+            from infrastructure.supabase_storage import get_validated_supabase_client
             
-            # Initialize image generator with ML system
-            from creative.image_generator import create_image_generator
-            import os
-            image_generator = create_image_generator(
-                flux_api_key=os.getenv("FLUX_API_KEY"),
-                openai_api_key=os.getenv("OPENAI_API_KEY"),
-                ml_system=ml_system,
-            )
+            supabase_client = get_validated_supabase_client()
+            storage_manager = None
+            queued_creative = None
+            
+            if supabase_client:
+                try:
+                    storage_manager = create_creative_storage_manager(supabase_client)
+                    if storage_manager:
+                        queued_creative = storage_manager.get_queued_creative()
+                except Exception as e:
+                    logger.warning(f"Failed to check creative queue: {e}")
+            
+            # If we found a queued creative, use it instead of generating
+            if queued_creative:
+                logger.info(f"✅ Using queued creative: {queued_creative.get('creative_id')}")
+                notify(f"📦 Using queued creative (need {needed_count} more, have {active_count} active)")
+                
+                # Get the creative data from storage
+                storage_url = queued_creative.get("storage_url")
+                storage_creative_id = queued_creative.get("creative_id")
+                metadata = queued_creative.get("metadata", {})
+                
+                # Reconstruct creative_data from metadata
+                creative_data = {
+                    "supabase_storage_url": storage_url,
+                    "creative_id": storage_creative_id,
+                    "ad_copy": metadata.get("ad_copy", {}),
+                    "text_overlay": metadata.get("text_overlay", ""),
+                    "image_prompt": metadata.get("image_prompt", ""),
+                    "scenario_description": metadata.get("scenario_description", ""),
+                }
+                
+                # Create ad with queued creative
+                creative_id, ad_id, success = _create_creative_and_ad(
+                    client=client,
+                    image_generator=None,  # Not needed for queued creative
+                    creative_data=creative_data,
+                    adset_id=adset_id,
+                    active_count=active_count,
+                    created_count=0,
+                    existing_creative_ids=set(),
+                    ml_system=ml_system,
+                )
+                
+                if success and creative_id and ad_id:
+                    # Mark creative as active
+                    if storage_manager:
+                        storage_manager.mark_creative_active(storage_creative_id, ad_id)
+                    
+                    logger.info(f"✅ Successfully used queued creative {storage_creative_id} for ad {ad_id}")
+                    notify(f"✅ Created ad {ad_id} using queued creative")
+                    
+                    # Return early - we used a queued creative, no generation needed
+                    return {
+                        "campaign_id": campaign_id,
+                        "adset_id": adset_id,
+                        "active_count": active_count + 1,
+                        "target_count": target_count,
+                        "created_count": 1,
+                        "killed_count": killed_count,
+                    }
+                else:
+                    logger.warning(f"Failed to create ad with queued creative, will generate new one")
+                    # Continue to generation below
+            
+            # STEP 2: No queued creative available - generate exactly 1
+            if not queued_creative:
+                notify(f"📸 Generating EXACTLY 1 new creative (need {needed_count} more to reach {target_count}, currently {active_count} active)")
+                
+                # Initialize image generator with ML system
+                from creative.image_generator import create_image_generator
+                import os
+                image_generator = create_image_generator(
+                    flux_api_key=os.getenv("FLUX_API_KEY"),
+                    openai_api_key=os.getenv("OPENAI_API_KEY"),
+                    ml_system=ml_system,
+                )
             
             # Initialize advanced ML system if available
             advanced_ml = None
@@ -734,6 +818,7 @@ def run_asc_plus_tick(
             max_attempts = needed_count * 3  # Allow up to 3x attempts in case of failures
             attempt_count = 0
             existing_creative_ids = set()  # Track created creative IDs to prevent duplicates
+            skip_standard_generation = False  # Flag to skip standard generation if we already generated 1
             
             # Use advanced ML pipeline if available
             if advanced_ml and advanced_ml.creative_pipeline:
@@ -801,6 +886,27 @@ def run_asc_plus_tick(
                                                     created_count += 1
                                                     existing_creative_ids.add(creative_id)
                                                     logger.info(f"✅ Successfully created smart creative {creative_id} and ad {ad_id}")
+                                                    
+                                                    # Look up the recently created creative in storage and mark as active
+                                                    if storage_manager:
+                                                        try:
+                                                            # Get creative_id from creative_data
+                                                            storage_creative_id = creative_data.get("creative_id")
+                                                            if not storage_creative_id:
+                                                                # Try to find it by looking up recently created
+                                                                recent_creative = storage_manager.get_recently_created_creative(minutes_back=5)
+                                                                if recent_creative:
+                                                                    storage_creative_id = recent_creative.get("creative_id")
+                                                            
+                                                            if storage_creative_id:
+                                                                storage_manager.mark_creative_active(storage_creative_id, ad_id)
+                                                                logger.info(f"✅ Marked creative {storage_creative_id} as active")
+                                                        except Exception as e:
+                                                            logger.warning(f"Failed to mark creative as active: {e}")
+                                                    
+                                                    # HARD STOP: We created 1 ad, STOP immediately
+                                                    skip_standard_generation = True
+                                                    logger.info(f"🛑 HARD STOP: Created 1 ad - stopping all further generation")
                                                 else:
                                                     failed_count += 1
                                                     failed_reasons.append(f"Failed to create (creative_id={creative_id}, ad_id={ad_id})")
@@ -821,6 +927,25 @@ def run_asc_plus_tick(
                                         if success and creative_id and ad_id:
                                             created_count += 1
                                             existing_creative_ids.add(creative_id)
+                                            
+                                            # Look up the recently created creative in storage and mark as active
+                                            if storage_manager:
+                                                try:
+                                                    storage_creative_id = creative_data.get("creative_id")
+                                                    if not storage_creative_id:
+                                                        recent_creative = storage_manager.get_recently_created_creative(minutes_back=5)
+                                                        if recent_creative:
+                                                            storage_creative_id = recent_creative.get("creative_id")
+                                                    
+                                                    if storage_creative_id:
+                                                        storage_manager.mark_creative_active(storage_creative_id, ad_id)
+                                                        logger.info(f"✅ Marked creative {storage_creative_id} as active")
+                                                except Exception as e:
+                                                    logger.warning(f"Failed to mark creative as active: {e}")
+                                            
+                                            # HARD STOP: We created 1 ad, STOP immediately
+                                            skip_standard_generation = True
+                                            logger.info(f"🛑 HARD STOP: Created 1 ad - stopping all further generation")
                                         else:
                                             failed_count += 1
                                             failed_reasons.append(f"Failed to create after analysis error")
@@ -840,6 +965,21 @@ def run_asc_plus_tick(
                                     if success and creative_id and ad_id:
                                         created_count += 1
                                         existing_creative_ids.add(creative_id)
+                                        
+                                        # Look up the recently created creative in storage and mark as active
+                                        if storage_manager:
+                                            try:
+                                                storage_creative_id = creative_data.get("creative_id")
+                                                if not storage_creative_id:
+                                                    recent_creative = storage_manager.get_recently_created_creative(minutes_back=5)
+                                                    if recent_creative:
+                                                        storage_creative_id = recent_creative.get("creative_id")
+                                                
+                                                if storage_creative_id:
+                                                    storage_manager.mark_creative_active(storage_creative_id, ad_id)
+                                                    logger.info(f"✅ Marked creative {storage_creative_id} as active")
+                                            except Exception as e:
+                                                logger.warning(f"Failed to mark creative as active: {e}")
                                     else:
                                         failed_count += 1
                                         failed_reasons.append(f"Failed to create")
@@ -853,32 +993,42 @@ def run_asc_plus_tick(
                     active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
                     active_count = len(active_ads)
                     
-                    # OLD CODE REMOVED - No more while loop that keeps regenerating
-                    # The system now generates once, processes all creatives, and stops
-                    
-                    # Fallback to standard generation if pipeline failed or didn't reach target
-                    if active_count < target_count:
-                        logger.warning(f"Advanced pipeline didn't reach target ({active_count}/{target_count}), falling back to standard generation")
-                        advanced_ml = None
+                    # HARD STOP: If we've generated 1 creative, STOP - don't fallback or retry
+                    if created_count >= 1:
+                        logger.info(f"✅ Generated 1 creative as requested - STOPPING (active: {active_count}, target: {target_count})")
+                        # Set flag to skip standard generation
+                        advanced_ml = None  # This will prevent fallback
+                        # Skip standard generation by setting a flag
+                        skip_standard_generation = True
+                    else:
+                        # Fallback to standard generation ONLY if we haven't generated anything yet
+                        if active_count < target_count and created_count == 0:
+                            logger.warning(f"Advanced pipeline didn't create any creatives, falling back to standard generation")
+                            advanced_ml = None
+                        skip_standard_generation = False
                 except Exception as e:
                     logger.error(f"Advanced pipeline failed with exception, using standard generation: {e}", exc_info=True)
                     advanced_ml = None
             
             # Standard generation (fallback) - SMART: Generate exactly 1 creative
-            if not advanced_ml or not advanced_ml.creative_pipeline:
-                # Get ML insights from killed creatives to inform generation
-                ml_insights = None
-                if ml_system and hasattr(ml_system, 'get_creative_insights'):
-                    try:
-                        ml_insights = ml_system.get_creative_insights()
-                        logger.info("✅ Using ML insights from killed creatives to inform new generation")
-                    except (AttributeError, ValueError, TypeError) as e:
-                        logger.debug(f"Failed to get ML insights: {e}")
+            if not skip_standard_generation and (not advanced_ml or not advanced_ml.creative_pipeline):
+                # HARD STOP: If we already generated 1 creative, STOP
+                if created_count >= 1:
+                    logger.info(f"✅ Already generated 1 creative - STOPPING standard generation")
+                else:
+                    # Get ML insights from killed creatives to inform generation
+                    ml_insights = None
+                    if ml_system and hasattr(ml_system, 'get_creative_insights'):
+                        try:
+                            ml_insights = ml_system.get_creative_insights()
+                            logger.info("✅ Using ML insights from killed creatives to inform new generation")
+                        except (AttributeError, ValueError, TypeError) as e:
+                            logger.debug(f"Failed to get ML insights: {e}")
                 
                 # SMART: Only generate 1 creative at a time
                 remaining_needed = target_count - active_count
                 if remaining_needed > 0:
-                    logger.info(f"📸 Standard generation: Generating 1 smart creative using ML insights (need {remaining_needed} more, have {active_count} active)")
+                    logger.info(f"📸 Standard generation: Generating EXACTLY 1 smart creative using ML insights (need {remaining_needed} more, have {active_count} active)")
                     
                     try:
                         # Generate exactly 1 creative with ML insights
@@ -907,6 +1057,9 @@ def run_asc_plus_tick(
                                 created_count += 1
                                 existing_creative_ids.add(str(creative_id))
                                 logger.info(f"✅ Successfully created smart creative {creative_id} and ad {ad_id}")
+                                # HARD STOP: We generated 1 creative, STOP immediately
+                                logger.info(f"🛑 HARD STOP: Generated 1 creative as requested - stopping all further generation")
+                                skip_standard_generation = True  # Prevent any further generation
                             elif not success:
                                 if creative_id:
                                     failed_count += 1
