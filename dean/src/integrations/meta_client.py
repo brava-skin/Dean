@@ -1404,6 +1404,157 @@ class MetaClient:
 
         return creative
 
+    def create_carousel_creative(
+        self,
+        page_id: Optional[str],
+        name: str,
+        *,
+        main_image_url: Optional[str] = None,
+        main_image_path: Optional[str] = None,
+        supabase_storage_url: Optional[str] = None,
+        primary_text: str,
+        headline: str,
+        description: str = "",
+        call_to_action: str = "SHOP_NOW",
+        link_url: Optional[str] = None,
+        utm_params: Optional[str] = None,
+        instagram_actor_id: Optional[str] = None,
+        product_catalog_id: Optional[str] = None,  # Catalog ID for product cards
+        product_set_id: Optional[str] = None,  # Product set ID (optional, uses catalog if not provided)
+    ) -> Dict[str, Any]:
+        """
+        Creates a carousel creative with main image and catalog products.
+        Main image is the generated creative, additional cards are from catalog.
+        """
+        self._check_names(ad=_s(name))
+        bad = _contains_forbidden([primary_text, headline, description])
+        if bad:
+            raise ValueError(f"Creative text contains forbidden term: {bad}")
+
+        pid = _s(page_id or os.getenv("FB_PAGE_ID"))
+        if not pid:
+            raise ValueError("Page ID is required (set FB_PAGE_ID or pass page_id).")
+
+        # Get main image URL (priority: supabase_storage_url > main_image_url > main_image_path)
+        final_image_url = _s(supabase_storage_url or main_image_url).strip()
+        
+        if not final_image_url and main_image_path:
+            # Upload to Meta's ad image library
+            try:
+                uploaded_image = self._upload_ad_image(main_image_path, name)
+                if uploaded_image and uploaded_image.get("hash"):
+                    final_image_url = uploaded_image.get("hash")
+                elif uploaded_image and uploaded_image.get("url"):
+                    final_image_url = uploaded_image.get("url")
+            except Exception as e:
+                notify(f"⚠️ Failed to upload image: {e}")
+                raise
+
+        if not final_image_url:
+            raise ValueError("Either supabase_storage_url, main_image_url, or main_image_path must be provided.")
+
+        final_link = _clean_story_link(link_url, utm_params)
+        ig_id = instagram_actor_id or os.getenv("IG_ACTOR_ID") or None
+
+        # Get catalog ID from ad set or env
+        catalog_id = product_catalog_id or os.getenv("PRODUCT_CATALOG_ID")
+        if not catalog_id:
+            logger.warning("No product catalog ID provided - carousel will only show main image")
+
+        if self.dry_run or not USE_SDK or not self.cfg.enable_creative_uploads:
+            payload_preview = {
+                "page_id": pid,
+                "carousel": True,
+                "main_image_url": final_image_url,
+                "catalog_id": catalog_id or "",
+                "instagram_actor_id": ig_id or "",
+            }
+            return {
+                "id": f"CR_{abs(hash(_s(name))) % 10_000_000}",
+                "name": _s(name),
+                "mock": True,
+                **payload_preview,
+            }
+
+        self._init_sdk_if_needed()
+        self._cooldown()
+
+        # Upload main image to get hash
+        main_image_hash = None
+        if final_image_url.startswith("http"):
+            # Need to upload to get hash for carousel
+            try:
+                import requests
+                import tempfile
+                response = requests.get(final_image_url, timeout=30)
+                response.raise_for_status()
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
+                    tmp_file.write(response.content)
+                    tmp_path = tmp_file.name
+                uploaded = self._upload_ad_image(tmp_path, f"{name}_main")
+                if uploaded and uploaded.get("hash"):
+                    main_image_hash = uploaded.get("hash")
+                os.unlink(tmp_path)
+            except Exception as e:
+                logger.warning(f"Failed to upload main image for carousel: {e}")
+                # Fallback to URL
+                main_image_hash = None
+        else:
+            main_image_hash = final_image_url  # Already a hash
+
+        # Build carousel child attachments
+        # First attachment: main image (our generated creative)
+        main_attachment: Dict[str, Any] = {
+            "link": final_link or os.getenv("SHOPIFY_STORE_URL", "https://brava-skin.com"),
+        }
+        
+        if headline:
+            main_attachment["name"] = _s(headline)[:100]
+        if description:
+            main_attachment["description"] = _s(description)[:150]
+        
+        if main_image_hash:
+            main_attachment["image_hash"] = main_image_hash
+        else:
+            main_attachment["image_url"] = final_image_url
+
+        child_attachments = [main_attachment]
+
+        # For carousel with catalog, Meta will automatically add product cards from the catalog
+        # configured in the ad set. We just need to create a carousel format.
+        story_spec: Dict[str, Any] = {
+            "page_id": pid,
+            "link_data": {
+                "message": _s(primary_text),
+                "name": _s(headline)[:100] if headline else "",
+                "description": _s(description)[:150] if description else "",
+                "link": final_link or os.getenv("SHOPIFY_STORE_URL", "https://brava-skin.com"),
+                "call_to_action": {"type": _s(call_to_action or "SHOP_NOW"), "value": {"link": final_link or os.getenv("SHOPIFY_STORE_URL", "https://brava-skin.com")}},
+                "child_attachments": child_attachments,
+            }
+        }
+
+        # Note: Catalog products are automatically added by Meta from the ad set's catalog configuration
+        # We don't need to specify them here - Meta will pull products from the catalog chosen in the ad set
+
+        if ig_id:
+            story_spec["instagram_actor_id"] = ig_id
+
+        params = {
+            "name": _s(name),
+            "object_story_spec": story_spec,
+        }
+
+        # HTTP-first; SDK fallback
+        try:
+            creative = self._graph_post("adcreatives", params)
+        except Exception:
+            def _create_sdk():
+                return AdAccount(self.ad_account_id_act).create_ad_creative(fields=[], params=_sanitize(params))
+            creative = dict(self._retry("create_creative", _create_sdk))
+
+        return creative
+
     def _upload_ad_image(self, image_path: str, name: str) -> Dict[str, Any]:
         """
         Upload an image to Meta's Ad Image library.

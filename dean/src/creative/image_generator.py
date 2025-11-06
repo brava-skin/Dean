@@ -1194,11 +1194,15 @@ COPY REQUIREMENTS:
    - Must grab attention without being pushy
    - Examples: "For men who value discipline.", "Clean skin is the foundation of presence."
 
-2. PRIMARY TEXT (max 300 characters, must be exactly 300 or less):
+2. PRIMARY TEXT (max 150 characters, must be SHORT and LUXURY):
+   - SHORT: Maximum 150 characters (preferably 80-120)
+   - LUXURY: Premium, refined, sophisticated language
    - Calm, confident narrative
    - Speaks to self-respect and intentional living
-   - Connects to the scenario's mood/theme
-   - Examples: "Precision skincare designed to elevate daily standards.", "Your routine communicates who you are."
+   - NO product name mentions (never say "Brava Product" or brand name)
+   - NO em dashes (—) - use commas or periods instead
+   - NO hyphens in place of em dashes
+   - Examples: "Precision skincare designed to elevate daily standards.", "Your routine communicates who you are.", "Refined care that supports presence."
 
 3. DESCRIPTION (max 150 characters, optional but recommended):
    - Supporting text that reinforces the message
@@ -1225,9 +1229,11 @@ Primary: "Precision skincare for men who understand that the face you show the w
 
 VALIDATION CHECKLIST:
 ✓ Headline: 60 characters or less, confident, discipline/presence theme
-✓ Primary text: 300 characters or less, calm confidence, self-respect
+✓ Primary text: 150 characters or less (SHORT), calm confidence, self-respect, LUXURY tone
+✓ Primary text: NO product name ("Brava Product" is FORBIDDEN)
+✓ Primary text: NO em dashes (—) - use commas or periods
 ✓ Description: 150 characters or less (optional)
-✓ Tone: Calm confidence, no hype, no urgency
+✓ Tone: Calm confidence, no hype, no urgency, luxury
 ✓ Alignment: Complements scenario context
 ✓ Diversity: Different from recent copy
 ✓ ML-informed: Uses patterns from best performers
@@ -1299,9 +1305,15 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                         headline = headline[:57] + "..."
                         logger.warning(f"Headline truncated to 60 chars: {headline}")
                     
-                    if len(primary_text) > 300:
-                        primary_text = primary_text[:297] + "..."
-                        logger.warning(f"Primary text truncated to 300 chars")
+                    # Remove "Brava Product" and em dashes
+                    primary_text = primary_text.replace("Brava Product", "").replace("—", ",").replace("–", ",").strip()
+                    # Remove double spaces and clean up
+                    import re
+                    primary_text = re.sub(r'\s+', ' ', primary_text).strip()
+                    
+                    if len(primary_text) > 150:
+                        primary_text = primary_text[:147] + "..."
+                        logger.warning(f"Primary text truncated to 150 chars")
                     
                     if description and len(description) > 150:
                         description = description[:147] + "..."

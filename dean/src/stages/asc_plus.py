@@ -172,19 +172,38 @@ def _create_creative_and_ad(
             logger.error("FB_PAGE_ID environment variable is required")
             return None, None, False
         
-        logger.info(f"Creating Meta creative: name='{creative_name}', page_id='{page_id}', has_supabase_url={bool(supabase_storage_url)}, has_image_path={bool(image_path)}")
+        # Get Instagram actor ID
+        instagram_actor_id = os.getenv("IG_ACTOR_ID")
+        
+        logger.info(f"Creating Meta creative: name='{creative_name}', page_id='{page_id}', instagram_actor_id={bool(instagram_actor_id)}, has_supabase_url={bool(supabase_storage_url)}, has_image_path={bool(image_path)}")
         try:
-            creative = client.create_image_creative(
+            # Clean primary text - remove "Brava Product" and em dashes
+            primary_text = ad_copy_dict.get("primary_text", "")
+            if primary_text:
+                import re
+                primary_text = primary_text.replace("Brava Product", "").replace("—", ",").replace("–", ",").strip()
+                primary_text = re.sub(r'\s+', ' ', primary_text).strip()
+                # Ensure it's not too long
+                if len(primary_text) > 150:
+                    primary_text = primary_text[:147] + "..."
+            
+            # Create carousel creative with main image and catalog products
+            # Note: Catalog products are automatically pulled from the catalog configured in the ad set
+            # The main image (our generated creative) will be the first card, catalog products will be additional cards
+            product_catalog_id = os.getenv("PRODUCT_CATALOG_ID")  # Optional - Meta will use ad set's catalog if not provided
+            
+            creative = client.create_carousel_creative(
                 page_id=page_id,
                 name=creative_name,
                 supabase_storage_url=supabase_storage_url,  # Use Supabase Storage URL
-                image_path=image_path if not supabase_storage_url else None,
-                primary_text=ad_copy_dict.get("primary_text", ""),
+                main_image_path=image_path if not supabase_storage_url else None,
+                primary_text=primary_text,
                 headline=ad_copy_dict.get("headline", ""),
                 description=ad_copy_dict.get("description", ""),
-                creative_id=storage_creative_id,  # Pass storage creative_id for tracking
+                instagram_actor_id=instagram_actor_id,  # Add Instagram account
+                product_catalog_id=product_catalog_id,  # Optional - Meta uses ad set's catalog
             )
-            logger.info(f"Meta API create_image_creative response: {creative}")
+            logger.info(f"Meta API create_carousel_creative response: {creative}")
         except Exception as e:
             logger.error(f"Meta API create_image_creative failed: {e}", exc_info=True)
             return None, None, False
