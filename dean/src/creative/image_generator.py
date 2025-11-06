@@ -607,8 +607,9 @@ class ImageCreativeGenerator:
             if current_count < 2:
                 batch_requirements += "\n- BATCH REQUIREMENT: This batch needs more outdoor/urban scenarios\n"
             
-            # Expanded examples (30-40 diverse scenarios)
+            # Expanded examples (30-40 diverse scenarios) - AMERICAN MEN, NO SUITS
             expanded_examples = """EXAMPLES OF DIVERSE SCENARIOS (use as inspiration, create something NEW and EXTREMELY DETAILED):
+CRITICAL: Target American men (Caucasian, African American, Hispanic, Asian American, etc.) - NO Indian/South Asian men, NO formal suits/business attire
 
 MOOD/EMOTION VARIATIONS:
 - A contemplative close-up of a man in his late 30s with salt-and-pepper stubble, looking out a floor-to-ceiling window in a minimalist Tokyo penthouse at blue hour, wearing a tailored navy cashmere turtleneck, soft natural window light creating Rembrandt triangle, shallow depth of field blurring the city skyline behind, Vogue editorial aesthetic
@@ -991,9 +992,9 @@ The text MUST be 4 words or less. Examples: "Refined, not complicated." | "Eleva
                     if ":" in text and len(text.split(":")[0]) < 20:
                         text = text.split(":", 1)[1].strip()
                     
-                    # Validate length (8-12 words)
+                    # Validate length - MAX 4 WORDS
                     word_count = len(text.split())
-                    if 8 <= word_count <= 15:  # Allow slight flexibility
+                    if 1 <= word_count <= 4:  # Max 4 words
                         # Track this text
                         if not hasattr(self, '_recent_text_overlays'):
                             self._recent_text_overlays = []
