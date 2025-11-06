@@ -1078,16 +1078,39 @@ def run_asc_plus_tick(
                                 created_count += 1
                                 existing_creative_ids.add(str(creative_id))
                                 logger.info(f"✅ Successfully created smart creative {creative_id} and ad {ad_id}")
-                                # HARD STOP: We generated 1 creative, STOP immediately
-                                logger.info(f"🛑 HARD STOP: Generated 1 creative as requested - stopping all further generation")
-                                skip_standard_generation = True  # Prevent any further generation
-                            elif not success:
+                                
+                                # Look up the recently created creative in storage and mark as active
+                                if storage_manager:
+                                    try:
+                                        storage_creative_id = creative_data.get("creative_id")
+                                        if not storage_creative_id:
+                                            recent_creative = storage_manager.get_recently_created_creative(minutes_back=5)
+                                            if recent_creative:
+                                                storage_creative_id = recent_creative.get("creative_id")
+                                        
+                                        if storage_creative_id:
+                                            storage_manager.mark_creative_active(storage_creative_id, ad_id)
+                                            logger.info(f"✅ Marked creative {storage_creative_id} as active")
+                                    except Exception as e:
+                                        logger.warning(f"Failed to mark creative as active: {e}")
+                                
+                                # Refresh active count after creation
+                                ads = client.list_ads_in_adset(adset_id)
+                                active_ads = [a for a in ads if str(a.get("status", "")).upper() == "ACTIVE"]
+                                active_count = len(active_ads)
+                                
+                                logger.info(f"✅ Created creative - now {active_count}/{target_count} active")
+                                
+                                # Check if we've reached target - if so, break out of loop
+                                if active_count >= target_count:
+                                    logger.info(f"✅ Reached target: {active_count}/{target_count} active creatives")
+                                    break  # Stop generating
+                            else:
+                                failed_count += 1
                                 if creative_id:
-                                    failed_count += 1
-                                    failed_reasons.append("Standard generation: Duplicate creative ID")
+                                    failed_reasons.append(f"Standard generation attempt {attempts}: Duplicate creative ID")
                                 else:
-                                    failed_count += 1
-                                    failed_reasons.append("Standard generation: Failed to create")
+                                    failed_reasons.append(f"Standard generation attempt {attempts}: Failed to create")
                                     # Track failure in ML system
                                     if ml_system and hasattr(ml_system, 'record_creative_generation_failure'):
                                         try:
