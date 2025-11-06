@@ -542,6 +542,11 @@ class MultiArmedBandit:
             return 0.0
         
         return arm.alpha / (arm.alpha + arm.beta)
+    
+    def add_arm(self, arm_id: str):
+        """Add a new arm to the bandit."""
+        if arm_id not in self.arms:
+            self.arms[arm_id] = BanditArm(id=arm_id)
 
 
 class ReinforcementLearningAgent:

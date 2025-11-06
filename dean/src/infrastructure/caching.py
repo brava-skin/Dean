@@ -90,36 +90,58 @@ class RedisCache:
             port=6379,
             db=0,
             decode_responses=False,  # We'll handle encoding
+            socket_connect_timeout=2,  # Fast timeout for connection check
+            socket_timeout=2,
         )
         self.default_ttl = default_ttl
+        
+        # Test connection immediately
+        try:
+            self.client.ping()
+        except Exception:
+            # Connection failed, mark as unavailable
+            self.client = None
+            raise ConnectionError("Redis connection failed")
     
     def get(self, key: str) -> Optional[Any]:
         """Get value from Redis."""
+        if self.client is None:
+            return None
         try:
             data = self.client.get(key)
             if data is None:
                 return None
             return pickle.loads(data)
+        except (ConnectionError, redis.ConnectionError, redis.TimeoutError) as e:
+            logger.debug(f"Redis get error (connection): {e}")
+            return None
         except Exception as e:
-            logger.error(f"Redis get error: {e}")
+            logger.debug(f"Redis get error: {e}")
             return None
     
     def set(self, key: str, value: Any, ttl_seconds: Optional[int] = None):
         """Set value in Redis."""
+        if self.client is None:
+            return
         try:
             # Convert non-picklable types to picklable ones
             value = self._make_picklable(value)
             data = pickle.dumps(value)
             ttl = ttl_seconds or self.default_ttl
             self.client.setex(key, ttl, data)
+        except (ConnectionError, redis.ConnectionError, redis.TimeoutError) as e:
+            logger.debug(f"Redis set error (connection): {e}")
         except Exception as e:
-            logger.error(f"Redis set error: {e}")
+            logger.debug(f"Redis set error: {e}")
     
     def _make_picklable(self, value: Any) -> Any:
         """Convert non-picklable objects to picklable ones."""
-        # Check for dict_values and dict_keys types
+        # Handle dict_values, dict_keys, and other non-picklable types
+        if isinstance(value, (dict.values, dict.keys, dict.items)):
+            return list(value)
+        # Check for dict_values and dict_keys types by comparing type
         value_type = type(value)
-        if value_type is type({}.values()) or value_type is type({}.keys()):
+        if value_type in (type({}.values()), type({}.keys()), type({}.items())):
             return list(value)
         elif isinstance(value, dict):
             return {k: self._make_picklable(v) for k, v in value.items()}
@@ -138,12 +160,16 @@ class RedisCache:
     
     def clear_pattern(self, pattern: str):
         """Clear all keys matching pattern."""
+        if self.client is None:
+            return
         try:
             keys = self.client.keys(pattern)
             if keys:
                 self.client.delete(*keys)
+        except (ConnectionError, redis.ConnectionError, redis.TimeoutError) as e:
+            logger.debug(f"Redis clear_pattern error (connection): {e}")
         except Exception as e:
-            logger.error(f"Redis clear_pattern error: {e}")
+            logger.debug(f"Redis clear_pattern error: {e}")
 
 
 class CacheManager:
@@ -157,8 +183,12 @@ class CacheManager:
             try:
                 self.redis_cache = RedisCache()
                 logger.info("✅ Redis cache initialized")
+            except (ConnectionError, ImportError) as e:
+                logger.debug(f"Redis cache not available (using in-memory only): {e}")
+                self.redis_cache = None
             except Exception as e:
-                logger.warning(f"Redis cache not available: {e}")
+                logger.debug(f"Redis cache initialization failed (using in-memory only): {e}")
+                self.redis_cache = None
     
     def get(self, key: str, namespace: str = "default") -> Optional[Any]:
         """Get value from cache (tries Redis first, then memory)."""

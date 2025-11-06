@@ -202,8 +202,13 @@ class AutoOptimizer:
             self.rl_agent = None
         
         # Multi-armed bandit for creative selection
-        if self.use_bandit:
-            self.bandit = MultiArmedBandit()
+        if self.use_bandit and MultiArmedBandit:
+            try:
+                # Initialize with empty arms list - will be populated when creatives are available
+                self.bandit = MultiArmedBandit(arms=[])
+            except Exception as e:
+                logger.warning(f"Failed to initialize MultiArmedBandit: {e}")
+                self.bandit = None
         else:
             self.bandit = None
         
