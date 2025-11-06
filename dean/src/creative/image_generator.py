@@ -948,7 +948,7 @@ GENERATION PROCESS:
 5. Verify it matches calm confidence tone
 
 Return ONLY the text overlay (no explanations, no quotes, just the text).
-The text MUST be 4 words or less and MUST hint at skincare. Examples: "Refined skincare, not complicated." | "Elevate your skin." | "Clear skin, quiet confidence.""""
+The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined skincare, not complicated. | Elevate your skin. | Clear skin, quiet confidence."""
 
                 response = client.responses.create(
                     model=CHATGPT5_MODEL,
