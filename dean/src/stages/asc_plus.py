@@ -205,7 +205,7 @@ def _create_creative_and_ad(
             )
             logger.info(f"Meta API create_carousel_creative response: {creative}")
         except Exception as e:
-            logger.error(f"Meta API create_image_creative failed: {e}", exc_info=True)
+            logger.error(f"Meta API create_carousel_creative failed: {e}", exc_info=True)
             return None, None, False
         
         meta_creative_id = creative.get("id")
