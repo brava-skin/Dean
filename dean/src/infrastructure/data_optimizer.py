@@ -367,12 +367,11 @@ class CreativeStorageOptimizer:
         try:
             is_valid, issues = self.validate_storage_data(creative_id)
             
+            # Always ensure metadata is complete (even if validation passes)
+            self.ensure_complete_metadata(creative_id)
+            
             if is_valid:
                 return True
-            
-            # Fix metadata issues
-            if any('metadata' in issue for issue in issues):
-                self.ensure_complete_metadata(creative_id)
             
             # Fix status issues
             response = self.client.table('creative_storage').select('status').eq(
@@ -387,10 +386,10 @@ class CreativeStorageOptimizer:
                         'status': 'queue',
                     }).eq('creative_id', creative_id).execute()
             
-            logger.info(f"✅ Fixed storage data for {creative_id}")
+            logger.debug(f"✅ Fixed storage data for {creative_id}")
             return True
         except Exception as e:
-            logger.error(f"Error fixing storage data for {creative_id}: {e}")
+            logger.debug(f"Error fixing storage data for {creative_id}: {e}")
             return False
 
 
