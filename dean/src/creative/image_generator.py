@@ -1017,11 +1017,14 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: "Refined s
         if ml_insights and ml_insights.get("best_text_overlays"):
             best_texts = ml_insights["best_text_overlays"]
             if best_texts:
-                # Weight selection: 70% chance of best performer, 30% chance of others
-                if random.random() < 0.7 and len(best_texts) > 0:
-                    return best_texts[0]  # Top performer
-                else:
-                    return random.choice(best_texts)  # Random from best
+                # Filter to only texts that hint at skincare
+                skincare_texts = [t for t in best_texts if any(word in t.lower() for word in ["skin", "skincare", "routine", "care", "face", "clear", "refined"])]
+                if skincare_texts:
+                    # Weight selection: 70% chance of best performer, 30% chance of others
+                    if random.random() < 0.7 and len(skincare_texts) > 0:
+                        return skincare_texts[0]  # Top performer
+                    else:
+                        return random.choice(skincare_texts)  # Random from best
         
         # Use calm confidence options with diversity tracking
         if not hasattr(self, '_recent_text_overlays'):
@@ -1418,7 +1421,7 @@ Ensure all text meets character limits and maintains calm confidence tone."""
     ) -> Optional[str]:
         """
         Add premium text overlay to image using ffmpeg.
-        Luxury serif font, proper wrapping, bottom positioning with margins.
+        Poppins font (or system sans-serif fallback), proper wrapping, bottom positioning with margins.
         """
         try:
             # Check if ffmpeg is available (REQUIRED - not optional)
@@ -1475,11 +1478,12 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                 "C:/Windows/Fonts/arialbd.ttf",  # Windows fallback
             ]
             
-            # Try to find an available premium serif font
+            # Try to find Poppins font (preferred) or fallback to system sans-serif
             font_path = None
             for fp in font_paths:
-                if Path(fp).exists():
-                    font_path = fp
+                expanded_path = Path(fp).expanduser()  # Expand ~ to home directory
+                if expanded_path.exists():
+                    font_path = str(expanded_path)
                     break
             
             # Calculate appropriate font size based on text length and image dimensions
