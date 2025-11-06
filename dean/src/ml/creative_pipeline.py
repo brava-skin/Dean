@@ -49,6 +49,7 @@ class CreativeGenerationPipeline:
         
         for i in range(generate_count):
             try:
+                logger.info(f"Generating creative variation {i+1}/{generate_count}")
                 creative = self.image_generator.generate_creative(
                     product_info,
                     creative_style=f"variation_{i}",
@@ -59,8 +60,11 @@ class CreativeGenerationPipeline:
                     creative["generation_stage"] = "generated"
                     creative["generation_index"] = i
                     generated_creatives.append(creative)
+                    logger.info(f"✅ Creative {i+1} generated successfully")
+                else:
+                    logger.warning(f"⚠️ Creative {i+1} generation returned None")
             except Exception as e:
-                logger.error(f"Error generating creative {i}: {e}")
+                logger.error(f"Error generating creative {i+1}: {e}", exc_info=True)
         
         if not generated_creatives:
             logger.warning("No creatives generated in Stage 1")
@@ -86,32 +90,39 @@ class CreativeGenerationPipeline:
                         creative["generation_stage"] = "filtered"
                         filtered_creatives.append(creative)
                 except Exception as e:
-                    logger.error(f"Error predicting for creative: {e}")
-                    # Include anyway if prediction fails
+                    logger.warning(f"Error predicting for creative: {e}, including anyway")
+                    # Include anyway if prediction fails (no model data yet)
                     filtered_creatives.append(creative)
         else:
+            logger.info("No predictive model available, passing all creatives through")
             filtered_creatives = generated_creatives
         
         logger.info(f"Stage 2 complete: {len(filtered_creatives)} creatives passed filter")
         
         # Stage 3: Select top performers
-        logger.info(f"Stage 3: Selecting top {target_count} creatives")
+        logger.info(f"Stage 3: Selecting top {target_count} creatives from {len(filtered_creatives)} filtered")
         selected_creatives = []
         
-        # Sort by predicted performance
-        if self.predictive_model:
-            filtered_creatives.sort(
-                key=lambda c: c.get("prediction", {}).get("predicted_value", 0.0),
-                reverse=True,
-            )
+        # Sort by predicted performance if available
+        if self.predictive_model and filtered_creatives:
+            try:
+                filtered_creatives.sort(
+                    key=lambda c: c.get("prediction", {}).get("predicted_value", 0.0),
+                    reverse=True,
+                )
+            except Exception as e:
+                logger.warning(f"Error sorting creatives: {e}, using original order")
         
-        # Select top N
+        # Select top N (or all if we have fewer than target_count)
         selected_creatives = filtered_creatives[:target_count]
         
         for creative in selected_creatives:
             creative["generation_stage"] = "selected"
         
-        logger.info(f"Stage 3 complete: {len(selected_creatives)} creatives selected")
+        logger.info(f"Stage 3 complete: {len(selected_creatives)} creatives selected for processing")
+        
+        if not selected_creatives:
+            logger.warning(f"⚠️ Pipeline returned 0 creatives after filtering! Generated: {len(generated_creatives)}, Filtered: {len(filtered_creatives)}")
         
         return selected_creatives
     

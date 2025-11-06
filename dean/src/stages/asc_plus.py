@@ -676,10 +676,19 @@ def run_asc_plus_tick(
                         
                         # Generate batch of creatives (generate more than needed to account for failures)
                         remaining_needed = target_count - active_count
+                        logger.info(f"Generating {min(remaining_needed * 2, 5)} creatives (need {remaining_needed} more)")
                         generated_creatives = advanced_ml.generate_optimized_creatives(
                             product_info,
                             target_count=min(remaining_needed * 2, 5),  # Generate up to 5 at a time
                         )
+                        
+                        logger.info(f"Pipeline returned {len(generated_creatives)} creatives")
+                        
+                        if not generated_creatives:
+                            logger.warning(f"No creatives returned from pipeline on attempt #{attempt_count}")
+                            failed_count += 1
+                            failed_reasons.append(f"Attempt #{attempt_count}: Pipeline returned empty list")
+                            continue
                         
                         # Process generated creatives
                         for i, creative_data in enumerate(generated_creatives):
@@ -766,10 +775,10 @@ def run_asc_plus_tick(
                     
                     # Fallback to standard generation if pipeline failed or didn't reach target
                     if active_count < target_count:
-                        logger.info(f"Advanced pipeline didn't reach target ({active_count}/{target_count}), falling back to standard generation")
+                        logger.warning(f"Advanced pipeline didn't reach target ({active_count}/{target_count}), falling back to standard generation")
                         advanced_ml = None
-                except (AttributeError, ValueError, TypeError, KeyError) as e:
-                    logger.warning(f"Advanced pipeline failed, using standard generation: {e}", exc_info=True)
+                except Exception as e:
+                    logger.error(f"Advanced pipeline failed with exception, using standard generation: {e}", exc_info=True)
                     advanced_ml = None
             
             # Standard generation loop (fallback) - keep generating until we have target_count active
