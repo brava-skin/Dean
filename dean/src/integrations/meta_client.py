@@ -12,6 +12,14 @@ from collections import defaultdict, deque
 from threading import Lock
 import json
 
+
+class InsightsDataLimitError(RuntimeError):
+    """Raised when Meta limits insights request by data volume."""
+
+
+class ReachBreakdownThrottled(RuntimeError):
+    """Raised when reach-related breakdowns are temporarily throttled."""
+
 import logging
 import requests
 from collections import Counter
@@ -270,6 +278,17 @@ class RateLimitManager:
         self.buc_usage_percent = defaultdict(float)  # BUC -> usage percentage
         self.ad_account_usage_percent = defaultdict(float)  # Ad account -> usage percentage
         self.app_usage_percent = 0.0
+        self.reach_usage_percent = defaultdict(float)
+        self.reach_app_usage_percent = 0.0
+        self.insights_cooldown_until = 0.0
+        self.reach_cooldown_until = 0.0
+        self.last_insights_alert_at = 0.0
+        self.last_reach_alert_at = 0.0
+        self.insights_inflight = 0
+        self.reach_async_tracker = {
+            "date": datetime.utcnow().date(),
+            "count": 0,
+        }
         
         # Error tracking
         self.error_counts = defaultdict(int)
@@ -353,6 +372,133 @@ class RateLimitManager:
                 except Exception:
                     pass
     
+    def acquire_insights_slot(self):
+        """Ensure no more than META_MAX_CONCURRENT_INSIGHTS run simultaneously."""
+        while True:
+            with self.lock:
+                if self.insights_inflight < META_MAX_CONCURRENT_INSIGHTS:
+                    self.insights_inflight += 1
+                    return
+                wait = min(2.0, 0.5 * (self.insights_inflight - META_MAX_CONCURRENT_INSIGHTS + 1))
+            time.sleep(max(0.25, wait))
+
+    def release_insights_slot(self):
+        with self.lock:
+            self.insights_inflight = max(0, self.insights_inflight - 1)
+
+    def _reset_reach_async_tracker_if_needed(self):
+        today = datetime.utcnow().date()
+        if self.reach_async_tracker["date"] != today:
+            self.reach_async_tracker = {"date": today, "count": 0}
+
+    def can_use_reach_async(self) -> bool:
+        with self.lock:
+            self._reset_reach_async_tracker_if_needed()
+            return self.reach_async_tracker["count"] < 10
+
+    def note_reach_async(self):
+        with self.lock:
+            self._reset_reach_async_tracker_if_needed()
+            self.reach_async_tracker["count"] += 1
+
+    def handle_general_headers(self, headers: Dict[str, Any], buc_type: Optional[str], ad_account_id: str):
+        if not headers:
+            return
+        now = time.time()
+        try:
+            usage_header = headers.get("x-business-use-case-usage")
+            if usage_header and META_BUC_ENABLED:
+                data = json.loads(usage_header)
+                if isinstance(data, dict):
+                    usage = data.get(buc_type or "ads_management") or data.get("ads_management")
+                    if isinstance(usage, dict):
+                        pct = float(usage.get("acc_id_util_pct", 0.0))
+                        self.buc_usage_percent[buc_type or "ads_management"] = pct
+                        if pct >= 95 and now - self.last_insights_alert_at > 60:
+                            notify(f"⚠️ BUC usage high ({pct:.0f}% for {buc_type or 'ads_management'}) - slowing requests")
+                            self.last_insights_alert_at = now
+                            self.insights_cooldown_until = max(self.insights_cooldown_until, now + 60)
+        except Exception:
+            pass
+
+        try:
+            acc_usage_header = headers.get("x-ad-account-usage")
+            if acc_usage_header:
+                data = json.loads(acc_usage_header)
+                if isinstance(data, dict):
+                    pct = float(data.get("acc_id_util_pct", 0.0))
+                    self.ad_account_usage_percent[ad_account_id] = pct
+                    if pct >= 95 and now - self.last_insights_alert_at > 60:
+                        notify(f"⚠️ Ad account usage {pct:.0f}% - pausing insights briefly")
+                        self.last_insights_alert_at = now
+                        self.insights_cooldown_until = max(self.insights_cooldown_until, now + 45)
+        except Exception:
+            pass
+
+    def handle_insights_headers(self, headers: Dict[str, Any], ad_account_id: str):
+        if not headers:
+            return
+        now = time.time()
+        try:
+            throttle_header = headers.get("x-fb-ads-insights-throttle")
+            if throttle_header:
+                data = json.loads(throttle_header)
+                if isinstance(data, dict):
+                    app_pct = float(data.get("app_id_util_pct", 0.0))
+                    acc_pct = float(data.get("acc_id_util_pct", 0.0))
+                    self.app_usage_percent = app_pct
+                    self.ad_account_usage_percent[ad_account_id] = acc_pct
+                    if max(app_pct, acc_pct) >= 95:
+                        if now - self.last_insights_alert_at > 60:
+                            notify(f"⚠️ Insights usage high (app {app_pct:.0f}%, account {acc_pct:.0f}%). Applying cooldown.")
+                            self.last_insights_alert_at = now
+                        self.insights_cooldown_until = max(self.insights_cooldown_until, now + 60)
+                    elif max(app_pct, acc_pct) >= 85:
+                        self.insights_cooldown_until = max(self.insights_cooldown_until, now + 20)
+        except Exception:
+            pass
+
+        try:
+            reach_header = headers.get("x-fb-ads-insights-reach-throttle")
+            if reach_header:
+                data = json.loads(reach_header)
+                if isinstance(data, dict):
+                    app_pct = float(data.get("app_id_util_pct", 0.0))
+                    acc_pct = float(data.get("acc_id_util_pct", 0.0))
+                    self.reach_app_usage_percent = app_pct
+                    self.reach_usage_percent[ad_account_id] = acc_pct
+                    if max(app_pct, acc_pct) >= 95:
+                        if now - self.last_reach_alert_at > 60:
+                            notify("⚠️ Reach breakdown quota nearly exhausted. Falling back to async or stripping reach metrics.")
+                            self.last_reach_alert_at = now
+                        self.reach_cooldown_until = max(self.reach_cooldown_until, now + 90)
+        except Exception:
+            pass
+
+    def get_insights_cooldown(self, ad_account_id: str) -> float:
+        with self.lock:
+            now = time.time()
+            if now < self.insights_cooldown_until:
+                return self.insights_cooldown_until - now
+            usage = max(self.app_usage_percent, self.ad_account_usage_percent.get(ad_account_id, 0.0))
+            if usage >= 95:
+                wait = 60.0
+            elif usage >= 85:
+                wait = 20.0
+            elif usage >= 80:
+                wait = 10.0
+            else:
+                return 0.0
+            self.insights_cooldown_until = now + wait
+            return wait
+
+    def get_reach_cooldown(self) -> float:
+        with self.lock:
+            now = time.time()
+            if now < self.reach_cooldown_until:
+                return self.reach_cooldown_until - now
+            return 0.0
+
     def handle_rate_limit_error(self, error_data: Dict[str, Any], endpoint: str) -> float:
         """
         Handle rate limit errors and return wait time.
@@ -635,11 +781,28 @@ class MetaClient:
                     status = _maybe_call(getattr(e, "http_status", None))
                     headers = _maybe_call(getattr(e, "http_headers", None)) or {}
                     subcode = _maybe_call(getattr(e, "api_error_subcode", None))
+                    message = _maybe_call(getattr(e, "api_error_message", None)) or str(e)
+
+                    if headers:
+                        try:
+                            headers_dict = dict(headers)
+                        except Exception:
+                            headers_dict = headers
+                        buc_hint = "ads_insights" if "insights" in key else "ads_management"
+                        self.rate_limit_manager.handle_general_headers(headers_dict, buc_hint, self.ad_account_id_act)
+                        if "insights" in key:
+                            self.rate_limit_manager.handle_insights_headers(headers_dict, self.ad_account_id_act)
+
                     try:
                         if "Retry-After" in headers:
                             retry_after = float(headers.get("Retry-After"))
                     except Exception:
                         retry_after = None
+
+                    if code == 100 and subcode == 1487534:
+                        raise InsightsDataLimitError(message)
+                    if message and "reach-related metric breakdowns" in message.lower():
+                        raise ReachBreakdownThrottled(message)
                     
                     # Handle rate limit errors specifically using the rate limit manager
                     if code in (4, 17, 613) or (code >= 80000 and code <= 80014):
@@ -721,6 +884,9 @@ class MetaClient:
                 
                 # Record the request
                 self.rate_limit_manager.record_request("write", buc_type, endpoint)
+                self.rate_limit_manager.handle_general_headers(r.headers, buc_type, self.ad_account_id_act)
+                if endpoint.endswith("insights"):
+                    self.rate_limit_manager.handle_insights_headers(r.headers, self.ad_account_id_act)
                 
                 if r.status_code >= 400:
                     try:
@@ -731,6 +897,11 @@ class MetaClient:
                     # Check for rate limit errors
                     code = err.get("error", {}).get("code")
                     subcode = err.get("error", {}).get("error_subcode")
+                    message = err.get("error", {}).get("message", "")
+                    if code == 100 and subcode == 1487534:
+                        raise InsightsDataLimitError(message or "Insights data-per-call limit hit")
+                    if "Reach-related metric breakdowns" in message:
+                        raise ReachBreakdownThrottled(message)
                     
                     # Handle rate limit errors
                     if code in (4, 17, 613) or (code >= 80000 and code <= 80014):
@@ -785,6 +956,9 @@ class MetaClient:
                 
                 # Record the request
                 self.rate_limit_manager.record_request("read", buc_type, object_path)
+                self.rate_limit_manager.handle_general_headers(r.headers, buc_type, self.ad_account_id_act)
+                if object_path.endswith("insights"):
+                    self.rate_limit_manager.handle_insights_headers(r.headers, self.ad_account_id_act)
                 
                 if r.status_code >= 400:
                     try:
@@ -795,6 +969,11 @@ class MetaClient:
                     # Check for rate limit errors
                     code = err.get("error", {}).get("code")
                     subcode = err.get("error", {}).get("error_subcode")
+                    message = err.get("error", {}).get("message", "")
+                    if code == 100 and subcode == 1487534:
+                        raise InsightsDataLimitError(message or "Insights data-per-call limit hit")
+                    if "Reach-related metric breakdowns" in message:
+                        raise ReachBreakdownThrottled(message)
                     
                     # Handle rate limit errors
                     if code in (4, 17, 613) or (code >= 80000 and code <= 80014):
@@ -837,6 +1016,131 @@ class MetaClient:
         return True
 
     # ------------- Insights (READ) -------------
+    def _estimate_time_range_days(self, time_range: Optional[Dict[str, str]], normalized_preset: Optional[str]) -> Optional[int]:
+        if time_range:
+            try:
+                since = datetime.strptime(time_range.get("since"), "%Y-%m-%d")
+                until = datetime.strptime(time_range.get("until"), "%Y-%m-%d")
+                return max(0, (until - since).days + 1)
+            except Exception:
+                return None
+        if not normalized_preset:
+            return None
+        preset_days = {
+            "today": 1,
+            "yesterday": 1,
+            "last_3d": 3,
+            "last_7d": 7,
+            "last_14d": 14,
+            "last_30d": 30,
+            "last_90d": 90,
+            "last_180d": 180,
+            "last_365d": 365,
+        }
+        if normalized_preset in preset_days:
+            return preset_days[normalized_preset]
+        if normalized_preset in ("maximum", "all_available"):
+            return 400  # treat as >13 months
+        return None
+
+    def _split_time_range(self, time_range: Dict[str, str], max_days: int = 30) -> List[Dict[str, str]]:
+        ranges: List[Dict[str, str]] = []
+        try:
+            since = datetime.strptime(time_range.get("since"), "%Y-%m-%d")
+            until = datetime.strptime(time_range.get("until"), "%Y-%m-%d")
+        except Exception:
+            return [time_range]
+
+        total_days = (until - since).days + 1
+        if total_days <= max_days:
+            return [time_range]
+
+        cursor = since
+        while cursor <= until:
+            chunk_end = min(cursor + timedelta(days=max_days - 1), until)
+            ranges.append({
+                "since": cursor.strftime("%Y-%m-%d"),
+                "until": chunk_end.strftime("%Y-%m-%d"),
+            })
+            cursor = chunk_end + timedelta(days=1)
+        return ranges
+
+    def _apply_reach_policy(
+        self,
+        fields: List[str],
+        breakdowns: Optional[List[str]],
+        range_days: Optional[int],
+    ) -> Tuple[List[str], bool]:
+        reach_related = {"reach", "frequency", "unique_impressions", "cpp"}
+        has_reach = any(f in reach_related for f in fields)
+        if not has_reach or not breakdowns:
+            return fields, False
+
+        use_fields = list(fields)
+        needs_async = False
+
+        if range_days and range_days > 395:  # > 13 months
+            if self.rate_limit_manager.can_use_reach_async():
+                needs_async = True
+            else:
+                use_fields = [f for f in use_fields if f not in reach_related]
+                if len(use_fields) < len(fields):
+                    _meta_log(logging.INFO, "Dropping reach metrics (async quota exhausted)")
+                needs_async = False
+
+        reach_cooldown = self.rate_limit_manager.get_reach_cooldown()
+        if reach_cooldown > 0 and needs_async is False:
+            filtered = [f for f in use_fields if f not in reach_related]
+            if len(filtered) < len(use_fields):
+                _meta_log(logging.INFO, "Reach throttle active, using metrics without reach")
+            use_fields = filtered
+
+        if needs_async and not self.rate_limit_manager.can_use_reach_async():
+            needs_async = False
+
+        return use_fields, needs_async
+
+    def _extract_cursor_headers(self, cursor: Any) -> Dict[str, Any]:
+        headers: Dict[str, Any] = {}
+        try:
+            if hasattr(cursor, "_headers") and cursor._headers:
+                headers = dict(cursor._headers)
+            elif hasattr(cursor, "headers") and callable(cursor.headers):
+                headers = dict(cursor.headers())
+            elif hasattr(cursor, "_response") and hasattr(cursor._response, "headers"):
+                headers = dict(cursor._response.headers())
+        except Exception:
+            headers = {}
+        return headers
+
+    def _fetch_async_insights(self, params: Dict[str, Any], fields: List[str]) -> List[Dict[str, Any]]:
+        self.rate_limit_manager.note_reach_async()
+
+        def _run_async():
+            return AdAccount(self.ad_account_id_act).get_insights_async(fields=fields, params=params)
+
+        job = self._retry("insights_async", _run_async)
+        start = time.time()
+        poll_interval = 5.0
+        timeout = 600.0
+
+        while time.time() - start < timeout:
+            job.api_get()
+            status = job.get("async_status")
+            percent = job.get("async_percent_completion", 0)
+            if status == "Job Completed":
+                cursor = job.get_insights()
+                headers = self._extract_cursor_headers(cursor)
+                if headers:
+                    self.rate_limit_manager.handle_general_headers(headers, "ads_insights", self.ad_account_id_act)
+                    self.rate_limit_manager.handle_insights_headers(headers, self.ad_account_id_act)
+                return list(cursor)
+            if status in ("Job Failed", "Job Skipped"):
+                raise RuntimeError(f"Async insights job failed ({status}): {job.get('async_status')}")
+            time.sleep(poll_interval)
+
+        raise TimeoutError("Async insights job timed out after 10 minutes")
+
     def get_ad_insights(
         self,
         *,
@@ -903,48 +1207,168 @@ class MetaClient:
                 rows = [r for r in rows if r["ad_name"].startswith(f"[{stage.upper()}]")]
             return rows
 
-        self._init_sdk_if_needed()
-        use_fields = fields or list(self.cfg.fields_default)
-        params: Dict[str, Any] = {
-            "level": level,
-            "filtering": filtering or [],
-            "limit": max(1, min(1000, int(limit))),
-            "action_attribution_windows": action_attribution_windows
-            or [f"{self.cfg.attribution_click_days}d_click", f"{self.cfg.attribution_view_days}d_view"],
-        }
-        if breakdowns:
-            params["breakdowns"] = breakdowns
+        preflight_slot_acquired = False
+        if USE_SDK and not self.dry_run:
+            cooldown = self.rate_limit_manager.get_insights_cooldown(self.ad_account_id_act)
+            if cooldown > 0:
+                _meta_log(logging.INFO, "Insights cooldown %.1fs", cooldown)
+                time.sleep(cooldown)
+            reach_cooldown = self.rate_limit_manager.get_reach_cooldown()
+            if reach_cooldown > 0:
+                _meta_log(logging.INFO, "Reach cooldown %.1fs", reach_cooldown)
+                time.sleep(reach_cooldown)
+            self.rate_limit_manager.acquire_insights_slot()
+            preflight_slot_acquired = True
 
-        # choose between time_range and date_preset
-        if normalized_preset:
-            params["date_preset"] = normalized_preset
-        else:
-            params["time_range"] = tr
+        try:
+            self._init_sdk_if_needed()
+            use_fields = list(fields or list(self.cfg.fields_default))
+            range_days = self._estimate_time_range_days(tr, normalized_preset)
+            use_fields, use_async = self._apply_reach_policy(use_fields, breakdowns, range_days)
 
-        rows: List[Dict[str, Any]] = []
+            params: Dict[str, Any] = {
+                "level": level,
+                "filtering": filtering or [],
+                "limit": max(1, min(1000, int(limit))),
+                "action_attribution_windows": action_attribution_windows
+                or [f"{self.cfg.attribution_click_days}d_click", f"{self.cfg.attribution_view_days}d_view"],
+            }
+            if breakdowns:
+                params["breakdowns"] = breakdowns
 
-        def _get(after: Optional[str] = None):
-            p = dict(params)
-            if after:
-                p["after"] = after
-            return AdAccount(self.ad_account_id_act).get_insights(fields=use_fields, params=p)
+            # choose between time_range and date_preset
+            if normalized_preset:
+                params["date_preset"] = normalized_preset
+            else:
+                params["time_range"] = tr
 
-        # primary attempt
-        cursor = self._retry("insights", _get)
-        rows.extend(list(cursor))
+            if use_async and USE_SDK and not self.dry_run:
+                async_rows = self._fetch_async_insights(params, use_fields)
+                return async_rows
 
-        if paginate:
+            rows: List[Dict[str, Any]] = []
+
+            def _get(after: Optional[str] = None):
+                p = dict(params)
+                if after:
+                    p["after"] = after
+                return AdAccount(self.ad_account_id_act).get_insights(fields=use_fields, params=p)
+
             try:
-                paging = cursor.get("paging") if hasattr(cursor, "get") else getattr(cursor, "paging", None)
-                while paging and paging.get("cursors", {}).get("after"):
-                    after = paging["cursors"]["after"]
-                    cursor = self._retry("insights", _get, after)
-                    rows.extend(list(cursor))
-                    paging = cursor.get("paging") if hasattr(cursor, "get") else getattr(cursor, "paging", None)
-            except Exception:
-                pass
+                cursor = self._retry("insights", _get)
+            except InsightsDataLimitError:
+                if normalized_preset or not tr:
+                    raise
+                split_ranges = self._split_time_range(tr, max_days=30)
+                if len(split_ranges) == 1:
+                    split_ranges = self._split_time_range(tr, max_days=14)
+                if len(split_ranges) == 1:
+                    raise
+                chunk_rows: List[Dict[str, Any]] = []
+                for chunk in split_ranges:
+                    chunk_rows.extend(
+                        self.get_ad_insights(
+                            level=level,
+                            time_range=chunk,
+                            filtering=filtering,
+                            limit=limit,
+                            fields=fields,
+                            breakdowns=breakdowns,
+                            action_attribution_windows=action_attribution_windows,
+                            paginate=paginate,
+                            stage=stage,
+                            date_preset=None,
+                        )
+                    )
+                return chunk_rows
+            except ReachBreakdownThrottled:
+                reach_related = {"reach", "frequency", "unique_impressions", "cpp"}
+                stripped = [f for f in use_fields if f not in reach_related]
+                if len(stripped) == len(use_fields):
+                    raise
+                _meta_log(logging.WARNING, "Reach breakdown throttled, retrying without reach metrics")
+                return self.get_ad_insights(
+                    level=level,
+                    time_range=time_range,
+                    filtering=filtering,
+                    limit=limit,
+                    fields=stripped,
+                    breakdowns=breakdowns,
+                    action_attribution_windows=action_attribution_windows,
+                    paginate=paginate,
+                    stage=stage,
+                    date_preset=date_preset,
+                )
 
-        return rows
+            headers = self._extract_cursor_headers(cursor)
+            if headers:
+                self.rate_limit_manager.handle_general_headers(headers, "ads_insights", self.ad_account_id_act)
+                self.rate_limit_manager.handle_insights_headers(headers, self.ad_account_id_act)
+
+            rows.extend(list(cursor))
+
+            if paginate:
+                try:
+                    paging = cursor.get("paging") if hasattr(cursor, "get") else getattr(cursor, "paging", None)
+                    while paging and paging.get("cursors", {}).get("after"):
+                        after = paging["cursors"]["after"]
+                        try:
+                            cursor = self._retry("insights", _get, after)
+                        except InsightsDataLimitError:
+                            # Split the remainder of range for pagination
+                            if normalized_preset or not tr:
+                                raise
+                            remaining_ranges = self._split_time_range(tr, max_days=14)
+                            chunk_rows = []
+                            for chunk in remaining_ranges:
+                                chunk_rows.extend(
+                                    self.get_ad_insights(
+                                        level=level,
+                                        time_range=chunk,
+                                        filtering=filtering,
+                                        limit=limit,
+                                        fields=fields,
+                                        breakdowns=breakdowns,
+                                        action_attribution_windows=action_attribution_windows,
+                                        paginate=paginate,
+                                        stage=stage,
+                                        date_preset=None,
+                                    )
+                                )
+                            rows.extend(chunk_rows)
+                            break
+                        except ReachBreakdownThrottled:
+                            reach_related = {"reach", "frequency", "unique_impressions", "cpp"}
+                            stripped = [f for f in use_fields if f not in reach_related]
+                            if len(stripped) == len(use_fields):
+                                raise
+                            return self.get_ad_insights(
+                                level=level,
+                                time_range=time_range,
+                                filtering=filtering,
+                                limit=limit,
+                                fields=stripped,
+                                breakdowns=breakdowns,
+                                action_attribution_windows=action_attribution_windows,
+                                paginate=paginate,
+                                stage=stage,
+                                date_preset=date_preset,
+                            )
+
+                        headers = self._extract_cursor_headers(cursor)
+                        if headers:
+                            self.rate_limit_manager.handle_general_headers(headers, "ads_insights", self.ad_account_id_act)
+                            self.rate_limit_manager.handle_insights_headers(headers, self.ad_account_id_act)
+
+                        rows.extend(list(cursor))
+                        paging = cursor.get("paging") if hasattr(cursor, "get") else getattr(cursor, "paging", None)
+                except Exception:
+                    pass
+
+            return rows
+        finally:
+            if preflight_slot_acquired:
+                self.rate_limit_manager.release_insights_slot()
 
     def list_ads_in_adset(self, adset_id: str) -> List[Dict[str, Any]]:
         """List all ads in an adset with proper pagination."""
