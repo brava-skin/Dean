@@ -1064,48 +1064,69 @@ def store_timeseries_data_in_supabase(supabase_client, ad_id: str, ad_data: Dict
         return
     
     try:
+        validated_client = _get_validated_supabase() or supabase_client
+
+        now = datetime.now(timezone.utc)
+        timestamp = now.replace(microsecond=0).isoformat()
+
+        impressions = safe_float_global(ad_data.get('impressions'))
+        clicks = safe_float_global(ad_data.get('clicks'))
+        spend = safe_float_global(ad_data.get('spend'))
+        purchases = safe_float_global(ad_data.get('purchases'))
+
+        ctr = (clicks / impressions * 100) if impressions > 0 else 0.0
+        cpc = (spend / clicks) if clicks > 0 else 0.0
+        cpm = (spend / impressions * 1000) if impressions > 0 else 0.0
+        roas = safe_float_global(ad_data.get('roas'))
+        cpa_val = ad_data.get('cpa')
+        cpa = (spend / purchases) if purchases > 0 else safe_float_global(cpa_val)
+
         metrics_to_track = {
-            'impressions': ad_data.get('impressions'),
-            'spend': ad_data.get('spend'),
-            'clicks': ad_data.get('clicks'),
-            'purchases': ad_data.get('purchases'),
+            'impressions': impressions,
+            'spend': spend,
+            'clicks': clicks,
+            'purchases': purchases,
+            'ctr': ctr,
+            'cpc': cpc,
+            'cpm': cpm,
+            'roas': roas,
+            'cpa': cpa,
         }
 
-        timestamp = datetime.now(timezone.utc).isoformat()
+        lifecycle_id = ad_data.get('lifecycle_id') or f'lifecycle_{ad_id}'
+        metadata = {
+            'campaign_id': ad_data.get('campaign_id'),
+            'adset_id': ad_data.get('adset_id'),
+            'stage': stage,
+        }
 
         for metric_name, metric_value in metrics_to_track.items():
-            if metric_value is None:
-                continue
+            value = safe_float_global(metric_value)
 
             timeseries_data = {
                 'ad_id': ad_id,
-                'lifecycle_id': ad_data.get('lifecycle_id', ''),
+                'lifecycle_id': lifecycle_id,
                 'stage': stage,
                 'metric_name': metric_name,
-                'metric_value': safe_float_global(metric_value, DB_GLOBAL_FLOAT_MAX),
+                'metric_value': value,
                 'timestamp': timestamp,
                 'window_type': '1h',
-                'metadata': {
-                    'campaign_id': ad_data.get('campaign_id'),
-                    'adset_id': ad_data.get('adset_id'),
-                    'reason': ad_data.get('metadata', {}).get('reason') if isinstance(ad_data.get('metadata'), dict) else None,
-                },
                 'window_size': 1,
+                'time_period': '1h',
+                'trend_direction': 'stable',
                 'anomalies_detected': False,
                 'seasonality_detected': False,
-                'time_period': '1h',
+                'metadata': metadata,
                 'timestamps': [timestamp],
-                'values': [safe_float_global(metric_value, DB_GLOBAL_FLOAT_MAX)],
-                'trend_direction': 'stable',
+                'values': [value],
             }
 
             timeseries_data = validate_all_timestamps(timeseries_data)
 
-            validated_client = _get_validated_supabase()
-            if validated_client:
-                validated_client.insert('time_series_data', timeseries_data)
-            else:
+            if validated_client is supabase_client:
                 supabase_client.table('time_series_data').insert(timeseries_data).execute()
+            else:
+                validated_client.insert('time_series_data', timeseries_data)
         
     except (KeyError, ValueError, TypeError) as e:
         logger.error("[ASC] Failed to store time-series data: %s", e, exc_info=True)

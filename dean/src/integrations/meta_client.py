@@ -1374,11 +1374,37 @@ class MetaClient:
     def list_ads_in_adset(self, adset_id: str) -> List[Dict[str, Any]]:
         """List all ads in an adset with proper pagination."""
         if self.dry_run or not USE_SDK:
-            return [{"id": f"{adset_id}_AD_{i}", "name": f"[TEST] Mock_{i}", "status": "ACTIVE"} for i in range(1, 5)]
+            now_iso = datetime.now(timezone.utc).isoformat()
+            return [
+                {
+                    "id": f"{adset_id}_AD_{i}",
+                    "name": f"[TEST] Mock_{i}",
+                    "status": "ACTIVE",
+                    "effective_status": "ACTIVE",
+                    "created_time": now_iso,
+                    "updated_time": now_iso,
+                    "adset_id": adset_id,
+                    "campaign_id": None,
+                    "creative_id": f"{adset_id}_CREATIVE_{i}",
+                }
+                for i in range(1, 5)
+            ]
         self._init_sdk_if_needed()
         ads = []
         def _fetch():
-            return AdSet(adset_id).get_ads(fields=["id", "name", "status", "effective_status"])
+            return AdSet(adset_id).get_ads(
+                fields=[
+                    "id",
+                    "name",
+                    "status",
+                    "effective_status",
+                    "created_time",
+                    "updated_time",
+                    "adset_id",
+                    "campaign_id",
+                    "creative",
+                ]
+            )
         try:
             cursor = self._retry("list_ads", _fetch)
             # Handle pagination properly - iterate through all pages
@@ -1386,12 +1412,23 @@ class MetaClient:
             for a in cursor:
                 # Get status from effective_status if available (more accurate), otherwise use status
                 status = a.get("effective_status") or a.get("status", "")
-                ads.append({
-                    "id": a["id"], 
-                    "name": a.get("name"), 
-                    "status": status,
-                    "effective_status": a.get("effective_status", "")
-                })
+                creative = a.get("creative") or {}
+                creative_id = None
+                if isinstance(creative, dict):
+                    creative_id = creative.get("id") or creative.get("creative_id")
+                ads.append(
+                    {
+                        "id": a["id"],
+                        "name": a.get("name"),
+                        "status": status,
+                        "effective_status": a.get("effective_status", ""),
+                        "created_time": a.get("created_time"),
+                        "updated_time": a.get("updated_time"),
+                        "adset_id": a.get("adset_id"),
+                        "campaign_id": a.get("campaign_id"),
+                        "creative_id": creative_id,
+                    }
+                )
                 page_count += 1
             logger.debug(f"Listed {len(ads)} ads from adset {adset_id} (processed {page_count} items)")
         except Exception as e:
@@ -1403,8 +1440,8 @@ class MetaClient:
                 page = 0
                 while page < 10:  # Limit to 10 pages (5000 ads max)
                     params = {
-                        "fields": "id,name,status,effective_status",
-                        "limit": 500
+                        "fields": "id,name,status,effective_status,created_time,updated_time,adset_id,campaign_id,creative{id}",
+                        "limit": 500,
                     }
                     if next_url:
                         # Extract cursor from next URL if available
@@ -1416,12 +1453,23 @@ class MetaClient:
                     if response.get("data"):
                         for a in response["data"]:
                             status = a.get("effective_status") or a.get("status", "")
-                            all_ads.append({
-                                "id": a.get("id"),
-                                "name": a.get("name"),
-                                "status": status,
-                                "effective_status": a.get("effective_status", "")
-                            })
+                            creative = a.get("creative") or {}
+                            creative_id = None
+                            if isinstance(creative, dict):
+                                creative_id = creative.get("id") or creative.get("creative_id")
+                            all_ads.append(
+                                {
+                                    "id": a.get("id"),
+                                    "name": a.get("name"),
+                                    "status": status,
+                                    "effective_status": a.get("effective_status", ""),
+                                    "created_time": a.get("created_time"),
+                                    "updated_time": a.get("updated_time"),
+                                    "adset_id": a.get("adset_id"),
+                                    "campaign_id": a.get("campaign_id"),
+                                    "creative_id": creative_id,
+                                }
+                            )
                     
                     # Check for next page
                     paging = response.get("paging", {})

@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import logging
 import os
+import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Iterable
 
 import pandas as pd
 from zoneinfo import ZoneInfo
@@ -28,8 +29,10 @@ from infrastructure.utils import (
 )
 from creative.image_generator import create_image_generator, ImageCreativeGenerator
 from config.constants import (
-    ASC_PLUS_BUDGET_MIN, ASC_PLUS_BUDGET_MAX, ASC_PLUS_MIN_BUDGET_PER_CREATIVE
+    ASC_PLUS_BUDGET_MIN, ASC_PLUS_BUDGET_MAX, ASC_PLUS_MIN_BUDGET_PER_CREATIVE,
+    MAX_STAGE_DURATION_HOURS,
 )
+from infrastructure.data_validation import validate_all_timestamps
 
 # Import advanced ML systems
 try:
@@ -107,6 +110,961 @@ def _meets_minimums(row: Dict[str, Any], min_impressions: int, min_clicks: int, 
 
 def _active_count(ads_list: List[Dict[str, Any]]) -> int:
     return sum(1 for a in ads_list if str(a.get("status", "")).upper() == "ACTIVE")
+
+
+def _safe_float(value: Any, default: float = 0.0, precision: int = 4) -> float:
+    try:
+        if value is None:
+            return default
+        number = float(value)
+        if number != number or number in (float("inf"), float("-inf")):
+            return default
+        return round(number, precision)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_created_time(value: Any) -> Optional[datetime]:
+    """Convert Meta created_time values to timezone-aware datetime."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        elif text.endswith("+0000") or text.endswith("-0000"):
+            text = text[:-5] + text[-5:-2] + ":" + text[-2:]
+        try:
+            return datetime.fromisoformat(text)
+        except ValueError:
+            try:
+                return datetime.strptime(text, "%Y-%m-%dT%H:%M:%S%z")
+            except ValueError:
+                return None
+    return None
+
+
+def _normalize_lifecycle_status(raw_status: Optional[str]) -> str:
+    """Map Meta statuses to lifecycle table allowed values."""
+    status_map = {
+        "ACTIVE": "active",
+        "PAUSED": "paused",
+        "ARCHIVED": "completed",
+        "DELETED": "completed",
+        "WITH_ISSUES": "failed",
+        "DISAPPROVED": "failed",
+        "PENDING_REVIEW": "active",
+        "IN_PROCESS": "active",
+    }
+    if not raw_status:
+        return "active"
+    key = str(raw_status).strip().upper()
+    return status_map.get(key, "active")
+
+
+def _parse_metadata(metadata: Any) -> Dict[str, Any]:
+    """Ensure metadata is a dictionary."""
+    if isinstance(metadata, dict):
+        return dict(metadata)
+    if isinstance(metadata, str):
+        try:
+            loaded = json.loads(metadata)
+            if isinstance(loaded, dict):
+                return loaded
+        except json.JSONDecodeError:
+            return {"raw": metadata}
+    return {}
+
+
+def _build_stage_performance(metrics: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Extract key performance signals for lifecycle logging."""
+    if not metrics:
+        return None
+    try:
+        spend = safe_f(metrics.get("spend"))
+        impressions = safe_f(metrics.get("impressions"))
+        clicks = safe_f(metrics.get("clicks"))
+        purchases = safe_f(metrics.get("purchases"))
+        if spend == 0 and impressions == 0 and clicks == 0 and purchases == 0:
+            return None
+        return {
+            "spend": spend,
+            "impressions": impressions,
+            "clicks": clicks,
+            "purchases": purchases,
+            "ctr": safe_f(metrics.get("ctr")),
+            "cpa": safe_f(metrics.get("cpa")) if metrics.get("cpa") not in (None, float("inf")) else None,
+            "roas": safe_f(metrics.get("roas")),
+            "cpm": safe_f(metrics.get("cpm")),
+            "add_to_cart": safe_f(metrics.get("add_to_cart")),
+            "frequency": safe_f(metrics.get("frequency")),
+        }
+    except Exception:
+        return None
+
+
+def _determine_transition_reason(status: str, stage_performance: Optional[Dict[str, Any]]) -> str:
+    """Provide a human-readable reason stored alongside lifecycle data."""
+    if status == "paused":
+        return "paused_for_guardrail_review"
+    if status == "failed":
+        return "failed_policy_or_delivery"
+    if not stage_performance:
+        return "collecting_initial_performance"
+    roas = safe_f(stage_performance.get("roas"))
+    cpa = stage_performance.get("cpa")
+    if roas >= 1.0 and (cpa is None or cpa <= 30):
+        return "performing_above_threshold"
+    if roas == 0 and safe_f(stage_performance.get("spend")) > 0:
+        return "spend_without_results"
+    return "monitoring_performance"
+
+
+def _calculate_creative_performance(metrics: Optional[Dict[str, Any]]) -> Dict[str, float]:
+    """Derive averaged performance metrics for a creative from current insights."""
+    if not metrics:
+        return {"avg_ctr": 0.0, "avg_cpa": 0.0, "avg_roas": 0.0}
+
+    impressions = safe_f(metrics.get("impressions"))
+    clicks = safe_f(metrics.get("clicks"))
+    spend = safe_f(metrics.get("spend"))
+    purchases = safe_f(metrics.get("purchases"))
+    roas = safe_f(metrics.get("roas"))
+
+    avg_ctr = safe_f((clicks / impressions) * 100) if impressions > 0 else safe_f(metrics.get("ctr"))
+    avg_cpa = safe_f(spend / purchases) if purchases > 0 else safe_f(metrics.get("cpa"))
+    avg_roas = roas if roas > 0 else (spend and safe_f(metrics.get("revenue", 0)) / spend if spend > 0 else 0.0)
+
+    avg_ctr = _safe_float(avg_ctr)
+    avg_cpa = _safe_float(avg_cpa)
+    avg_roas = _safe_float(avg_roas)
+
+    return {"avg_ctr": avg_ctr, "avg_cpa": avg_cpa, "avg_roas": avg_roas}
+
+
+def _calculate_performance_score(perf: Dict[str, float]) -> float:
+    """Heuristic performance score between 0-1."""
+    ctr = perf.get("avg_ctr", 0.0)
+    cpa = perf.get("avg_cpa", 0.0)
+    roas = perf.get("avg_roas", 0.0)
+
+    score = 0.3 if ctr >= 1.0 else max(0.0, min(ctr / 5.0, 0.3))
+    if roas >= 1.0:
+        score += min(roas / 10.0, 0.3)
+    if cpa > 0:
+        score += max(0.0, min((50 - cpa) / 50, 0.2))
+
+    return _safe_float(max(0.0, min(score, 1.0)))
+
+
+def _calculate_fatigue_index(perf: Dict[str, float]) -> float:
+    """Simple fatigue indicator (higher = more fatigued)."""
+    ctr = perf.get("avg_ctr", 0.0)
+    cpa = perf.get("avg_cpa", 0.0)
+    roas = perf.get("avg_roas", 0.0)
+
+    fatigue = 0.0
+    if ctr < 1.0:
+        fatigue += 0.3
+    if cpa > 30:
+        fatigue += 0.3
+    if roas < 1.0:
+        fatigue += 0.4
+    return _safe_float(min(fatigue, 1.0))
+
+
+def _sync_ad_creation_records(client: MetaClient, ads: List[Dict[str, Any]], stage: str = "asc_plus") -> None:
+    """Ensure every ad has an ad_creation_times record."""
+    if not ads:
+        return
+    try:
+        from infrastructure.supabase_storage import get_validated_supabase_client, SupabaseStorage
+    except ImportError:
+        logger.debug("Supabase storage unavailable; skipping ad creation sync")
+        return
+
+    supabase_client = get_validated_supabase_client(enable_validation=True)
+    if not supabase_client:
+        return
+
+    ad_ids = [str(ad.get("id")) for ad in ads if ad.get("id")]
+    if not ad_ids:
+        return
+
+    existing_records: Dict[str, Dict[str, Any]] = {}
+    try:
+        response = supabase_client.table("ad_creation_times").select(
+            "ad_id, created_at_iso, stage, lifecycle_id"
+        ).in_("ad_id", ad_ids).execute()
+        data = getattr(response, "data", None) or []
+        existing_records = {
+            str(row.get("ad_id")): row for row in data if row and row.get("ad_id")
+        }
+    except Exception as exc:
+        logger.debug(f"Unable to load existing ad_creation_times records: {exc}")
+        existing_records = {}
+
+    storage = SupabaseStorage(supabase_client)
+
+    for ad in ads:
+        ad_id = str(ad.get("id") or "")
+        if not ad_id:
+            continue
+
+        existing = existing_records.get(ad_id)
+        lifecycle_id = (
+            ad.get("lifecycle_id")
+            or (existing.get("lifecycle_id") if existing else "")
+            or f"lifecycle_{ad_id}"
+        )
+
+        needs_sync = False
+        if not existing:
+            needs_sync = True
+        else:
+            if not existing.get("created_at_iso"):
+                needs_sync = True
+            if not existing.get("lifecycle_id"):
+                needs_sync = True
+            if existing.get("stage") != stage:
+                needs_sync = True
+
+        if not needs_sync:
+            continue
+
+        created_at = _parse_created_time(ad.get("created_time"))
+        if not created_at and existing and existing.get("created_at_iso"):
+            created_at = _parse_created_time(existing.get("created_at_iso"))
+
+        if not created_at:
+            try:
+                details = client._graph_get_object(f"{ad_id}", params={"fields": "created_time"})
+                if isinstance(details, dict):
+                    created_at = _parse_created_time(details.get("created_time"))
+            except Exception as exc:
+                logger.debug(f"Failed to fetch created_time for ad {ad_id}: {exc}")
+
+        try:
+            storage.record_ad_creation(
+                ad_id=ad_id,
+                lifecycle_id=lifecycle_id,
+                stage=stage,
+                created_at=created_at,
+            )
+        except Exception as exc:
+            logger.debug(f"Failed to upsert ad creation record for {ad_id}: {exc}")
+
+
+def _sync_ad_lifecycle_records(
+    client: MetaClient,
+    ads: List[Dict[str, Any]],
+    metrics_map: Dict[str, Dict[str, Any]],
+    stage: str = "asc_plus",
+    campaign_id: Optional[str] = None,
+    adset_id: Optional[str] = None,
+) -> None:
+    """Ensure lifecycle table captures complete state for each ad every tick."""
+    if not ads:
+        return
+    try:
+        from infrastructure.supabase_storage import get_validated_supabase_client, SupabaseStorage
+    except ImportError:
+        logger.debug("Supabase storage unavailable; skipping lifecycle sync")
+        return
+
+    supabase_client = get_validated_supabase_client(enable_validation=True)
+    if not supabase_client:
+        return
+
+    ad_ids = [str(ad.get("id")) for ad in ads if ad.get("id")]
+    if not ad_ids:
+        return
+
+    existing_records: Dict[str, Dict[str, Any]] = {}
+    try:
+        response = (
+            supabase_client.table("ad_lifecycle")
+            .select(
+                "id, ad_id, creative_id, campaign_id, adset_id, stage, status, lifecycle_id, metadata, "
+                "stage_duration_hours, previous_stage, stage_performance, transition_reason, created_at"
+            )
+            .in_("ad_id", ad_ids)
+            .eq("stage", stage)
+            .execute()
+        )
+        data = getattr(response, "data", None) or []
+        existing_records = {
+            str(row.get("ad_id")): row for row in data if row and row.get("ad_id")
+        }
+    except Exception as exc:
+        logger.debug(f"Unable to load existing ad_lifecycle records: {exc}")
+        existing_records = {}
+
+    storage = SupabaseStorage(supabase_client)
+    now = datetime.now(timezone.utc)
+
+    for ad in ads:
+        ad_id = str(ad.get("id") or "")
+        if not ad_id:
+            continue
+
+        existing = existing_records.get(ad_id) or {}
+        lifecycle_id = (
+            ad.get("lifecycle_id")
+            or existing.get("lifecycle_id")
+            or f"lifecycle_{ad_id}"
+        )
+
+        creative_id = (
+            ad.get("creative_id")
+            or existing.get("creative_id")
+            or ""
+        )
+        campaign_value = (
+            ad.get("campaign_id")
+            or campaign_id
+            or existing.get("campaign_id")
+            or ""
+        )
+        adset_value = (
+            ad.get("adset_id")
+            or adset_id
+            or existing.get("adset_id")
+            or ""
+        )
+
+        raw_status = (
+            ad.get("effective_status")
+            or ad.get("status")
+            or existing.get("status")
+        )
+        status = _normalize_lifecycle_status(raw_status)
+
+        metadata_existing = _parse_metadata(existing.get("metadata"))
+        metadata_from_ad = _parse_metadata(ad.get("metadata"))
+        metadata_existing.update(metadata_from_ad)
+        metadata_existing.update(
+            {
+                "source": "asc_plus_tick",
+                "synced_at": now.isoformat(),
+                "ad_name": ad.get("name"),
+                "raw_status": raw_status,
+                "effective_status": ad.get("effective_status"),
+                "created_time": ad.get("created_time"),
+            }
+        )
+
+        created_at = (
+            _parse_created_time(existing.get("created_at"))
+            or _parse_created_time(ad.get("created_time"))
+            or storage.get_ad_creation_time(ad_id)
+            or now
+        )
+
+        stage_duration = max((now - created_at).total_seconds() / 3600.0, 0.0)
+        stage_duration = min(stage_duration, float(MAX_STAGE_DURATION_HOURS))
+
+        existing_previous = existing.get("previous_stage")
+        previous_stage = existing_previous or "created"
+
+        metrics = metrics_map.get(ad_id)
+        stage_performance = _build_stage_performance(metrics)
+
+        transition_reason = _determine_transition_reason(status, stage_performance)
+
+        lifecycle_record: Dict[str, Any] = {
+            "ad_id": ad_id,
+            "creative_id": creative_id,
+            "campaign_id": campaign_value,
+            "adset_id": adset_value,
+            "stage": stage,
+            "status": status,
+            "lifecycle_id": lifecycle_id,
+            "metadata": metadata_existing,
+            "stage_duration_hours": round(stage_duration, 2),
+            "previous_stage": previous_stage,
+            "stage_performance": stage_performance,
+            "transition_reason": transition_reason,
+            "created_at": created_at.isoformat(),
+            "updated_at": now.isoformat(),
+        }
+
+        lifecycle_record = validate_all_timestamps(lifecycle_record)
+
+        try:
+            supabase_client.table("ad_lifecycle").upsert(
+                lifecycle_record,
+                on_conflict="ad_id,stage",
+            ).execute()
+        except Exception as exc:
+            logger.debug(f"Failed to upsert lifecycle record for {ad_id}: {exc}")
+
+
+def _collect_storage_metadata(
+    supabase_client: Any,
+    creative_ids: Iterable[str],
+) -> Dict[str, Dict[str, Any]]:
+    ids = [cid for cid in set(creative_ids) if cid]
+    if not ids:
+        return {}
+    try:
+        response = (
+            supabase_client.table("creative_storage")
+            .select("creative_id, file_size_bytes, storage_url, metadata")
+            .in_("creative_id", ids)
+            .execute()
+        )
+        data = getattr(response, "data", None) or []
+        return {row.get("creative_id"): row for row in data if row.get("creative_id")}
+    except Exception as exc:
+        logger.debug(f"Unable to load creative storage metadata: {exc}")
+        return {}
+
+
+def _sync_creative_intelligence_records(
+    client: MetaClient,
+    ads: List[Dict[str, Any]],
+    metrics_map: Dict[str, Dict[str, Any]],
+    stage: str = "asc_plus",
+) -> Dict[str, Dict[str, Any]]:
+    if not ads:
+        return {}
+
+    try:
+        from infrastructure.supabase_storage import get_validated_supabase_client
+    except ImportError:
+        logger.debug("Supabase storage unavailable; skipping creative intelligence sync")
+        return {}
+
+    supabase_client = get_validated_supabase_client(enable_validation=True)
+    if not supabase_client:
+        return {}
+
+    ad_ids = [str(ad.get("id")) for ad in ads if ad.get("id")]
+    if not ad_ids:
+        return {}
+
+    try:
+        existing_resp = (
+            supabase_client.table("creative_intelligence")
+            .select("*")
+            .in_("ad_id", ad_ids)
+            .execute()
+        )
+        existing_rows = getattr(existing_resp, "data", None) or []
+    except Exception as exc:
+        logger.debug(f"Unable to load creative intelligence records: {exc}")
+        existing_rows = []
+
+    existing_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    storage_ids: set[str] = set()
+    for row in existing_rows:
+        creative_id = str(row.get("creative_id") or "")
+        ad_id = str(row.get("ad_id") or "")
+        if creative_id and ad_id:
+            existing_map[(creative_id, ad_id)] = row
+            metadata = _parse_metadata(row.get("metadata"))
+            storage_id = metadata.get("storage_creative_id")
+            if storage_id:
+                storage_ids.add(storage_id)
+            storage_ids.add(creative_id)
+
+    # Include creative IDs from ads to fetch storage metadata
+    for ad in ads:
+        creative_id = ad.get("creative_id")
+        if creative_id:
+            storage_ids.add(str(creative_id))
+
+    storage_map = _collect_storage_metadata(supabase_client, storage_ids)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    upsert_records: List[Dict[str, Any]] = []
+
+    for ad in ads:
+        ad_id = str(ad.get("id") or "")
+        creative_id = str(ad.get("creative_id") or "")
+        if not ad_id or not creative_id:
+            continue
+
+        existing = existing_map.get((creative_id, ad_id), {})
+        metadata = _parse_metadata(existing.get("metadata"))
+        metrics = metrics_map.get(ad_id)
+        performance = _calculate_creative_performance(metrics)
+        avg_ctr = performance["avg_ctr"] or _safe_float(existing.get("avg_ctr"))
+        avg_cpa = performance["avg_cpa"] or _safe_float(existing.get("avg_cpa"))
+        avg_roas = performance["avg_roas"] or _safe_float(existing.get("avg_roas"))
+
+        storage_key = metadata.get("storage_creative_id") or creative_id
+        storage_info = storage_map.get(storage_key)
+        if storage_info:
+            file_size_bytes = storage_info.get("file_size_bytes")
+            file_size_mb = (
+                round(float(file_size_bytes) / (1024 * 1024), 4)
+                if isinstance(file_size_bytes, (int, float))
+                else None
+            )
+            if file_size_mb is not None:
+                metadata.setdefault("storage_metadata", {})
+                metadata["storage_metadata"]["file_size_bytes"] = file_size_bytes
+            storage_url = storage_info.get("storage_url")
+        else:
+            file_size_mb = None
+            storage_url = existing.get("supabase_storage_url")
+
+        metadata["source"] = "asc_plus_sync"
+        metadata.setdefault("ad_id", ad_id)
+        metadata.setdefault("creative_id", creative_id)
+        if "ad_name" not in metadata and ad.get("name"):
+            metadata["ad_name"] = ad.get("name")
+
+        created_at = existing.get("created_at") or now_iso
+        lifecycle_id = f"lifecycle_{ad_id}"
+        performance_score = _calculate_performance_score(
+            {"avg_ctr": avg_ctr, "avg_cpa": avg_cpa, "avg_roas": avg_roas}
+        )
+        fatigue_index = _calculate_fatigue_index(
+            {"avg_ctr": avg_ctr, "avg_cpa": avg_cpa, "avg_roas": avg_roas}
+        )
+
+        description = existing.get("description") or metadata.get("ad_copy", {}).get("description") or ""
+        headline = existing.get("headline") or metadata.get("ad_copy", {}).get("headline") or ad.get("name") or ""
+        primary_text = existing.get("primary_text") or metadata.get("ad_copy", {}).get("primary_text") or ""
+        similarity_vector = existing.get("similarity_vector")
+
+        record: Dict[str, Any] = {
+            "creative_id": creative_id,
+            "ad_id": ad_id,
+            "creative_type": existing.get("creative_type") or "image",
+            "aspect_ratio": "1:1",
+            "file_size_mb": file_size_mb if file_size_mb is not None else _safe_float(existing.get("file_size_mb")),
+            "resolution": existing.get("resolution") or "1080x1080",
+            "color_palette": existing.get("color_palette") or metadata.get("color_palette") or "[]",
+            "text_overlay": existing.get("text_overlay") if existing.get("text_overlay") is not None else True,
+            "avg_ctr": avg_ctr,
+            "avg_cpa": avg_cpa,
+            "avg_roas": avg_roas,
+            "performance_rank": existing.get("performance_rank") or 0,
+            "performance_score": performance_score,
+            "fatigue_index": fatigue_index,
+            "similarity_vector": similarity_vector,
+            "description": description,
+            "headline": headline,
+            "primary_text": primary_text,
+            "lifecycle_id": lifecycle_id,
+            "stage": stage,
+            "metadata": metadata,
+            "supabase_storage_url": storage_url,
+            "image_prompt": existing.get("image_prompt"),
+            "text_overlay_content": existing.get("text_overlay_content"),
+            "created_at": created_at,
+            "updated_at": now_iso,
+        }
+
+        record = validate_all_timestamps(record)
+        upsert_records.append(record)
+
+    if not upsert_records:
+        return
+
+    try:
+        supabase_client.table("creative_intelligence").upsert(
+            upsert_records,
+            on_conflict="creative_id,ad_id",
+        ).execute()
+    except Exception as exc:
+        logger.debug(f"Failed to upsert creative intelligence records: {exc}")
+
+    return storage_map
+
+def _sync_creative_storage_records(
+    storage_map: Dict[str, Dict[str, Any]],
+    ads: List[Dict[str, Any]],
+    stage: str,
+) -> None:
+    if not storage_map or not ads:
+        return
+
+    try:
+        from infrastructure.supabase_storage import get_validated_supabase_client
+    except ImportError:
+        logger.debug("Supabase storage unavailable; skipping creative storage sync")
+        return
+
+    supabase_client = get_validated_supabase_client(enable_validation=True)
+    if not supabase_client:
+        return
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    updates: List[Dict[str, Any]] = []
+
+    for ad in ads:
+        ad_id = str(ad.get("id") or "")
+        if not ad_id:
+            continue
+
+        creative = ad.get("creative") or {}
+        creative_id = ad.get("creative_id") or creative.get("id") or creative.get("creative_id")
+        if not creative_id:
+            continue
+        creative_id = str(creative_id)
+
+        storage_row = storage_map.get(creative_id)
+        if not storage_row:
+            continue
+
+        metadata = _parse_metadata(storage_row.get("metadata"))
+        metadata["stage"] = stage
+        metadata["ad_id"] = ad_id
+        metadata["last_synced"] = now_iso
+
+        usage_count = storage_row.get("usage_count")
+        try:
+            usage_count = int(usage_count) if usage_count is not None else 0
+        except (TypeError, ValueError):
+            usage_count = 0
+        usage_count = max(usage_count, 0) + 1
+
+        update_record = {
+            "creative_id": creative_id,
+            "ad_id": ad_id,
+            "status": "active",
+            "usage_count": usage_count,
+            "last_used_at": now_iso,
+            "metadata": metadata,
+            "updated_at": now_iso,
+        }
+
+        updates.append(update_record)
+
+    if not updates:
+        return
+
+    try:
+        supabase_client.table("creative_storage").upsert(
+            updates,
+            on_conflict="creative_id",
+        ).execute()
+    except Exception as exc:
+        logger.debug(f"Failed to upsert creative storage records: {exc}")
+
+
+def _sync_performance_metrics_records(
+    metrics_map: Dict[str, Dict[str, Any]],
+    stage: str,
+    date_label: str,
+) -> None:
+    if not metrics_map:
+        return
+
+    try:
+        from infrastructure.supabase_storage import get_validated_supabase_client, SupabaseStorage
+    except ImportError:
+        logger.debug("Supabase storage unavailable; skipping performance metrics sync")
+        return
+
+    supabase_client = get_validated_supabase_client(enable_validation=True)
+    if not supabase_client:
+        return
+
+    storage = SupabaseStorage(supabase_client)
+    now = datetime.now(timezone.utc)
+    hour_of_day = now.hour
+    day_of_week = now.weekday()
+    is_weekend = day_of_week >= 5
+
+    upserts: List[Dict[str, Any]] = []
+
+    for ad_id, metrics in metrics_map.items():
+        if not ad_id:
+            continue
+
+        lifecycle_id = metrics.get("lifecycle_id") or f"lifecycle_{ad_id}"
+        spend = safe_f(metrics.get("spend"))
+        impressions = safe_f(metrics.get("impressions"))
+        clicks = safe_f(metrics.get("clicks"))
+        purchases = safe_f(metrics.get("purchases"))
+        add_to_cart = safe_f(metrics.get("add_to_cart"))
+        initiate_checkout = safe_f(metrics.get("initiate_checkout") or metrics.get("ic"))
+        revenue = safe_f(metrics.get("revenue"))
+        ctr = safe_f(metrics.get("ctr"))
+        cpa = metrics.get("cpa")
+        cpa = safe_f(cpa) if cpa not in (None, "", float("inf"), float("-inf")) else 0.0
+        roas = safe_f(metrics.get("roas"))
+
+        if impressions > 0:
+            ctr = round((clicks / impressions) * 100, 4)
+        if clicks > 0:
+            cpc = round(spend / clicks, 4)
+        else:
+            cpc = 0.0
+        if impressions > 0:
+            cpm = round((spend / impressions) * 1000, 4)
+        else:
+            cpm = 0.0
+        if spend > 0 and revenue > 0:
+            roas = round(revenue / spend, 4)
+        if purchases > 0 and spend > 0:
+            cpa = round(spend / purchases, 4)
+
+        atc_rate = round((add_to_cart / impressions) * 100, 4) if impressions > 0 else 0.0
+        ic_rate = round((initiate_checkout / impressions) * 100, 4) if impressions > 0 else 0.0
+        purchase_rate = round((purchases / impressions) * 100, 4) if impressions > 0 else 0.0
+        atc_to_ic_rate = round((initiate_checkout / add_to_cart) * 100, 4) if add_to_cart > 0 else 0.0
+        ic_to_purchase_rate = round((purchases / initiate_checkout) * 100, 4) if initiate_checkout > 0 else 0.0
+
+        try:
+            creation_time = storage.get_ad_creation_time(ad_id)
+        except Exception:
+            creation_time = None
+
+        if creation_time:
+            age_days = (now - creation_time).total_seconds() / 86400
+            stage_duration_hours = (now - creation_time).total_seconds() / 3600
+        else:
+            age_days = 0.0
+            stage_duration_hours = 0.0
+
+        performance_score = _calculate_performance_score(
+            {"avg_ctr": ctr, "avg_cpa": cpa, "avg_roas": roas}
+        )
+        fatigue_index = _calculate_fatigue_index(
+            {"avg_ctr": ctr, "avg_cpa": cpa, "avg_roas": roas}
+        )
+        stability_score = round(max(0.0, 1.0 - fatigue_index), 4)
+        momentum_score = round(min(ctr / 5.0, 1.0), 4)
+
+        record = {
+            "ad_id": ad_id,
+            "lifecycle_id": lifecycle_id,
+            "stage": stage,
+            "window_type": "1d",
+            "date_start": date_label,
+            "date_end": date_label,
+            "impressions": int(impressions),
+            "clicks": int(clicks),
+            "spend": round(spend, 4),
+            "purchases": int(purchases),
+            "add_to_cart": int(add_to_cart),
+            "initiate_checkout": int(initiate_checkout),
+            "ctr": ctr,
+            "cpc": cpc,
+            "cpm": cpm,
+            "roas": roas,
+            "cpa": cpa,
+            "dwell_time": 0.0,
+            "frequency": 0.0,
+            "atc_rate": atc_rate,
+            "ic_rate": ic_rate,
+            "purchase_rate": purchase_rate,
+            "atc_to_ic_rate": atc_to_ic_rate,
+            "ic_to_purchase_rate": ic_to_purchase_rate,
+            "performance_quality_score": round(performance_score * 100, 4),
+            "stability_score": stability_score,
+            "momentum_score": momentum_score,
+            "fatigue_index": fatigue_index,
+            "hour_of_day": hour_of_day,
+            "day_of_week": day_of_week,
+            "is_weekend": is_weekend,
+            "ad_age_days": round(age_days, 4),
+            "next_stage": stage,
+            "stage_duration_hours": round(stage_duration_hours, 2),
+            "previous_stage": "created",
+            "stage_performance": {
+                "spend": spend,
+                "impressions": impressions,
+                "clicks": clicks,
+                "purchases": purchases,
+                "roas": roas,
+                "ctr": ctr,
+                "cpa": cpa,
+            },
+            "transition_reason": "ongoing_learning",
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+        }
+
+        record = validate_all_timestamps(record)
+        upserts.append(record)
+
+    if not upserts:
+        return
+
+    try:
+        supabase_client.table("performance_metrics").upsert(
+            upserts,
+            on_conflict="ad_id,window_type,date_start",
+        ).execute()
+    except Exception as exc:
+        logger.debug(f"Failed to upsert performance metrics records: {exc}")
+
+
+def _sync_historical_data_records(
+    metrics_map: Dict[str, Dict[str, Any]],
+    stage: str,
+) -> None:
+    if not metrics_map:
+        return
+
+    try:
+        from infrastructure.supabase_storage import get_validated_supabase_client, SupabaseStorage
+    except ImportError:
+        logger.debug("Supabase storage unavailable; skipping historical data sync")
+        return
+
+    supabase_client = get_validated_supabase_client(enable_validation=True)
+    if not supabase_client:
+        return
+
+    storage = SupabaseStorage(supabase_client)
+
+    for ad_id, metrics in metrics_map.items():
+        if not ad_id:
+            continue
+
+        lifecycle_id = metrics.get("lifecycle_id") or f"lifecycle_{ad_id}"
+        spend = safe_f(metrics.get("spend"))
+        impressions = safe_f(metrics.get("impressions"))
+        clicks = safe_f(metrics.get("clicks"))
+        purchases = safe_f(metrics.get("purchases"))
+        add_to_cart = safe_f(metrics.get("add_to_cart"))
+        roas = safe_f(metrics.get("roas"))
+        ctr = safe_f(metrics.get("ctr"))
+        cpa_value = metrics.get("cpa")
+        cpa = (
+            safe_f(cpa_value)
+            if cpa_value not in (None, "", float("inf"), float("-inf"))
+            else None
+        )
+
+        try:
+            storage.store_historical_data(ad_id, lifecycle_id, stage, "spend", spend)
+            storage.store_historical_data(ad_id, lifecycle_id, stage, "impressions", impressions)
+            storage.store_historical_data(ad_id, lifecycle_id, stage, "clicks", clicks)
+            storage.store_historical_data(ad_id, lifecycle_id, stage, "purchases", purchases)
+            storage.store_historical_data(ad_id, lifecycle_id, stage, "add_to_cart", add_to_cart)
+        except Exception as exc:
+            logger.debug(f"Failed to store base historical data for {ad_id}: {exc}")
+
+        try:
+            if impressions > 0:
+                derived_ctr = ctr if ctr else (clicks / impressions * 100)
+                storage.store_historical_data(ad_id, lifecycle_id, stage, "ctr", derived_ctr)
+        except Exception as exc:
+            logger.debug(f"Failed to store CTR historical data for {ad_id}: {exc}")
+
+        try:
+            if spend > 0 and roas > 0:
+                storage.store_historical_data(ad_id, lifecycle_id, stage, "roas", roas)
+        except Exception as exc:
+            logger.debug(f"Failed to store ROAS historical data for {ad_id}: {exc}")
+
+        try:
+            if purchases > 0 and spend > 0:
+                derived_cpa = cpa if cpa is not None else (spend / purchases)
+                storage.store_historical_data(ad_id, lifecycle_id, stage, "cpa", derived_cpa)
+        except Exception as exc:
+            logger.debug(f"Failed to store CPA historical data for {ad_id}: {exc}")
+
+
+def _sync_creative_performance_records(
+    ads: List[Dict[str, Any]],
+    metrics_map: Dict[str, Dict[str, Any]],
+    stage: str,
+    date_label: str,
+) -> None:
+    if not ads or not metrics_map:
+        return
+
+    try:
+        from infrastructure.supabase_storage import get_validated_supabase_client
+    except ImportError:
+        logger.debug("Supabase storage unavailable; skipping creative performance sync")
+        return
+
+    supabase_client = get_validated_supabase_client(enable_validation=True)
+    if not supabase_client:
+        return
+
+    creative_lookup: Dict[str, str] = {}
+    for ad in ads:
+        ad_id = str(ad.get("id") or "")
+        if not ad_id:
+            continue
+        creative = ad.get("creative") or {}
+        creative_id = ad.get("creative_id") or creative.get("id") or creative.get("creative_id")
+        if creative_id:
+            creative_lookup[ad_id] = str(creative_id)
+
+    upsert_records: List[Dict[str, Any]] = []
+    for ad_id, metrics in metrics_map.items():
+        creative_id = creative_lookup.get(ad_id)
+        if not creative_id:
+            continue
+
+        impressions = safe_f(metrics.get("impressions"))
+        clicks = safe_f(metrics.get("clicks"))
+        spend = safe_f(metrics.get("spend"))
+        purchases = safe_f(metrics.get("purchases"))
+        add_to_cart = safe_f(metrics.get("add_to_cart"))
+        initiate_checkout = safe_f(metrics.get("initiate_checkout") or metrics.get("ic"))
+        ctr = _safe_float(metrics.get("ctr"))
+        if impressions > 0 and clicks > 0:
+            ctr = _safe_float((clicks / impressions) * 100)
+        cpc = _safe_float(metrics.get("cpc") if metrics.get("cpc") else (spend / clicks if clicks > 0 else 0))
+        cpm = _safe_float(metrics.get("cpm") if metrics.get("cpm") else (spend / impressions * 1000 if impressions > 0 else 0))
+        roas = _safe_float(metrics.get("roas"))
+        if spend > 0 and metrics.get("revenue"):
+            roas = _safe_float(metrics.get("revenue") / spend)
+        cpa = _safe_float(metrics.get("cpa") if metrics.get("cpa") else (spend / purchases if purchases > 0 else 0))
+
+        engagement_rate = _safe_float((clicks / impressions) * 100 if impressions > 0 else ctr)
+        conversion_rate = _safe_float((purchases / clicks) * 100 if clicks > 0 else 0)
+        conversions = int(purchases)
+        lifecycle_id = f"lifecycle_{ad_id}"
+
+        performance_score = _calculate_performance_score(
+            {"avg_ctr": ctr, "avg_cpa": cpa, "avg_roas": roas}
+        )
+
+        record = {
+            "creative_id": creative_id,
+            "ad_id": ad_id,
+            "stage": stage,
+            "date_start": date_label,
+            "date_end": date_label,
+            "impressions": int(impressions) if impressions >= 0 else 0,
+            "clicks": int(clicks) if clicks >= 0 else 0,
+            "spend": _safe_float(spend, precision=2),
+            "purchases": int(purchases) if purchases >= 0 else 0,
+            "add_to_cart": int(add_to_cart) if add_to_cart >= 0 else 0,
+            "initiate_checkout": int(initiate_checkout) if initiate_checkout >= 0 else 0,
+            "ctr": ctr,
+            "cpc": cpc,
+            "cpm": cpm,
+            "roas": roas,
+            "cpa": cpa,
+            "engagement_rate": engagement_rate,
+            "conversion_rate": conversion_rate,
+            "conversions": conversions if conversions >= 0 else 0,
+            "lifecycle_id": lifecycle_id,
+            "performance_score": performance_score,
+        }
+
+        upsert_records.append(record)
+
+    if not upsert_records:
+        return
+
+    try:
+        supabase_client.table("creative_performance").upsert(
+            upsert_records,
+            on_conflict="creative_id,ad_id,date_start",
+        ).execute()
+    except Exception as exc:
+        logger.debug(f"Failed to upsert creative performance records: {exc}")
 
 
 def _guardrail_kill(metrics: Dict[str, Any]) -> Tuple[bool, str]:
@@ -381,11 +1339,12 @@ def _record_lifecycle_event(ad_id: str, status: str, reason: str) -> None:
         client = get_validated_supabase_client()
         if not client:
             return
+        lifecycle_status = _normalize_lifecycle_status(status)
         payload = {
             "ad_id": ad_id,
             "stage": "asc_plus",
-            "status": status,
-            "metadata": {"reason": reason},
+            "status": lifecycle_status,
+            "metadata": {"reason": reason, "raw_status": status},
             "lifecycle_id": f"lifecycle_{ad_id}",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -2124,6 +3083,41 @@ def run_asc_plus_tick(
     result["active_count"] = active_count
 
     ads_list = client.list_ads_in_adset(adset_id)
+    _sync_ad_creation_records(client, ads_list)
+    _sync_ad_lifecycle_records(
+        client,
+        ads_list,
+        metrics_map,
+        stage="asc_plus",
+        campaign_id=campaign_id,
+        adset_id=adset_id,
+    )
+    _sync_performance_metrics_records(
+        metrics_map,
+        stage="asc_plus",
+        date_label=account_today,
+    )
+    storage_map = _sync_creative_intelligence_records(
+        client,
+        ads_list,
+        metrics_map,
+        stage="asc_plus",
+    )
+    _sync_creative_performance_records(
+        ads_list,
+        metrics_map,
+        stage="asc_plus",
+        date_label=account_today,
+    )
+    _sync_creative_storage_records(
+        storage_map,
+        ads_list,
+        stage="asc_plus",
+    )
+    _sync_historical_data_records(
+        metrics_map,
+        stage="asc_plus",
+    )
     active_ads = [ad for ad in ads_list if str(ad.get("status", "")).upper() == "ACTIVE"]
 
     # Step 3: apply guardrail kill/promote rules

@@ -17,7 +17,7 @@ import logging
 import os
 import pickle
 import uuid
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 import warnings
@@ -192,6 +192,7 @@ class LearningEvent:
     confidence_score: float
     impact_score: float
     created_at: datetime
+    event_data: Dict[str, Any] = field(default_factory=dict)
 
 class SupabaseMLClient:
     """Enhanced Supabase client for ML operations with historical data integration."""
@@ -396,64 +397,48 @@ class SupabaseMLClient:
                        feature_importance: Dict[str, float] = None) -> str:
         """Save ML prediction to database with comprehensive data."""
         try:
-            import random
             from datetime import datetime, timedelta
             
             prediction_id = str(uuid.uuid4())
             now = datetime.now()
             
-            # Calculate realistic confidence score based on prediction quality
-            base_confidence = min(0.95, max(0.6, prediction.confidence_score or 0.75))
-            confidence_variation = random.uniform(-0.1, 0.1)
-            confidence_score = max(0.5, min(0.95, base_confidence + confidence_variation))
-            
-            # Calculate prediction intervals based on confidence
             prediction_value = self._safe_float(prediction.predicted_value, 999999999.99)
-            interval_range = (1 - confidence_score) * 0.3  # 30% of confidence range
-            prediction_interval_lower = max(0, prediction_value - interval_range)
-            prediction_interval_upper = prediction_value + interval_range
+            confidence_score = max(0.0, min(1.0, self._safe_float(prediction.confidence_score, 1.0)))
             
-            # Generate realistic features if not provided
-            if not features:
-                features = {
-                    'cpm': random.uniform(20, 50),
-                    'ctr': random.uniform(1.5, 4.0),
-                    'cpa': random.uniform(15, 35),
-                    'roas': random.uniform(2.0, 6.0),
-                    'spend': random.uniform(50, 200),
-                    'impressions': random.randint(1000, 10000),
-                    'clicks': random.randint(50, 500)
-                }
+            lower_bound = prediction.prediction_interval_lower if prediction.prediction_interval_lower is not None else prediction_value
+            upper_bound = prediction.prediction_interval_upper if prediction.prediction_interval_upper is not None else prediction_value
+            prediction_interval_lower = max(0.0, self._safe_float(lower_bound, 999999999.99))
+            prediction_interval_upper = max(prediction_interval_lower, self._safe_float(upper_bound, 999999999.99))
             
-            # Generate feature importance if not provided
-            if not feature_importance:
-                feature_importance = {
-                    'ctr': random.uniform(0.2, 0.4),
-                    'cpa': random.uniform(0.15, 0.35),
-                    'roas': random.uniform(0.1, 0.3),
-                    'spend': random.uniform(0.05, 0.15),
-                    'impressions': random.uniform(0.02, 0.08),
-                    'clicks': random.uniform(0.03, 0.12)
-                }
+            features = features or {}
+            feature_importance = feature_importance or getattr(prediction, "feature_importance", {}) or {}
             
-            # Calculate prediction horizon (hours until next prediction)
-            prediction_horizon_hours = random.randint(6, 48)
+            def _sanitize_mapping(mapping: Dict[str, Any]) -> Dict[str, float]:
+                sanitized = {}
+                for key, value in mapping.items():
+                    try:
+                        sanitized[str(key)] = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                return sanitized
             
-            # Set expiration time (prediction valid for 7 days)
-            expires_at = now + timedelta(days=7)
+            features = _sanitize_mapping(features)
+            feature_importance = _sanitize_mapping(feature_importance)
             
-            # Get model name from model_id or generate one
-            model_name = f"model_{model_id[:8]}" if model_id else f"model_{stage}_v1"
+            prediction_horizon_hours = prediction.prediction_horizon_hours or 24
+            expires_at = now + timedelta(hours=prediction_horizon_hours)
+            
+            model_name = prediction.model_version or (f"model_{model_id[:8]}" if model_id else f"model_{stage}_v1")
             
             data = {
                 'id': prediction_id,
                 'ad_id': ad_id,
                 'lifecycle_id': lifecycle_id,
-                'model_id': model_id or f"model_{stage}_{random.randint(1000, 9999)}",
+                'model_id': model_id or f"{stage}_model_unknown",
                 'stage': stage,
                 'prediction_type': 'performance',
-                'predicted_value': prediction_value,  # Main prediction value
-                'prediction_value': prediction_value,  # Duplicate for compatibility
+                'predicted_value': prediction_value,
+                'prediction_value': prediction_value,
                 'confidence_score': confidence_score,
                 'prediction_interval_lower': prediction_interval_lower,
                 'prediction_interval_upper': prediction_interval_upper,
@@ -489,116 +474,44 @@ class SupabaseMLClient:
             self.logger.error(f"Error saving prediction: {e}")
             return None
     
-    def save_learning_event(self, event: LearningEvent, ad_id: str = None, 
+    def save_learning_event(self, event: LearningEvent, ad_id: str = None,
                            lifecycle_id: str = None, from_stage: str = None,
                            to_stage: str = None, model_name: str = None) -> str:
         """Save learning event to database with comprehensive data."""
         try:
-            import random
-            from datetime import datetime
-            
             event_id = str(uuid.uuid4())
-            now = datetime.now()
-            
-            # Generate realistic learning data based on event type
-            if event.event_type == 'model_training':
-                learning_data = {
-                    'accuracy': random.uniform(0.75, 0.95),
-                    'precision': random.uniform(0.70, 0.90),
-                    'recall': random.uniform(0.65, 0.85),
-                    'f1_score': random.uniform(0.70, 0.88),
-                    'training_samples': random.randint(500, 2000),
-                    'validation_samples': random.randint(100, 500),
-                    'epochs': random.randint(10, 50),
-                    'learning_rate': random.uniform(0.001, 0.01)
-                }
-                event_data = {
-                    'loss': random.uniform(0.1, 0.3),
-                    'val_loss': random.uniform(0.15, 0.35),
-                    'training_time_seconds': random.randint(30, 300),
-                    'model_size_mb': random.uniform(1.0, 10.0),
-                    'feature_count': random.randint(50, 200)
-                }
-                confidence_score = random.uniform(0.8, 0.95)
-                impact_score = random.uniform(0.7, 0.9)
-                
-            elif event.event_type == 'stage_transition':
-                learning_data = {
-                    'performance_improvement': random.uniform(0.05, 0.25),
-                    'metric_changes': {
-                        'ctr_change': random.uniform(-0.1, 0.2),
-                        'cpa_change': random.uniform(-0.15, 0.1),
-                        'roas_change': random.uniform(0.05, 0.3)
-                    },
-                    'transition_reason': random.choice(['performance_threshold', 'time_based', 'manual_override']),
-                    'days_in_stage': random.randint(1, 14)
-                }
-                event_data = {
-                    'previous_stage_performance': random.uniform(0.6, 0.8),
-                    'new_stage_performance': random.uniform(0.7, 0.9),
-                    'improvement_percentage': random.uniform(5, 25)
-                }
-                confidence_score = random.uniform(0.7, 0.9)
-                impact_score = random.uniform(0.6, 0.8)
-                
-            elif event.event_type == 'rule_adaptation':
-                learning_data = {
-                    'rule_name': random.choice(['cpa_threshold', 'roas_threshold', 'ctr_threshold']),
-                    'old_value': random.uniform(10, 50),
-                    'new_value': random.uniform(12, 55),
-                    'adaptation_reason': random.choice(['performance_decline', 'ml_insight', 'manual_adjustment']),
-                    'success_rate': random.uniform(0.6, 0.9)
-                }
-                event_data = {
-                    'adaptation_magnitude': random.uniform(0.05, 0.2),
-                    'expected_impact': random.uniform(0.1, 0.3),
-                    'confidence_level': random.uniform(0.7, 0.9)
-                }
-                confidence_score = random.uniform(0.6, 0.85)
-                impact_score = random.uniform(0.5, 0.8)
-                
-            else:  # Default for other event types
-                learning_data = {
-                    'event_impact': random.uniform(0.1, 0.5),
-                    'success_metrics': random.uniform(0.6, 0.9),
-                    'learning_confidence': random.uniform(0.7, 0.9)
-                }
-                event_data = {
-                    'event_details': f"Learning event: {event.event_type}",
-                    'impact_score': random.uniform(0.3, 0.7)
-                }
-                confidence_score = random.uniform(0.5, 0.8)
-                impact_score = random.uniform(0.4, 0.7)
-            
-            # Use optimizer to calculate correct scores
+            created_ts = event.created_at if isinstance(event.created_at, datetime) else datetime.now()
+
+            def _normalize_score(value: Any, default: float) -> float:
+                try:
+                    score = float(value)
+                except (TypeError, ValueError):
+                    score = default
+                score = max(0.0, min(score, 1.0))
+                return score
+
+            learning_data = event.learning_data or {}
+            event_payload = event.event_data or {}
+            confidence_score = _normalize_score(getattr(event, "confidence_score", None), 0.5)
+            impact_score = _normalize_score(getattr(event, "impact_score", None), 0.5)
+
+            # Derive lifecycle/ad/stage defaults from event when not provided
+            ad_id = ad_id or getattr(event, "ad_id", None) or ""
+            lifecycle_id = lifecycle_id or getattr(event, "lifecycle_id", None) or (f"lifecycle_{ad_id}" if ad_id else "")
+            from_stage = from_stage or getattr(event, "stage", None) or "asc_plus"
+            to_stage = to_stage or from_stage
+            model_name = model_name or f"model_{from_stage}_learning"
+
+            # Ensure JSON serializable payloads
             try:
-                from infrastructure.data_optimizer import LearningEventsOptimizer
-                optimizer = LearningEventsOptimizer(self.client)
-                # Recalculate scores using optimizer logic
-                confidence_score = optimizer.calculate_confidence_score(event.event_type, learning_data)
-                impact_score = optimizer.calculate_impact_score(event.event_type, event_data)
-            except ImportError:
-                pass  # Optimizer not available, use calculated values
-            except Exception as opt_error:
-                logger.debug(f"Failed to optimize learning event scores: {opt_error}")
-            
-            # Generate stage progression if not provided
-            # For ASC+ only system, default to asc_plus
-            if not from_stage:
-                from_stage = event.stage if hasattr(event, 'stage') and event.stage else 'asc_plus'
-            if not to_stage:
-                to_stage = from_stage
-            
-            # Generate ad and lifecycle IDs if not provided
-            if not ad_id:
-                ad_id = f"learning_event_{random.randint(100000, 999999)}"
-            if not lifecycle_id:
-                lifecycle_id = f"lifecycle_{random.randint(100, 999)}"
-            
-            # Generate model name if not provided
-            if not model_name:
-                model_name = f"model_{event.stage}_{random.randint(1000, 9999)}"
-            
+                learning_data = json.loads(json.dumps(learning_data, default=str))
+            except (TypeError, ValueError):
+                learning_data = {}
+            try:
+                event_payload = json.loads(json.dumps(event_payload, default=str))
+            except (TypeError, ValueError):
+                event_payload = {}
+
             data = {
                 'id': event_id,
                 'event_type': event.event_type,
@@ -609,11 +522,11 @@ class SupabaseMLClient:
                 'learning_data': learning_data,
                 'confidence_score': confidence_score,
                 'impact_score': impact_score,
-                'created_at': now.isoformat(),
+                'created_at': created_ts.isoformat(),
                 'model_name': model_name,
-                'event_data': event_data,
+                'event_data': event_payload,
                 'stage': event.stage,
-                'timestamp': now.isoformat()
+                'timestamp': created_ts.isoformat()
             }
             
             # Validate all timestamps in learning event data
@@ -1774,22 +1687,11 @@ class XGBoostPredictor:
             test_r2 = sanitize_float(confidence_data.get('test_r2', 0))
             test_mae = sanitize_float(confidence_data.get('test_mae', 0))
             
-            # Calculate derived metrics
-            accuracy = max(0, min(1, cv_score + 0.1))  # Ensure reasonable accuracy
-            precision = max(0, min(1, test_r2 + 0.05))  # Based on R2
-            recall = max(0, min(1, test_r2 + 0.03))     # Based on R2
-            f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-            
-            metadata = {
-                'feature_columns': feature_cols,
-                'feature_importance': {k: sanitize_float(v) for k, v in feature_importance.items()},
-                'training_date': now_utc().isoformat(),
-                'model_type': model_type,
-                'stage': stage,
-                'compression_ratio': len(compressed_model) / len(model_data) if len(model_data) > 0 else 1.0,
-                'model_architecture': str(type(model).__name__),
-                'feature_count': len(feature_cols)
-            }
+            # Calculate derived metrics from observed scores
+            accuracy = max(0.0, min(1.0, cv_score))
+            precision = max(0.0, min(1.0, test_r2))
+            recall = max(0.0, min(1.0, test_r2))
+            f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
             
             # Generate training data hash
             training_data_hash = hashlib.md5(str(feature_cols).encode()).hexdigest()
@@ -1816,6 +1718,23 @@ class XGBoostPredictor:
                 except Exception as e:
                     self.logger.warning(f"Failed to serialize scaler: {e}")
             
+            metadata_payload = {
+                'feature_columns': feature_cols,
+                'feature_importance': {k: sanitize_float(v) for k, v in feature_importance.items()},
+                'training_date': now_utc().isoformat(),
+                'model_type': model_type,
+                'stage': stage,
+                'model_architecture': str(type(model).__name__),
+                'training_data_hash': training_data_hash,
+                'performance_metrics': performance_metrics,
+                'hyperparameters': self.config.xgb_params,
+                'scaler_data': scaler_data_binary.hex() if scaler_data_binary else None,
+            }
+            try:
+                metadata_json = json.loads(json.dumps(metadata_payload, default=sanitize_float))
+            except Exception:
+                metadata_json = {}
+            
             # Create comprehensive data structure
             data = {
                 'model_type': model_type,
@@ -1823,17 +1742,13 @@ class XGBoostPredictor:
                 'version': 1,
                 'model_name': f"{model_type}_{stage}_v1",
                 'model_data': compressed_model.hex(),
-                'scaler_data': scaler_data_binary.hex() if scaler_data_binary else None,
                 'accuracy': accuracy,
                 'precision': precision,
                 'recall': recall,
                 'f1_score': f1_score,
-                'model_metadata': metadata,
-                'performance_metrics': performance_metrics,
-                'training_data_hash': training_data_hash,
-                'hyperparameters': '{}',  # Add empty hyperparameters
                 'is_active': True,
-                'trained_at': now_utc().isoformat()
+                'trained_at': now_utc().isoformat(),
+                'metadata': metadata_json,
             }
             
             # Validate all timestamps in ML model data
@@ -2856,27 +2771,106 @@ def track_asc_plus_creative_data(
 ) -> None:
     """Track ASC+ creative data for ML learning."""
     try:
+        def _to_float(value: Any) -> float:
+            try:
+                if value in (None, ""):
+                    return 0.0
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
+        def _resolve_lifecycle_id() -> str:
+            for source in (creative_data, performance_data):
+                if isinstance(source, dict):
+                    candidate = source.get("lifecycle_id")
+                    if candidate:
+                        return str(candidate)
+            return f"lifecycle_{ad_id}"
+
+        def _performance_snapshot(data: Dict[str, Any]) -> Dict[str, float]:
+            snapshot = {
+                "spend": _to_float(data.get("spend")),
+                "impressions": _to_float(data.get("impressions")),
+                "clicks": _to_float(data.get("clicks")),
+                "purchases": _to_float(data.get("purchases")),
+                "add_to_cart": _to_float(data.get("add_to_cart") or data.get("atc")),
+                "roas": _to_float(data.get("roas")),
+                "ctr": _to_float(data.get("ctr")),
+                "cpa": _to_float(data.get("cpa")),
+            }
+            spend = snapshot["spend"]
+            impressions = snapshot["impressions"]
+            clicks = snapshot["clicks"]
+            purchases = snapshot["purchases"]
+
+            if impressions > 0 and clicks > 0:
+                snapshot["ctr"] = round((clicks / impressions) * 100, 4)
+            if spend > 0 and purchases > 0 and snapshot["cpa"] == 0.0:
+                snapshot["cpa"] = round(spend / max(purchases, 1.0), 4)
+            if spend > 0 and snapshot["roas"] == 0.0 and purchases > 0:
+                snapshot["roas"] = round((snapshot["roas"] or 0.0), 4)
+            return snapshot
+
+        lifecycle_id = _resolve_lifecycle_id()
+        performance_snapshot = _performance_snapshot(performance_data or {})
+
+        ctr = performance_snapshot["ctr"]
+        roas = performance_snapshot["roas"]
+        purchases = performance_snapshot["purchases"]
+        spend = performance_snapshot["spend"]
+        impressions = performance_snapshot["impressions"]
+
+        confidence_score = 0.45
+        confidence_score += min(ctr / 8.0, 0.2) if ctr > 0 else 0.0
+        confidence_score += min(roas / 12.0, 0.25) if roas > 0 else 0.0
+        confidence_score += min(purchases * 0.05, 0.2)
+        confidence_score = max(0.3, min(confidence_score, 0.95))
+
+        impact_score = 0.3
+        impact_score += min(spend / 25.0, 0.3)
+        impact_score += min(impressions / 4000.0, 0.2)
+        impact_score += min(purchases * 0.05, 0.2)
+        impact_score = max(0.1, min(impact_score, 0.9))
+
+        event_learning_data = {
+            "ad_copy": creative_data.get("ad_copy", {}),
+            "text_overlay": creative_data.get("text_overlay"),
+            "image_prompt": creative_data.get("image_prompt"),
+            "scenario_description": creative_data.get("scenario_description"),
+            "creative_type": creative_data.get("creative_type", "static_image"),
+            "lifecycle_id": lifecycle_id,
+            "performance_snapshot": performance_snapshot,
+        }
+
+        event_metadata = {
+            "creative_context": {
+                "storage_id": creative_data.get("storage_creative_id"),
+                "supabase_storage_url": creative_data.get("supabase_storage_url"),
+                "stage": creative_data.get("stage") or "asc_plus",
+            },
+            "performance_snapshot": performance_snapshot,
+        }
+
+        created_at = now_utc()
         # Track ad copy performance
-        ad_copy = creative_data.get("ad_copy", {})
-        if ad_copy:
+        if creative_data:
             ml_system.supabase.save_learning_event(
                 event=LearningEvent(
                     event_type="creative_created",
                     stage="asc_plus",
                     ad_id=ad_id,
-                    lifecycle_id="",
-                    learning_data={
-                        "ad_copy": ad_copy,
-                        "text_overlay": creative_data.get("text_overlay"),
-                        "image_prompt": creative_data.get("image_prompt"),
-                        "scenario_description": creative_data.get("scenario_description"),  # Track scenario for ML learning
-                        "creative_type": "static_image",
-                    },
-                    confidence_score=0.8,
-                    impact_score=0.5,
-                    created_at=now_utc(),
+                    lifecycle_id=lifecycle_id,
+                    learning_data=event_learning_data,
+                    confidence_score=confidence_score,
+                    impact_score=impact_score,
+                    created_at=created_at,
+                    event_data=event_metadata,
                 ),
                 ad_id=ad_id,
+                lifecycle_id=lifecycle_id,
+                from_stage="asc_plus",
+                to_stage="asc_plus",
+                model_name="asc_plus_learning",
             )
         
         # Track performance data
@@ -2898,21 +2892,56 @@ def track_asc_plus_creative_kill(
 ) -> None:
     """Track ASC+ creative kill for ML learning."""
     try:
+        def _to_float(value: Any) -> float:
+            try:
+                if value in (None, ""):
+                    return 0.0
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
+        performance_snapshot = {
+            "spend": _to_float(performance_data.get("spend")),
+            "impressions": _to_float(performance_data.get("impressions")),
+            "clicks": _to_float(performance_data.get("clicks")),
+            "purchases": _to_float(performance_data.get("purchases")),
+            "ctr": _to_float(performance_data.get("ctr")),
+            "cpa": _to_float(performance_data.get("cpa")),
+            "roas": _to_float(performance_data.get("roas")),
+        } if performance_data else {}
+
+        lifecycle_id = performance_data.get("lifecycle_id") if isinstance(performance_data, dict) else None
+        if not lifecycle_id:
+            lifecycle_id = f"lifecycle_{ad_id}"
+
+        spend = performance_snapshot.get("spend", 0.0)
+        impressions = performance_snapshot.get("impressions", 0.0)
+        confidence_score = max(0.3, min(0.6 + min(impressions / 5000.0, 0.2), 0.9))
+        impact_score = max(0.1, min(0.25 + min(spend / 40.0, 0.25), 0.8))
+
         ml_system.supabase.save_learning_event(
             event=LearningEvent(
                 event_type="creative_killed",
                 stage="asc_plus",
                 ad_id=ad_id,
-                lifecycle_id="",
+                lifecycle_id=lifecycle_id,
                 learning_data={
                     "kill_reason": reason,
                     "performance_at_kill": performance_data,
                 },
-                confidence_score=0.7,
-                impact_score=0.3,
+                confidence_score=confidence_score,
+                impact_score=impact_score,
                 created_at=now_utc(),
+                event_data={
+                    "kill_reason": reason,
+                    "performance_snapshot": performance_snapshot,
+                },
             ),
             ad_id=ad_id,
+            lifecycle_id=lifecycle_id,
+            from_stage="asc_plus",
+            to_stage="asc_plus",
+            model_name="asc_plus_learning",
         )
         
         # Update performance data with kill status
