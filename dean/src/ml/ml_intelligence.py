@@ -32,6 +32,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import time
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.dummy import DummyRegressor
 try:
     import xgboost as xgb
     XGBOOST_AVAILABLE = True
@@ -81,8 +82,8 @@ def _ml_log(level: int, message: str, *args: Any) -> None:
 BREAKEVEN_ROAS = float(os.getenv("BREAKEVEN_ROAS", os.getenv("BREAKEVEN_ROAS_TARGET", "1.0")) or 1.0)
 
 # Minimum sample thresholds for training (global vs stage-specific)
-ML_MIN_TRAINING_SAMPLES_GLOBAL = int(os.getenv("ML_MIN_TRAINING_SAMPLES_GLOBAL", 50))
-ML_MIN_TRAINING_SAMPLES_STAGE = int(os.getenv("ML_MIN_TRAINING_SAMPLES_STAGE", 20))
+ML_MIN_TRAINING_SAMPLES_GLOBAL = int(os.getenv("ML_MIN_TRAINING_SAMPLES_GLOBAL", 5))
+ML_MIN_TRAINING_SAMPLES_STAGE = int(os.getenv("ML_MIN_TRAINING_SAMPLES_STAGE", 3))
 
 # Minimum performance delta required to replace an active registry model
 ML_MODEL_IMPROVEMENT_DELTA = float(os.getenv("ML_MODEL_IMPROVEMENT_DELTA", 0.01))
@@ -951,15 +952,24 @@ class XGBoostPredictor:
             # Check if we have enough data for training
             required_samples = ML_MIN_TRAINING_SAMPLES_GLOBAL if used_cross_stage else ML_MIN_TRAINING_SAMPLES_STAGE
             if len(X) < required_samples:
+                if len(X) == 0:
+                    _ml_log(
+                        logging.INFO,
+                        "SKIP training for %s_%s: no samples available after preparation",
+                        model_type,
+                        stage,
+                    )
+                    return False
+                
                 _ml_log(
                     logging.INFO,
-                    "SKIP training for %s_%s: insufficient samples after preparation (%s < %s)",
+                    "Training fallback baseline for %s_%s: %s samples (< %s required)",
                     model_type,
                     stage,
                     len(X),
                     required_samples,
                 )
-                return False
+                return self._train_baseline_model(model_type, stage, X, y, feature_cols)
             
             # Apply feature selection if needed
             feature_selector = None
@@ -1144,13 +1154,37 @@ class XGBoostPredictor:
             self.scalers[model_key] = scaler
             
             # Store feature importance with CV score
-            feature_importance = dict(zip(feature_cols, primary_model.feature_importances_))
+            feature_importance_values = None
+            if hasattr(primary_model, 'feature_importances_'):
+                feature_importance_values = getattr(primary_model, 'feature_importances_', None)
+            elif hasattr(primary_model, 'coef_'):
+                coefs = np.asarray(primary_model.coef_)
+                if coefs.ndim > 1:
+                    coefs = np.mean(np.abs(coefs), axis=0)
+                else:
+                    coefs = np.abs(coefs)
+                feature_importance_values = coefs
+            
+            if (
+                feature_importance_values is not None
+                and len(feature_importance_values) == len(feature_cols)
+            ):
+                feature_importance = {
+                    str(col): float(val)
+                    for col, val in zip(feature_cols, feature_importance_values)
+                }
+            else:
+                feature_importance = {str(col): 0.0 for col in feature_cols}
+            
             self.feature_importance[model_key] = feature_importance
             self.feature_importance[f"{model_key}_confidence"] = {
                 'cv_score': float(cv_mean),
                 'test_r2': float(r2),
                 'test_mae': float(mae),
-                'ensemble_size': len(models_ensemble)
+                'ensemble_size': len(models_ensemble),
+                'training_samples': int(len(X)),
+                'validation_samples': int(len(X_test_scaled)),
+                'baseline': False,
             }
             
             self.logger.info(f"🔧 Training completed for {model_type}_{stage}, preparing to save...")
@@ -1175,6 +1209,64 @@ class XGBoostPredictor:
             self.logger.error(f"Error training {model_type} model for {stage}: {e}")
             import traceback
             self.logger.error(f"Full traceback: {traceback.format_exc()}")
+            return False
+    
+    def _train_baseline_model(self, model_type: str, stage: str, X: np.ndarray, y: np.ndarray, feature_cols: List[str]) -> bool:
+        """Train and register a lightweight baseline when data is scarce."""
+        try:
+            model_key = f"{model_type}_{stage}"
+            baseline_model = DummyRegressor(strategy="mean")
+            baseline_model.fit(X, y)
+            
+            # Compute simple statistics for logging/metadata
+            baseline_predictions = baseline_model.predict(X)
+            baseline_mae = float(np.mean(np.abs(y - baseline_predictions))) if len(y) > 0 else 0.0
+            
+            self.logger.info(
+                "✅ Baseline DummyRegressor trained for %s using %s samples (MAE=%.4f)",
+                model_key,
+                len(X),
+                baseline_mae,
+            )
+            
+            # Store model artifacts
+            self.models[model_key] = baseline_model
+            self.scalers[model_key] = None
+            if hasattr(self, "feature_selectors") and self.feature_selectors is not None:
+                self.feature_selectors.pop(model_key, None)
+            
+            # Baseline feature importance is uniform (or zeroed if no features)
+            feature_importance = {str(col): 0.0 for col in feature_cols}
+            
+            self.feature_importance[model_key] = feature_importance
+            self.feature_importance[f"{model_key}_confidence"] = {
+                'cv_score': 0.0,
+                'test_r2': 0.0,
+                'test_mae': baseline_mae,
+                'ensemble_size': 1,
+                'training_samples': int(len(X)),
+                'validation_samples': 0,
+                'baseline': True,
+            }
+            
+            # Persist baseline model
+            save_success = self.save_model_to_supabase(
+                model_type,
+                stage,
+                baseline_model,
+                None,
+                feature_cols,
+                feature_importance,
+            )
+            if save_success:
+                self.logger.info("✅ Baseline model for %s saved to Supabase", model_key)
+                return True
+            
+            self.logger.error("❌ Failed to save baseline model for %s", model_key)
+            return False
+        
+        except Exception as baseline_error:
+            self.logger.error(f"Error training baseline model for {model_type}_{stage}: {baseline_error}")
             return False
     
     def predict(self, model_type: str, stage: str, ad_id: str, 

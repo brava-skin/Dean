@@ -119,6 +119,25 @@ ACCOUNT_TIMEZONE  = os.getenv("ACCOUNT_TZ") or os.getenv("ACCOUNT_TIMEZONE") or 
 ACCOUNT_CURRENCY  = os.getenv("ACCOUNT_CURRENCY", "EUR")
 ACCOUNT_CCY_SYM   = os.getenv("ACCOUNT_CURRENCY_SYMBOL", "€")
 
+# Endpoints that require account-scoped URLs (prefixed with act_<account_id>)
+ACCOUNT_SCOPED_ENDPOINTS = {
+    "ads",
+    "adsets",
+    "campaigns",
+    "insights",
+    "adcreatives",
+    "activities",
+    "adimages",
+    "advideos",
+    "customaudiences",
+    "async_batch_requests",
+    "batch",
+    "saved_audiences",
+    "reachfrequencypredictions",
+    "adsetsbatch",
+    "adcreativesbatch",
+}
+
 
 # -------------------------
 # Config dataclasses
@@ -372,6 +391,64 @@ class RateLimitManager:
                     }, level="debug", stage="RATE_LIMIT")
                 except Exception:
                     pass
+    
+    def _time_until_score_allows(self, request_type: str) -> float:
+        """Calculate how long to wait before next request based on API score."""
+        request_score = 3 if request_type == "write" else 1
+        current_time = time.time()
+        if self.current_score + request_score <= self.max_score:
+            return 0.0
+        
+        needed = (self.current_score + request_score) - self.max_score
+        wait_until = 0.0
+        cumulative = 0
+        for ts, score in list(self.score_history):
+            expiry = ts + META_SCORE_DECAY_SEC
+            if expiry <= current_time:
+                continue
+            cumulative += score
+            wait_until = max(wait_until, expiry - current_time)
+            if cumulative >= needed:
+                break
+        if wait_until == 0.0:
+            # Fallback to decay window if we couldn't compute precise wait
+            wait_until = max(0.0, META_SCORE_DECAY_SEC - (current_time - self.score_history[0][0])) if self.score_history else META_SCORE_DECAY_SEC
+        return max(wait_until, 0.0)
+    
+    def _time_until_buc_allows(self, buc_type: Optional[str]) -> float:
+        if not (buc_type and META_BUC_ENABLED):
+            return 0.0
+        current_time = time.time()
+        reset_time = self.buc_reset_times.get(buc_type)
+        if not reset_time:
+            return 0.0
+        return max(0.0, reset_time - current_time)
+    
+    def wait_for_request_slot(self, request_type: str = "read", buc_type: Optional[str] = None) -> float:
+        """
+        Block until a request slot is available. Returns total time waited.
+        """
+        total_wait = 0.0
+        while True:
+            can_make, _ = self.can_make_request(request_type, buc_type)
+            if can_make:
+                return total_wait
+            
+            with self.lock:
+                current_time = time.time()
+                waits = [
+                    max(0.0, self.blocked_until - current_time),
+                    max(0.0, self.app_level_blocked_until - current_time),
+                ]
+                waits.append(self._time_until_score_allows(request_type))
+                waits.append(self._time_until_buc_allows(buc_type))
+                wait_time = max(waits)
+                if wait_time <= 0:
+                    wait_time = 1.0
+            # Cap wait to reasonable bounds and add jitter
+            wait_time = min(max(wait_time, 1.0), 120.0)
+            time.sleep(wait_time)
+            total_wait += wait_time
     
     def acquire_insights_slot(self):
         """Ensure no more than META_MAX_CONCURRENT_INSIGHTS run simultaneously."""
@@ -844,7 +921,20 @@ class MetaClient:
     # ------------- HTTP helpers -------------
     def _graph_url(self, endpoint: str) -> str:
         ver = self.account.api_version or "v23.0"
-        return f"https://graph.facebook.com/{ver}/{self.ad_account_id_act}/{endpoint.lstrip('/')}"
+        endpoint = (endpoint or "").lstrip("/")
+        first_segment = endpoint.split("/", 1)[0]
+        # Detect if endpoint already contains an account prefix or explicit object id
+        if (
+            endpoint.startswith("act_")
+            or endpoint.startswith(self.ad_account_id_act)
+            or first_segment.isdigit()
+        ):
+            path = endpoint
+        elif first_segment in ACCOUNT_SCOPED_ENDPOINTS:
+            path = f"{self.ad_account_id_act}/{endpoint}"
+        else:
+            path = endpoint
+        return f"https://graph.facebook.com/{ver}/{path}"
 
     def _handle_rate_limit_error(self, error_data: Dict[str, Any], endpoint: str) -> None:
         """Handle Facebook API rate limit errors with appropriate retry logic."""
@@ -861,11 +951,8 @@ class MetaClient:
             time.sleep(delay)
 
     def _graph_post(self, endpoint: str, payload: Dict[str, Any], buc_type: str = "ads_management") -> Dict[str, Any]:
-        # Check rate limits before making request
-        can_make, reason = self.rate_limit_manager.can_make_request("write", buc_type)
-        if not can_make:
-            raise RuntimeError(f"Rate limit prevented request: {reason}")
-        
+        # Block until a write slot is available
+        self.rate_limit_manager.wait_for_request_slot("write", buc_type)
         self._request_delay()  # Add delay to prevent rate limiting
         url = self._graph_url(endpoint)
         data = _sanitize(payload)
@@ -932,11 +1019,8 @@ class MetaClient:
 
     def _graph_get_object(self, object_path: str, params: Optional[Dict[str, Any]] = None, buc_type: str = "ads_management") -> Dict[str, Any]:
         """GET for absolute objects like '/{id}' or '/{id}/thumbnails' (not under ad account path)."""
-        # Check rate limits before making request
-        can_make, reason = self.rate_limit_manager.can_make_request("read", buc_type)
-        if not can_make:
-            raise RuntimeError(f"Rate limit prevented request: {reason}")
-        
+        # Block until a read slot is available
+        self.rate_limit_manager.wait_for_request_slot("read", buc_type)
         self._request_delay()  # Add delay to prevent rate limiting
         ver = self.account.api_version or "v23.0"
         url = f"https://graph.facebook.com/{ver}/{object_path.lstrip('/')}"

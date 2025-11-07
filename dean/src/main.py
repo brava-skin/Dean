@@ -581,7 +581,10 @@ def _calculate_stage_duration_hours(ad_id: str, current_stage: str) -> float:
             age_days = storage.get_ad_age_days(ad_id)
             if age_days:
                 # Convert days to hours and estimate stage duration
-                return min(age_days * 24, MAX_STAGE_DURATION_HOURS)
+                duration_hours = min(age_days * 24, MAX_STAGE_DURATION_HOURS)
+                # Supabase numeric(5,4) columns cap at 9.9999; clamp to avoid overflow
+                duration_hours = min(duration_hours, DB_NUMERIC_MAX)
+                return round(duration_hours, 4)
         return 0.0
     except (AttributeError, TypeError, ValueError):
         # Age calculation failed - return 0
