@@ -15,11 +15,16 @@ from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
+
+def _asc_log(level: int, message: str, *args: Any) -> None:
+    logger.log(level, f"[ASC] {message}", *args)
+
 from integrations.slack import notify, alert_kill, alert_error
+from integrations import fmt_eur, fmt_int
 from integrations.meta_client import MetaClient
 from infrastructure.utils import (
     getenv_f, getenv_i, getenv_b, cfg, cfg_or_env_f, cfg_or_env_i, cfg_or_env_b, cfg_or_env_list,
-    safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name
+    safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name, Timekit
 )
 from creative.image_generator import create_image_generator, ImageCreativeGenerator
 from config.constants import (
@@ -102,6 +107,282 @@ def _meets_minimums(row: Dict[str, Any], min_impressions: int, min_clicks: int, 
 
 def _active_count(ads_list: List[Dict[str, Any]]) -> int:
     return sum(1 for a in ads_list if str(a.get("status", "")).upper() == "ACTIVE")
+
+
+def _guardrail_kill(metrics: Dict[str, Any]) -> Tuple[bool, str]:
+    impressions = safe_f(metrics.get("impressions"))
+    clicks = safe_f(metrics.get("clicks"))
+    spend = safe_f(metrics.get("spend"))
+    ctr = safe_f(metrics.get("ctr"))  # percentage
+    atc = safe_f(metrics.get("add_to_cart"))
+    purchases = safe_f(metrics.get("purchases"))
+
+    if impressions > 2000 and ctr < 0.5 and clicks < 10:
+        return True, "Guardrail: low CTR after 2k impressions"
+    if spend > 10 and atc == 0 and purchases == 0:
+        return True, "Guardrail: spend without ATC/PUR"
+    return False, ""
+
+
+def _guardrail_promote(metrics: Dict[str, Any]) -> Tuple[bool, str]:
+    ctr = safe_f(metrics.get("ctr"))
+    cpc = safe_f(metrics.get("cpc"))
+    if ctr > 1.5 and cpc > 0 and cpc < 1.50:
+        return True, "Guardrail: strong CTR and efficient CPC"
+    return False, ""
+
+
+def _build_ad_metrics(row: Dict[str, Any], stage: str, date_label: str) -> Dict[str, Any]:
+    ad_id = row.get("ad_id")
+    spend_val = safe_f(row.get("spend"))
+    impressions_val = safe_f(row.get("impressions"))
+    clicks_val = safe_f(row.get("clicks"))
+
+    actions = row.get("actions") or []
+    add_to_cart = 0
+    initiate_checkout = 0
+    purchases = 0
+    for action in actions:
+        action_type = action.get("action_type")
+        value = safe_f(action.get("value"))
+        if action_type == "add_to_cart":
+            add_to_cart = int(value)
+        elif action_type == "initiate_checkout":
+            initiate_checkout = int(value)
+        elif action_type == "purchase":
+            purchases = int(value)
+
+    revenue = 0.0
+    for action_value in row.get("action_values") or []:
+        if action_value.get("action_type") == "purchase":
+            revenue += safe_f(action_value.get("value"))
+
+    purchase_roas_list = row.get("purchase_roas") or []
+    if purchase_roas_list:
+        roas = safe_f(purchase_roas_list[0].get("value"))
+    elif spend_val > 0:
+        roas = revenue / spend_val
+    else:
+        roas = 0.0
+
+    ctr = (clicks_val / impressions_val * 100) if impressions_val > 0 else 0.0
+    cpc = (spend_val / clicks_val) if clicks_val > 0 else 0.0
+    cpm = (spend_val / impressions_val * 1000) if impressions_val > 0 else 0.0
+    cpa = (spend_val / purchases) if purchases > 0 else None
+
+    return {
+        "ad_id": ad_id,
+        "lifecycle_id": f"lifecycle_{ad_id}",
+        "stage": stage,
+        "status": "active",
+        "spend": spend_val,
+        "impressions": impressions_val,
+        "clicks": clicks_val,
+        "ctr": ctr,
+        "cpc": cpc,
+        "cpm": cpm,
+        "purchases": purchases,
+        "add_to_cart": add_to_cart,
+        "atc": add_to_cart,
+        "ic": initiate_checkout,
+        "initiate_checkout": initiate_checkout,
+        "roas": roas,
+        "cpa": cpa,
+        "revenue": revenue,
+        "date_start": date_label,
+        "date_end": date_label,
+        "campaign_name": row.get("campaign_name", ""),
+        "campaign_id": row.get("campaign_id"),
+        "adset_name": row.get("adset_name", ""),
+        "adset_id": row.get("adset_id"),
+        "has_recent_activity": bool(spend_val or impressions_val or clicks_val),
+        "metadata": {"source": "meta_insights"},
+    }
+
+
+def _summarize_metrics(metrics_map: Dict[str, Dict[str, Any]]) -> Dict[str, float]:
+    totals = {
+        "spend": 0.0,
+        "impressions": 0.0,
+        "clicks": 0.0,
+        "add_to_cart": 0.0,
+        "purchases": 0.0,
+    }
+    for metrics in metrics_map.values():
+        totals["spend"] += safe_f(metrics.get("spend"))
+        totals["impressions"] += safe_f(metrics.get("impressions"))
+        totals["clicks"] += safe_f(metrics.get("clicks"))
+        totals["add_to_cart"] += safe_f(metrics.get("add_to_cart"))
+        totals["purchases"] += safe_f(metrics.get("purchases"))
+    return totals
+
+
+def _evaluate_health(final_active: int, target: int, metrics_map: Dict[str, Dict[str, Any]]) -> Tuple[str, str]:
+    if final_active < target:
+        deficit = target - final_active
+        return "WARNING", f"Active creatives below minimum. Generating {deficit} replacements."
+    if len(metrics_map) < target:
+        return "WARNING", "Data below thresholds. Waiting for additional insights."
+    if not any(metrics.get("has_recent_activity") for metrics in metrics_map.values()):
+        return "WARNING", "Insights contain no recent spend or impressions. Monitoring next tick."
+    return "HEALTHY", ""
+
+
+def _generate_creatives_for_deficit(
+    deficit: int,
+    client: MetaClient,
+    settings: Dict[str, Any],
+    campaign_id: str,
+    adset_id: str,
+    ml_system: Optional[Any],
+    base_active_count: int,
+) -> List[str]:
+    if deficit <= 0:
+        return []
+
+    created_ads: List[str] = []
+    supabase_client = None
+    storage_manager = None
+    try:
+        from infrastructure.supabase_storage import get_validated_supabase_client
+        from infrastructure.creative_storage import create_creative_storage_manager
+
+        supabase_client = get_validated_supabase_client()
+        if supabase_client:
+            storage_manager = create_creative_storage_manager(supabase_client)
+    except Exception as exc:
+        _asc_log(logging.DEBUG, "Creative storage not available: %s", exc)
+
+    image_generator = create_image_generator(
+        flux_api_key=os.getenv("FLUX_API_KEY"),
+        openai_api_key=os.getenv("OPENAI_API_KEY"),
+        ml_system=ml_system,
+    )
+
+    product_config = cfg(settings, "asc_plus.product") or {}
+    product_info = {
+        "name": product_config.get("name", "Brava Product"),
+        "description": product_config.get("description", "Premium skincare"),
+        "features": product_config.get("features", ["Premium quality", "Daily routine", "Men's grooming"]),
+        "brand_tone": product_config.get("brand_tone", "calm confidence"),
+        "target_audience": product_config.get("target_audience", "Men aged 18-54"),
+    }
+
+    created_count = 0
+
+    # Use queued creatives first
+    while deficit > 0 and storage_manager:
+        queued_creative = storage_manager.get_queued_creative()
+        if not queued_creative:
+            break
+        creative_data = {
+            "supabase_storage_url": queued_creative.get("storage_url"),
+            "storage_creative_id": queued_creative.get("creative_id"),
+            "ad_copy": (queued_creative.get("metadata") or {}).get("ad_copy", {}),
+            "text_overlay": (queued_creative.get("metadata") or {}).get("text_overlay", ""),
+            "image_prompt": (queued_creative.get("metadata") or {}).get("image_prompt", ""),
+            "scenario_description": (queued_creative.get("metadata") or {}).get("scenario_description", ""),
+        }
+        creative_id, ad_id, success = _create_creative_and_ad(
+            client=client,
+            image_generator=image_generator,
+            creative_data=creative_data,
+            adset_id=adset_id,
+            active_count=base_active_count,
+            created_count=created_count,
+            existing_creative_ids=set(),
+            ml_system=ml_system,
+            campaign_id=campaign_id,
+        )
+        if success and ad_id:
+            created_ads.append(ad_id)
+            created_count += 1
+            deficit -= 1
+            if storage_manager:
+                storage_manager.mark_creative_active(creative_data.get("storage_creative_id"), ad_id)
+        else:
+            break
+
+    # Generate new creatives for remaining deficit
+    attempt_index = 0
+    while deficit > 0:
+        creative_payload = generate_new_creative(image_generator, product_info, attempt_index)
+        attempt_index += 1
+        if not creative_payload:
+            break
+        creative_id, ad_id, success = _create_creative_and_ad(
+            client=client,
+            image_generator=image_generator,
+            creative_data=creative_payload,
+            adset_id=adset_id,
+            active_count=base_active_count,
+            created_count=created_count,
+            existing_creative_ids=set(),
+            ml_system=ml_system,
+            campaign_id=campaign_id,
+        )
+        if success and ad_id:
+            created_ads.append(ad_id)
+            created_count += 1
+            deficit -= 1
+        else:
+            break
+
+    return created_ads
+
+
+def _pause_ad(client: MetaClient, ad_id: str) -> bool:
+    from infrastructure.error_handling import retry_with_backoff
+
+    @retry_with_backoff(max_retries=3)
+    def _pause(ad_identifier: str):
+        client._graph_post(f"{ad_identifier}", {"status": "PAUSED"})
+
+    try:
+        _pause(ad_id)
+        _asc_log(logging.INFO, "Paused ad %s per guardrail", ad_id)
+        return True
+    except Exception as exc:
+        _asc_log(logging.ERROR, "Failed to pause ad %s: %s", ad_id, exc)
+        return False
+
+
+def _record_lifecycle_event(ad_id: str, status: str, reason: str) -> None:
+    try:
+        from infrastructure.supabase_storage import get_validated_supabase_client
+        client = get_validated_supabase_client()
+        if not client:
+            return
+        payload = {
+            "ad_id": ad_id,
+            "stage": "asc_plus",
+            "status": status,
+            "metadata": {"reason": reason},
+            "lifecycle_id": f"lifecycle_{ad_id}",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        client.upsert("ad_lifecycle", payload, on_conflict="ad_id,stage,created_at")
+    except Exception as exc:
+        _asc_log(logging.DEBUG, "Lifecycle logging failed for %s: %s", ad_id, exc)
+
+
+def _promote_ad(client: MetaClient, ad_id: str, adset_id: str) -> Optional[str]:
+    try:
+        ad_details = client._graph_get_object(f"{ad_id}", params={"fields": "name,creative{id}"})
+        creative = ad_details.get("creative") or {}
+        creative_id = creative.get("id") or creative.get("creative_id")
+        if not creative_id:
+            _asc_log(logging.WARNING, "Cannot promote ad %s: missing creative id", ad_id)
+            return None
+        base_name = ad_details.get("name", f"{ad_id}")
+        timestamp = datetime.now(LOCAL_TZ).strftime("%H%M")
+        new_name = f"{base_name} • promote {timestamp}"
+        result = client.promote_ad_with_continuity(ad_id, adset_id, new_name, str(creative_id), status="ACTIVE")
+        return result.get("id") if isinstance(result, dict) else None
+    except Exception as exc:
+        _asc_log(logging.ERROR, "Failed to promote ad %s: %s", ad_id, exc)
+        return None
 
 
 def _create_creative_and_ad(
@@ -603,7 +884,7 @@ def generate_new_creative(
         return None
 
 
-def run_asc_plus_tick(
+def _legacy_run_asc_plus_tick(
     client: MetaClient,
     settings: Dict[str, Any],
     rules: Dict[str, Any],
@@ -1753,3 +2034,127 @@ def run_asc_plus_tick(
 
 __all__ = ["run_asc_plus_tick", "ensure_asc_plus_campaign"]
 
+
+
+
+def run_asc_plus_tick(
+    client: MetaClient,
+    settings: Dict[str, Any],
+    rules: Dict[str, Any],
+    store: Any,
+    ml_system: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Modern ASC+ tick controller with guardrails and creative floor enforcement."""
+    timekit = Timekit()
+    result: Dict[str, Any] = {
+        "ok": False,
+        "campaign_id": None,
+        "adset_id": None,
+        "active_count": 0,
+        "target_count": cfg(settings, "asc_plus.target_active_ads") or 10,
+        "kills": [],
+        "promotions": [],
+        "created_ads": [],
+        "ad_metrics": {},
+        "health": "WARNING",
+        "health_message": "",
+    }
+
+    _asc_log(logging.INFO, "Starting ASC+ tick")
+    campaign_id, adset_id = ensure_asc_plus_campaign(client, settings, store)
+    if not campaign_id or not adset_id:
+        notify("ASC+ tick WARNING -- failed to ensure campaign/adset | Health: WARNING")
+        return result
+
+    result["campaign_id"] = campaign_id
+    result["adset_id"] = adset_id
+
+    # Step 1: fetch insights for today + trailing window
+    insight_rows = client.get_recent_ad_insights(adset_id=adset_id, campaign_id=campaign_id)
+    account_today = timekit.today_ymd_account()
+    metrics_map: Dict[str, Dict[str, Any]] = {}
+    for row in insight_rows:
+        ad_id = row.get("ad_id")
+        if not ad_id:
+            continue
+        metrics_map[ad_id] = _build_ad_metrics(row, "asc_plus", account_today)
+
+    totals = _summarize_metrics(metrics_map)
+
+    try:
+        active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
+    except Exception as exc:
+        _asc_log(logging.WARNING, "Active ad consensus failed: %s", exc)
+        active_count = 0
+    result["active_count"] = active_count
+
+    ads_list = client.list_ads_in_adset(adset_id)
+    active_ads = [ad for ad in ads_list if str(ad.get("status", "")).upper() == "ACTIVE"]
+
+    # Step 3: apply guardrail kill/promote rules
+    killed_ads: List[Tuple[str, str]] = []
+    promoted_ads: List[Tuple[str, str, Optional[str]]] = []
+    for ad in active_ads:
+        ad_id = ad.get("id")
+        if not ad_id:
+            continue
+        metrics = metrics_map.get(ad_id) or _build_ad_metrics({"ad_id": ad_id, "spend": 0, "impressions": 0, "clicks": 0}, "asc_plus", account_today)
+        kill, kill_reason = _guardrail_kill(metrics)
+        if kill:
+            if _pause_ad(client, ad_id):
+                killed_ads.append((ad_id, kill_reason))
+                active_count = max(0, active_count - 1)
+                _record_lifecycle_event(ad_id, "killed", kill_reason)
+            continue
+        promote, promote_reason = _guardrail_promote(metrics)
+        if promote:
+            promoted_ad_id = _promote_ad(client, ad_id, adset_id)
+            if promoted_ad_id:
+                promoted_ads.append((ad_id, promoted_ad_id, promote_reason))
+                active_count += 1
+                metrics_map[promoted_ad_id] = _build_ad_metrics({"ad_id": promoted_ad_id, "spend": 0, "impressions": 0, "clicks": 0}, "asc_plus", account_today)
+                _record_lifecycle_event(promoted_ad_id, "promoted", promote_reason)
+
+    # Refresh active count after guardrails
+    try:
+        active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
+    except Exception:
+        pass
+
+    deficit = max(0, result["target_count"] - active_count)
+    created_ads = _generate_creatives_for_deficit(deficit, client, settings, campaign_id, adset_id, ml_system, active_count)
+    if created_ads:
+        try:
+            active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
+        except Exception:
+            active_count += len(created_ads)
+        for new_ad in created_ads:
+            metrics_map[new_ad] = _build_ad_metrics({"ad_id": new_ad, "spend": 0, "impressions": 0, "clicks": 0}, "asc_plus", account_today)
+
+    result["active_count"] = active_count
+    result["kills"] = killed_ads
+    result["promotions"] = promoted_ads
+    result["created_ads"] = created_ads
+    result["ad_metrics"] = metrics_map
+
+    health_status, health_message = _evaluate_health(active_count, result["target_count"], metrics_map)
+    result["health"] = health_status
+    result["health_message"] = health_message
+
+    tick_time = datetime.now(LOCAL_TZ).strftime("%H:%M")
+    summary = (
+        f"ASC+ tick {health_status} {tick_time} CET | "
+        f"Active {active_count} | "
+        f"Spend {fmt_eur(totals['spend'])} | "
+        f"IMP {fmt_int(totals['impressions'])} | "
+        f"Clicks {fmt_int(totals['clicks'])} | "
+        f"ATC {fmt_int(totals['add_to_cart'])} | "
+        f"PUR {fmt_int(totals['purchases'])} | "
+        f"Health: {health_status}"
+    )
+    notify(summary)
+    if health_message:
+        notify(f"Next: {health_message}")
+
+    result["ok"] = True
+    return result

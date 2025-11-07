@@ -2309,40 +2309,22 @@ def main() -> None:
                 asc_result = overall.get("asc_plus", {})
                 campaign_id = asc_result.get("campaign_id")
                 adset_id = asc_result.get("adset_id")
-                
-                # Collect ASC+ ad data for Supabase storage
-                asc_ad_data = {}
-                if campaign_id and adset_id:
-                    # Use timezone from settings
-                    import zoneinfo
-                    tz_name = settings.get("account", {}).get("timezone") or os.getenv("ACCOUNT_TZ", "Europe/Amsterdam")
-                    local_tz = zoneinfo.ZoneInfo(tz_name)
-                    asc_insights = client.get_ad_insights(
-                        level="ad",
-                        time_range={"since": (datetime.now(local_tz) - pd.Timedelta(days=7)).strftime("%Y-%m-%d"), "until": datetime.now(local_tz).strftime("%Y-%m-%d")},
-                    )
-                    for insight in asc_insights:
-                        ad_id = insight.get("ad_id")
-                        if ad_id:
-                            asc_ad_data[ad_id] = insight
-                
-                for ad_id, ad_data in asc_ad_data.items():
-                    if isinstance(ad_data, dict) and 'spend' in ad_data:
+                metrics_source = asc_result.get("ad_metrics") or {}
+
+                if not metrics_source:
+                    metrics_source = collect_stage_ad_data(client, settings, "asc_plus")
+
+                for ad_id, ad_data in metrics_source.items():
+                    if isinstance(ad_data, dict):
                         store_performance_data_in_supabase(supabase_client, ad_data, "asc_plus", ml_system)
-                        
-                        # Also store time-series data (populates time_series_data table)
                         try:
                             store_timeseries_data_in_supabase(supabase_client, ad_id, ad_data, "asc_plus")
                         except Exception as e:
                             logger.debug(f"Failed to store time-series data: {e}")
-                        
-                        # Store historical data for all metrics (populates historical_data table)
                         try:
                             from infrastructure.supabase_storage import SupabaseStorage
                             storage = SupabaseStorage(supabase_client)
                             lifecycle_id = ad_data.get('lifecycle_id', f'lifecycle_{ad_id}')
-                            
-                            # Store all key metrics as historical data
                             metrics_to_store = {
                                 'spend': ad_data.get('spend', 0),
                                 'impressions': ad_data.get('impressions', 0),
@@ -2352,7 +2334,6 @@ def main() -> None:
                                 'ctr': ad_data.get('ctr', 0),
                                 'cpa': ad_data.get('cpa', 0) if ad_data.get('cpa') is not None else 0,
                             }
-                            
                             for metric_name, metric_value in metrics_to_store.items():
                                 try:
                                     storage.store_historical_data(ad_id, lifecycle_id, "asc_plus", metric_name, float(metric_value))
@@ -2360,10 +2341,8 @@ def main() -> None:
                                     logger.debug(f"Failed to store historical data for {metric_name}: {e}")
                         except Exception as e:
                             logger.debug(f"Failed to store historical data: {e}")
-                
-                notify("📊 ASC+ performance data stored in Supabase for ML system")
             except Exception as e:
-                notify(f"⚠️ Failed to store ASC+ data in Supabase: {e}")
+                logger.error(f"Failed to store ASC+ data in Supabase: {e}")
 
     # Queue persist disabled - ASC+ generates creatives dynamically, no queue to persist
     
