@@ -146,6 +146,7 @@ class ClientConfig:
     fields_default: Tuple[str, ...] = (
         "ad_id", "ad_name", "adset_id", "campaign_id",
         "spend", "impressions", "clicks", "reach", "unique_clicks",
+        "inline_link_clicks", "inline_link_click_ctr", "cost_per_inline_link_click",
         "actions", "action_values", "purchase_roas",
     )
     breakdowns_default: Tuple[str, ...] = ()
@@ -1632,6 +1633,9 @@ class MetaClient:
             "campaign_id",
             "impressions",
             "clicks",
+            "inline_link_clicks",
+            "inline_link_click_ctr",
+            "cost_per_inline_link_click",
             "spend",
             "actions",
             "action_values",
@@ -1639,6 +1643,29 @@ class MetaClient:
         ]
 
         insight_rows: Dict[str, Dict[str, Any]] = {}
+
+        def _metric_value(metric: Any) -> float:
+            if metric is None:
+                return 0.0
+            if isinstance(metric, (int, float)):
+                return float(metric)
+            if isinstance(metric, str):
+                try:
+                    return float(metric.strip().replace(",", "")) if metric.strip() else 0.0
+                except ValueError:
+                    return 0.0
+            if isinstance(metric, dict):
+                for key in ("value", "amount", "count", "total"):
+                    if key in metric:
+                        return _metric_value(metric[key])
+                return 0.0
+            if isinstance(metric, (list, tuple)):
+                for item in metric:
+                    if isinstance(item, dict) and "value" in item:
+                        return _metric_value(item["value"])
+                    return _metric_value(item)
+                return 0.0
+            return 0.0
 
         # Pass 1: today
         today_rows = self.get_ad_insights(
@@ -1672,16 +1699,21 @@ class MetaClient:
             if not existing:
                 insight_rows[ad_id] = row
                 continue
-            # Merge by taking max metrics observed
-            for key in ("impressions", "clicks"):
-                existing[key] = max(int(existing.get(key, 0) or 0), int(row.get(key, 0) or 0))
-            for key in ("spend",):
-                existing[key] = max(float(existing.get(key, 0) or 0.0), float(row.get(key, 0) or 0.0))
-            if row.get("actions"):
+            # Merge by preserving today's data; only fill gaps with trailing values
+            for key in ("impressions", "clicks", "inline_link_clicks"):
+                if _metric_value(existing.get(key)) <= 0 and _metric_value(row.get(key)) > 0:
+                    existing[key] = row.get(key)
+            if _metric_value(existing.get("spend")) <= 0 and _metric_value(row.get("spend")) > 0:
+                existing["spend"] = row.get("spend")
+            if _metric_value(existing.get("cost_per_inline_link_click")) <= 0 and _metric_value(row.get("cost_per_inline_link_click")) > 0:
+                existing["cost_per_inline_link_click"] = row.get("cost_per_inline_link_click")
+            if _metric_value(existing.get("inline_link_click_ctr")) <= 0 and _metric_value(row.get("inline_link_click_ctr")) > 0:
+                existing["inline_link_click_ctr"] = row.get("inline_link_click_ctr")
+            if not existing.get("actions") and row.get("actions"):
                 existing["actions"] = row["actions"]
-            if row.get("action_values"):
+            if not existing.get("action_values") and row.get("action_values"):
                 existing["action_values"] = row["action_values"]
-            if row.get("purchase_roas"):
+            if not existing.get("purchase_roas") and row.get("purchase_roas"):
                 existing["purchase_roas"] = row["purchase_roas"]
 
         _meta_log(logging.DEBUG, "Fetched %s insight rows after two-pass strategy", len(insight_rows))

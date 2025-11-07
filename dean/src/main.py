@@ -50,6 +50,36 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# -----------------------------------------------------
+# Shared metric helpers
+# -----------------------------------------------------
+
+
+def _metric_to_float(value: Any) -> float:
+    """Convert Meta metrics that may be strings, dicts, or lists into floats."""
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip().replace(",", "")) if value.strip() else 0.0
+        except ValueError:
+            return 0.0
+    if isinstance(value, dict):
+        for key in ("value", "amount", "count", "total"):
+            if key in value:
+                return _metric_to_float(value[key])
+        return 0.0
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            # Prefer explicit 'value' keys when dicts are provided
+            if isinstance(item, dict) and "value" in item:
+                return _metric_to_float(item["value"])
+            return _metric_to_float(item)
+        return 0.0
+    return 0.0
+
 # Optional Supabase client
 try:
     # pip install supabase
@@ -1100,9 +1130,15 @@ def collect_stage_ad_data(meta_client, settings: Dict[str, Any], stage: str) -> 
             if not ad_id:
                 continue
 
-            spend_val = float(row.get("spend", 0) or 0.0)
-            impressions_val = int(row.get("impressions", 0) or 0)
-            clicks_val = int(row.get("clicks", 0) or 0)
+            spend_val = _metric_to_float(row.get("spend"))
+            impressions_val = int(round(_metric_to_float(row.get("impressions"))))
+            link_clicks_val = _metric_to_float(row.get("inline_link_clicks"))
+            if link_clicks_val <= 0:
+                link_clicks_val = _metric_to_float(row.get("link_clicks"))
+            all_clicks_val = _metric_to_float(row.get("clicks"))
+            if link_clicks_val <= 0 and all_clicks_val > 0:
+                link_clicks_val = all_clicks_val
+            clicks_val = int(round(link_clicks_val))
 
             actions = row.get("actions", []) or []
             add_to_cart = 0
@@ -1132,7 +1168,7 @@ def collect_stage_ad_data(meta_client, settings: Dict[str, Any], stage: str) -> 
                 roas = 0.0
 
             ctr = (clicks_val / impressions_val * 100) if impressions_val > 0 else 0.0
-            cpc = (spend_val / clicks_val) if clicks_val > 0 else 0.0
+            cpc = (spend_val / link_clicks_val) if link_clicks_val > 0 else ((spend_val / all_clicks_val) if all_clicks_val > 0 else 0.0)
             cpm = (spend_val / impressions_val * 1000) if impressions_val > 0 else 0.0
             cpa = (spend_val / purchases) if purchases > 0 else None
 
@@ -1735,7 +1771,16 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
         
         rows = meta.get_ad_insights(
             level="ad", 
-            fields=["spend", "actions", "impressions", "clicks", "ctr", "cpc", "cpm"], 
+            fields=[
+                "spend",
+                "actions",
+                "impressions",
+                "clicks",
+                "inline_link_clicks",
+                "inline_link_click_ctr",
+                "cost_per_inline_link_click",
+                "cpm",
+            ], 
             time_range={
                 "since": midnight.strftime("%Y-%m-%d"),
                 "until": now.strftime("%Y-%m-%d")
@@ -1743,12 +1788,20 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
             paginate=True
         )
         
-        spend = sum(float(r.get("spend") or 0) for r in rows)
-        impressions = sum(int(r.get("impressions") or 0) for r in rows)
-        clicks = sum(int(r.get("clicks") or 0) for r in rows)
+        spend = sum(_metric_to_float(r.get("spend")) for r in rows)
+        impressions = int(round(sum(_metric_to_float(r.get("impressions")) for r in rows)))
+        link_clicks = sum(
+            _metric_to_float(r.get("inline_link_clicks"))
+            or _metric_to_float(r.get("link_clicks"))
+            for r in rows
+        )
+        all_clicks = sum(_metric_to_float(r.get("clicks")) for r in rows)
         purch = 0.0
         atc = 0.0  # Add to cart
         ic = 0.0   # Initiate checkout
+
+        if link_clicks <= 0 and all_clicks > 0:
+            link_clicks = all_clicks
         
         for r in rows:
             for a in (r.get("actions") or []):
@@ -1764,12 +1817,29 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
                 except (KeyError, TypeError, ValueError):
                     # Skip invalid action entries
                     continue
-        
+
         # Calculate metrics
+        link_clicks = max(link_clicks, 0.0)
+        all_clicks = max(all_clicks, 0.0)
         cpa = (spend / purch) if purch > 0 else float("inf")
-        ctr = (clicks / impressions * 100) if impressions > 0 else 0
-        cpc = (spend / clicks) if clicks > 0 else 0
+        ctr = ((link_clicks or 0.0) / impressions * 100) if impressions > 0 else 0
+        cpc = (spend / link_clicks) if link_clicks > 0 else ((spend / all_clicks) if all_clicks > 0 else 0)
         cpm = (spend / impressions * 1000) if impressions > 0 else 0
+        
+        # If Meta already returned cost-per-link metric, prefer it when available
+        if link_clicks > 0:
+            # Weighted average cost per link click using provided metric if present
+            cost_per_link_values = [
+                (
+                    _metric_to_float(row.get("cost_per_inline_link_click")),
+                    _metric_to_float(row.get("inline_link_clicks")) or _metric_to_float(row.get("link_clicks"))
+                )
+                for row in rows
+            ]
+            weighted_spend = sum(cost * clicks for cost, clicks in cost_per_link_values if clicks and cost)
+            total_weight = sum(clicks for _, clicks in cost_per_link_values if clicks)
+            if weighted_spend and total_weight:
+                cpc = weighted_spend / total_weight
         
         be = float(
             os.getenv("BREAKEVEN_CPA")
@@ -1807,7 +1877,7 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
             "cpa": None if cpa == float("inf") else round(cpa, 2),
             "breakeven": be,
             "impressions": impressions,
-            "clicks": clicks,
+            "clicks": int(round(link_clicks if link_clicks > 0 else all_clicks)),
             "ctr": round(ctr, 2),
             "cpc": round(cpc, 2),
             "cpm": round(cpm, 2),
@@ -2354,7 +2424,14 @@ def main() -> None:
                 notify("🔬 Model validation completed")
                 # Alert if any model has low accuracy
                 for model_name, metrics in validation_results.items():
-                    accuracy = metrics.get('accuracy', 0)
+                    if not isinstance(metrics, dict):
+                        continue
+                    status = metrics.get('status')
+                    accuracy = metrics.get('accuracy')
+                    if status in {'missing_model', 'insufficient_data'}:
+                        continue
+                    if accuracy is None:
+                        continue
                     if accuracy < 0.6:
                         notify(f"⚠️ Model {model_name} accuracy: {accuracy:.1%} - retraining recommended")
         except Exception as e:
