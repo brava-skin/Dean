@@ -70,6 +70,12 @@ class BackgroundScheduler:
         )
         
         self.engine = RuleEngine(rules)
+
+        scheduler_cfg = settings.get("scheduler", {})
+        self.tick_interval_minutes = int(scheduler_cfg.get("asc_plus_tick_minutes", 60))
+        self.summary_interval_minutes = int(scheduler_cfg.get("summary_minutes", 180))
+        self.daily_digest_time = scheduler_cfg.get("daily_digest_time_local", "08:00")
+        self.stage_run_order = scheduler_cfg.get("run_order", ["asc_plus"])
         
         # Track last run times to avoid duplicate processing
         self.last_hourly_tick = None
@@ -87,7 +93,12 @@ class BackgroundScheduler:
         self.running = True
         self.thread = threading.Thread(target=self._run_scheduler, daemon=True)
         self.thread.start()
-        notify("🤖 Background scheduler started - monitoring every hour")
+        cadence_label = (
+            f"every {self.tick_interval_minutes} minutes"
+            if self.tick_interval_minutes < 60 or self.tick_interval_minutes % 60 != 0
+            else f"every {self.tick_interval_minutes // 60} hour(s)"
+        )
+        notify(f"🤖 Background scheduler started - monitoring {cadence_label}")
         
     def stop(self):
         """Stop the background scheduler."""
@@ -98,10 +109,30 @@ class BackgroundScheduler:
         
     def _run_scheduler(self):
         """Main scheduler loop."""
-        # Schedule tasks
-        schedule.every().hour.at(":00").do(self._run_hourly_tick)
-        schedule.every(3).hours.do(self._run_3h_summary)
-        schedule.every().day.at("08:00").do(self._run_daily_summary)
+        # Schedule tasks based on configuration
+        if self.tick_interval_minutes <= 0:
+            self.tick_interval_minutes = 60
+
+        if self.tick_interval_minutes % 60 == 0:
+            hours = max(1, self.tick_interval_minutes // 60)
+            if hours == 1:
+                schedule.every().hour.at(":00").do(self._run_hourly_tick)
+            else:
+                schedule.every(hours).hours.do(self._run_hourly_tick)
+        else:
+            schedule.every(self.tick_interval_minutes).minutes.do(self._run_hourly_tick)
+
+        if self.summary_interval_minutes <= 0:
+            self.summary_interval_minutes = 180
+
+        if self.summary_interval_minutes % 60 == 0:
+            summary_hours = max(1, self.summary_interval_minutes // 60)
+            schedule.every(summary_hours).hours.do(self._run_3h_summary)
+        else:
+            schedule.every(self.summary_interval_minutes).minutes.do(self._run_3h_summary)
+
+        summary_time = self.daily_digest_time if self.daily_digest_time else "08:00"
+        schedule.every().day.at(summary_time).do(self._run_daily_summary)
         
         while self.running:
             try:
@@ -123,7 +154,9 @@ class BackgroundScheduler:
                 
             self.last_hourly_tick = hour_key
             
-            notify(f"🔄 Hourly tick starting at {current_time.strftime('%H:%M')}")
+            notify(
+                f"🔄 Automation tick ({self.tick_interval_minutes}m cadence) starting at {current_time.strftime('%H:%M')}"
+            )
             
             # Load queue
             if os.getenv("SUPABASE_URL") and (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")):
@@ -138,21 +171,27 @@ class BackgroundScheduler:
             # Run ASC+ stage
             stage_summaries = []
             
-            # ASC+ stage
-            asc_plus_result = self._run_stage_safely(
-                run_asc_plus_tick,
-                "ASC+",
-                self.client,
-                self.settings,
-                self.store,
-            )
-            if asc_plus_result:
-                stage_summaries.append({"stage": "ASC+", "counts": asc_plus_result})
+            for stage_name in self.stage_run_order:
+                stage_key = stage_name.lower()
+                if stage_key == "asc_plus":
+                    asc_plus_result = self._run_stage_safely(
+                        run_asc_plus_tick,
+                        "ASC+",
+                        self.client,
+                        self.settings,
+                        self.store,
+                    )
+                    if asc_plus_result:
+                        stage_summaries.append({"stage": "ASC+", "counts": asc_plus_result})
+                else:
+                    notify(f"⚠️ Unknown stage '{stage_name}' configured for scheduler run order")
             
             # Check for critical alerts
             self._check_critical_alerts()
             
-            notify(f"✅ Hourly tick completed - {len(stage_summaries)} stages processed")
+            notify(
+                f"✅ Automation tick complete - processed {len(stage_summaries)} stage(s)"
+            )
             
         except Exception as e:
             alert_error(f"Hourly tick failed: {e}")

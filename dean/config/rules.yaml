@@ -22,7 +22,7 @@ minimums:
   spend_eur: 20
 
 # ── ASC+ Campaign Rules ───────────────────────────────
-# Simple rules for ASC+ campaign - always 5 creatives live
+# Simple rules for ASC+ campaign - always 10 creatives live (Andromeda compliance)
 asc_plus:
   minimums:
     min_impressions: 200

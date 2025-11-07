@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import pickle
 import uuid
 from dataclasses import dataclass, asdict
@@ -71,6 +72,20 @@ except ImportError:
 warnings.filterwarnings('ignore', category=FutureWarning)
 
 logger = logging.getLogger(__name__)
+
+
+def _ml_log(level: int, message: str, *args: Any) -> None:
+    logger.log(level, f"[ML] {message}", *args)
+
+
+BREAKEVEN_ROAS = float(os.getenv("BREAKEVEN_ROAS", os.getenv("BREAKEVEN_ROAS_TARGET", "1.0")) or 1.0)
+
+# Minimum sample thresholds for training (global vs stage-specific)
+ML_MIN_TRAINING_SAMPLES_GLOBAL = int(os.getenv("ML_MIN_TRAINING_SAMPLES_GLOBAL", 50))
+ML_MIN_TRAINING_SAMPLES_STAGE = int(os.getenv("ML_MIN_TRAINING_SAMPLES_STAGE", 20))
+
+# Minimum performance delta required to replace an active registry model
+ML_MODEL_IMPROVEMENT_DELTA = float(os.getenv("ML_MODEL_IMPROVEMENT_DELTA", 0.01))
 
 # =====================================================
 # XGBOOST WRAPPER CLASS
@@ -212,30 +227,24 @@ class SupabaseMLClient:
                            days_back: int = 30) -> pd.DataFrame:
         """Fetch performance data for ML training."""
         try:
-            # Build query
             query = self.client.table('performance_metrics').select('*')
-            
+
             if ad_ids:
                 query = query.in_('ad_id', ad_ids)
             if stages:
                 query = query.in_('stage', stages)
-            
-            # Date filter - temporarily disabled to test data availability
+
             start_date = datetime.now() - timedelta(days=days_back)
-            start_date_str = start_date.strftime('%Y-%m-%d')
-            # query = query.gte('date_start', start_date_str)  # Temporarily disabled
-            
-            self.logger.info(f"🔧 Querying performance_metrics with stages={stages}, start_date={start_date}")
+            _ml_log(logging.INFO, "Querying performance_metrics with stages=%s, start_date=%s", stages, start_date)
             response = query.execute()
-            self.logger.info(f"🔧 Query returned {len(response.data) if response.data else 0} rows")
-            
+            _ml_log(logging.INFO, "Query returned %s rows", len(response.data) if response.data else 0)
+
             if not response.data:
-                # Use info level instead of warning to reduce noise during initialization
-                self.logger.info(f"ℹ️ No performance data found for stages={stages}, start_date={start_date}")
+                _ml_log(logging.INFO, "No performance data found for stages=%s, start_date=%s", stages, start_date)
                 return pd.DataFrame()
-            
+
             df = pd.DataFrame(response.data)
-            self.logger.info(f"🔧 DataFrame created with {len(df)} rows, columns: {list(df.columns)}")
+            _ml_log(logging.INFO, "DataFrame created with %s rows, columns: %s", len(df), list(df.columns))
             
             # Convert types
             # Note: purchases, add_to_cart, initiate_checkout, revenue are extracted from actions/action_values arrays
@@ -258,6 +267,29 @@ class SupabaseMLClient:
             df['date_start'] = pd.to_datetime(df['date_start'])
             df['date_end'] = pd.to_datetime(df['date_end'])
             df['created_at'] = pd.to_datetime(df['created_at'])
+
+            # Ensure core label columns exist and are numeric
+            required_defaults = {
+                'ctr': 0.0,
+                'cpc': 0.0,
+                'roas': 0.0,
+                'spend': 0.0,
+                'purchases': 0.0,
+                'add_to_cart': 0.0,
+            }
+            for col, default_value in required_defaults.items():
+                if col not in df.columns:
+                    df[col] = default_value
+                df[col] = df[col].replace([np.inf, -np.inf], np.nan).fillna(default_value)
+
+            df['performance_label'] = (
+                (df.get('ctr', 0) >= 1.0)
+                & ((df.get('purchases', 0) > 0) | (df.get('roas', 0) >= BREAKEVEN_ROAS))
+                & (df.get('cpc', 0) > 0)
+                & (df.get('cpc', 0) <= 2.5)
+            ).astype(int)
+            df['roas_target_met'] = (df.get('roas', 0) >= BREAKEVEN_ROAS).astype(int)
+            df['purchase_label'] = (df.get('purchases', 0) > 0).astype(int)
             
             return df
             
@@ -932,10 +964,12 @@ class XGBoostPredictor:
     def train_model(self, model_type: str, stage: str, target_col: str) -> bool:
         """Train XGBoost model for specific prediction task."""
         try:
-            self.logger.info(f"🔧 Starting training for {model_type}_{stage}...")
-            # Get training data - use optimized data loader if available
+            _ml_log(logging.INFO, "Starting training for %s_%s (target=%s)", model_type, stage, target_col)
+
+            # Get training data - prefer optimized loader when available
+            used_cross_stage = False
+
             if self.data_loader:
-                # Use batch loading for efficiency
                 df = self.data_loader.load_data_batch(
                     self.supabase,
                     ad_ids=[],
@@ -944,12 +978,19 @@ class XGBoostPredictor:
                 )
             else:
                 df = self.supabase.get_performance_data(stages=[stage])
-            
-            self.logger.info(f"🔧 Stage-specific data for {stage}: {len(df) if not df.empty else 0} rows")
-            
-            if df.empty or len(df) < 5:  # Need at least 5 samples for meaningful training
-                self.logger.info(f"Insufficient stage-specific data for {stage} ({len(df) if not df.empty else 0} samples), trying all stages")
-                # Fallback to all available data for training
+
+            stage_rows = len(df) if not df.empty else 0
+            _ml_log(logging.DEBUG, "Stage-specific data for %s: %s rows", stage, stage_rows)
+
+            if df.empty or stage_rows < ML_MIN_TRAINING_SAMPLES_STAGE:
+                _ml_log(
+                    logging.INFO,
+                    "SKIP stage-only training for %s: %s rows (need %s). Switching to cross-stage dataset.",
+                    stage,
+                    stage_rows,
+                    ML_MIN_TRAINING_SAMPLES_STAGE,
+                )
+                used_cross_stage = True
                 if self.data_loader:
                     df = self.data_loader.load_data_batch(
                         self.supabase,
@@ -959,31 +1000,52 @@ class XGBoostPredictor:
                     )
                 else:
                     df = self.supabase.get_performance_data()
-                self.logger.info(f"🔧 All-stages data: {len(df) if not df.empty else 0} rows")
-                
-                if df.empty:
-                    self.logger.warning(f"No data available for training {model_type} model for {stage}")
+
+                all_rows = len(df) if not df.empty else 0
+                _ml_log(logging.DEBUG, "Cross-stage data rows: %s", all_rows)
+
+                if df.empty or all_rows < ML_MIN_TRAINING_SAMPLES_GLOBAL:
+                    _ml_log(
+                        logging.INFO,
+                        "SKIP training for %s_%s: %s rows available (need %s).",
+                        model_type,
+                        stage,
+                        all_rows,
+                        ML_MIN_TRAINING_SAMPLES_GLOBAL,
+                    )
                     return False
-                elif len(df) < 5:
-                    self.logger.warning(f"Insufficient data for training {model_type} model: {len(df)} samples (need at least 5)")
-                    return False
-                else:
-                    self.logger.info(f"Using cross-stage data for {stage} training: {len(df)} samples")
-            
-            self.logger.info(f"🔧 Data loaded for {model_type}_{stage}: {len(df)} rows")
-            
+            else:
+                if stage_rows < ML_MIN_TRAINING_SAMPLES_GLOBAL:
+                    _ml_log(
+                        logging.DEBUG,
+                        "Stage data below global threshold but acceptable (%s < %s)",
+                        stage_rows,
+                        ML_MIN_TRAINING_SAMPLES_GLOBAL,
+                    )
+
+            data_rows = len(df) if not df.empty else 0
+            _ml_log(logging.DEBUG, "Training rows for %s_%s: %s", model_type, stage, data_rows)
+
             # Prepare data
-            self.logger.info(f"🔧 Preparing training data for {model_type}_{stage}...")
+            _ml_log(logging.DEBUG, "Preparing training data for %s_%s", model_type, stage)
             X, y, feature_cols = self.prepare_training_data(df, target_col)
-            self.logger.info(f"🔧 Prepared data shape: X={X.shape}, y={y.shape}, features={len(feature_cols)}")
+            _ml_log(logging.DEBUG, "Prepared data shape: X=%s, y=%s, features=%s", X.shape, y.shape, len(feature_cols))
             
             if len(X) == 0 or X.shape[1] == 0:
-                self.logger.warning(f"No features available for training {model_type} model: {X.shape}")
+                _ml_log(logging.INFO, "SKIP training for %s_%s: no usable features", model_type, stage)
                 return False
             
             # Check if we have enough data for training
-            if len(X) < 2:
-                self.logger.warning(f"Insufficient data for training: {len(X)} samples (need at least 2)")
+            required_samples = ML_MIN_TRAINING_SAMPLES_GLOBAL if used_cross_stage else ML_MIN_TRAINING_SAMPLES_STAGE
+            if len(X) < required_samples:
+                _ml_log(
+                    logging.INFO,
+                    "SKIP training for %s_%s: insufficient samples after preparation (%s < %s)",
+                    model_type,
+                    stage,
+                    len(X),
+                    required_samples,
+                )
                 return False
             
             # Apply feature selection if needed
@@ -1245,7 +1307,7 @@ class XGBoostPredictor:
                         # So we need to use the same feature names that were used during training
                         # Use all available features and let the selector handle it
                         expected_features = [str(k) for k in features.keys()]
-                        self.logger.info(f"🔧 [ML DEBUG] Using {len(expected_features)} features for feature selection")
+                        _ml_log(logging.DEBUG, "Using %s features for selector", len(expected_features))
                         
                         # Ensure we have the exact number of features the selector expects
                         # Handle both old and new scikit-learn versions
@@ -1259,11 +1321,11 @@ class XGBoostPredictor:
                                 selector_n_features = len(expected_features)
                         
                         if len(expected_features) != selector_n_features:
-                            self.logger.info(f"Feature count mismatch: have {len(expected_features)}, selector expects {selector_n_features}")
+                            _ml_log(logging.DEBUG, "Selector feature mismatch: have %s, expect %s", len(expected_features), selector_n_features)
                             # Try to match the expected number by padding or truncating
                             if len(expected_features) > selector_n_features:
                                 expected_features = expected_features[:selector_n_features]
-                                self.logger.info(f"Truncated to {len(expected_features)} features")
+                                _ml_log(logging.DEBUG, "Truncated selector input to %s", len(expected_features))
                             else:
                                 # Pad with zeros - add missing features to the dict, not just the list
                                 needed = selector_n_features - len(expected_features)
@@ -1272,7 +1334,7 @@ class XGBoostPredictor:
                                     if pad_key not in features:
                                         features[pad_key] = 0.0
                                 expected_features = [str(k) for k in features.keys()][:selector_n_features]
-                                self.logger.info(f"Padded features dict, now have {len(expected_features)} features")
+                                _ml_log(logging.DEBUG, "Padded selector input to %s", len(expected_features))
                     except Exception as e:
                         self.logger.warning(f"Could not get original feature names: {e}")
                         expected_features = [str(k) for k in features.keys()]
@@ -1285,14 +1347,14 @@ class XGBoostPredictor:
                             float(features.get(str(col), 0)) for col in expected_features
                         ])
                         
-                        self.logger.info(f"🔧 [ML DEBUG] Full feature vector: {len(full_feature_vector)} features")
+                        _ml_log(logging.DEBUG, "Full feature vector size: %s", len(full_feature_vector))
                         selector_n_features = getattr(feature_selector, 'n_features_in_', getattr(feature_selector, 'n_features_', 'unknown'))
-                        self.logger.info(f"🔧 [ML DEBUG] Feature selector expects: {selector_n_features} features")
-                        self.logger.info(f"🔧 [ML DEBUG] Expected features: {len(expected_features)}")
+                        _ml_log(logging.DEBUG, "Feature selector expects: %s", selector_n_features)
+                        _ml_log(logging.DEBUG, "Expected feature list size: %s", len(expected_features))
                         
                         # Apply feature selection
                         feature_vector = feature_selector.transform([full_feature_vector])[0]
-                        self.logger.info(f"🔧 [ML DEBUG] Applied feature selection: {len(feature_vector)} features")
+                        _ml_log(logging.DEBUG, "Applied feature selection -> %s features", len(feature_vector))
                     except Exception as e:
                         self.logger.warning(f"Feature selection failed during prediction: {e}")
                         # Fallback to original approach
@@ -1337,22 +1399,22 @@ class XGBoostPredictor:
                                 else:
                                     ordered_features.append(0.0)
                             feature_vector = np.array(ordered_features)
-                            self.logger.info(f"🔧 [ML DEBUG] Reordered features to match scaler: {len(feature_vector)} features")
+                            _ml_log(logging.DEBUG, "Reordered features to match scaler: %s", len(feature_vector))
                         else:
                             # Fallback: pad or truncate to match scaler size
                             if len(feature_vector) > scaler_n_features:
                                 feature_vector = feature_vector[:scaler_n_features]
-                                self.logger.info(f"🔧 [ML DEBUG] Truncated features to {len(feature_vector)}")
+                                _ml_log(logging.DEBUG, "Truncated features to %s", len(feature_vector))
                             elif len(feature_vector) < scaler_n_features:
                                 # Pad with zeros
                                 feature_vector = np.pad(feature_vector, (0, scaler_n_features - len(feature_vector)), 'constant')
-                                self.logger.info(f"🔧 [ML DEBUG] Padded features to {len(feature_vector)}")
+                                _ml_log(logging.DEBUG, "Padded features to %s", len(feature_vector))
                     
                     try:
                         # Check if scaler is fitted before using it
                         if hasattr(scaler, 'mean_') and scaler.mean_ is not None:
                             feature_vector_scaled = scaler.transform([feature_vector])
-                            self.logger.info(f"🔧 [ML DEBUG] Successfully scaled features")
+                            _ml_log(logging.DEBUG, "Successfully scaled features")
                         else:
                             raise ValueError("Scaler is not fitted")
                     except (ValueError, AttributeError) as e:
@@ -1365,7 +1427,7 @@ class XGBoostPredictor:
                 else:
                     # No scaler available, use features as-is
                     feature_vector_scaled = [feature_vector]
-                    self.logger.info(f"🔧 [ML DEBUG] Using unscaled features (no scaler)")
+                    _ml_log(logging.DEBUG, "Using unscaled features (no scaler)")
                 
                 # CRITICAL FIX: Ensure feature vector matches model's expected input shape
                 # Get expected feature count from model or metadata
@@ -1684,7 +1746,7 @@ class XGBoostPredictor:
                               feature_cols: List[str], feature_importance: Dict[str, float]) -> bool:
         """Save trained model to Supabase with graceful fallback."""
         try:
-            self.logger.info(f"🔧 Starting save process for {model_type}_{stage}...")
+            _ml_log(logging.DEBUG, "Starting save process for %s_%s", model_type, stage)
             import gzip
             import hashlib
             
@@ -1776,18 +1838,44 @@ class XGBoostPredictor:
             
             # Validate all timestamps in ML model data
             data = validate_all_timestamps(data)
+
+            # Registry check: only promote models that improve accuracy by a margin
+            existing_model = None
+            existing_accuracy = 0.0
+            try:
+                response_existing = self.supabase.client.table('ml_models').select(
+                    'id, accuracy, is_active, trained_at'
+                ).eq('model_type', model_type).eq('stage', stage).order('trained_at', desc=True).limit(1).execute()
+                if response_existing and getattr(response_existing, 'data', None):
+                    existing_model = response_existing.data[0]
+                    existing_accuracy = sanitize_float(existing_model.get('accuracy', 0.0))
+            except Exception as lookup_error:
+                _ml_log(logging.DEBUG, "Model registry lookup failed for %s_%s: %s", model_type, stage, lookup_error)
+
+            if existing_model and existing_model.get('is_active'):
+                if existing_accuracy >= accuracy - ML_MODEL_IMPROVEMENT_DELTA:
+                    _ml_log(
+                        logging.INFO,
+                        "Model registry: keeping existing %s_%s (current=%.4f, new=%.4f, delta=%.4f)",
+                        model_type,
+                        stage,
+                        existing_accuracy,
+                        accuracy,
+                        ML_MODEL_IMPROVEMENT_DELTA,
+                    )
+                    return True
             
             # Try to save with graceful fallback
             try:
                 # First try to update existing model, then insert if not found
                 validated_client = self._get_validated_client()
-                self.logger.info(f"🔧 Using validated client: {validated_client is not None}")
+                _ml_log(logging.DEBUG, "Validated client available: %s", bool(validated_client))
                 
                 # Try update first
                 try:
                     if validated_client and hasattr(validated_client, 'update'):
                         # Update existing model
-                        self.logger.info(f"🔧 Attempting update with validated client for {model_type}_{stage}")
+                        _ml_log(logging.DEBUG, "Attempting validated update for %s_%s", model_type, stage)
                         response = validated_client.update(
                             'ml_models', 
                             data, 
@@ -1796,44 +1884,40 @@ class XGBoostPredictor:
                             eq2='stage', 
                             value2=stage
                         )
-                        self.logger.info(f"🔧 Update response: {response}")
-                        if hasattr(response, 'data'):
-                            self.logger.info(f"🔧 Update response data: {response.data}")
+                        _ml_log(logging.DEBUG, "Update response: %s", getattr(response, 'data', response))
                         
                         # Check if any rows were actually updated
                         if hasattr(response, 'data') and len(response.data) > 0:
-                            self.logger.info(f"✅ Model {model_type}_{stage} updated with validated client")
+                            _ml_log(logging.INFO, "Model %s_%s updated via validated client", model_type, stage)
                             return True
                         else:
-                            self.logger.info(f"⚠️ Update affected 0 rows, will try insert for {model_type}_{stage}")
+                            _ml_log(logging.DEBUG, "Validated update affected 0 rows for %s_%s", model_type, stage)
                             raise Exception("No rows updated, trying insert")
                     else:
                         # Fallback to regular client update
-                        self.logger.info(f"🔧 Attempting update with regular client for {model_type}_{stage}")
+                        _ml_log(logging.DEBUG, "Attempting regular update for %s_%s", model_type, stage)
                         response = self.supabase.client.table('ml_models').update(data).eq('model_type', model_type).eq('stage', stage).execute()
                         if response and hasattr(response, 'data') and len(response.data) > 0:
-                            self.logger.info(f"✅ Model {model_type}_{stage} updated with regular client")
+                            _ml_log(logging.INFO, "Model %s_%s updated via regular client", model_type, stage)
                             return True
                         else:
-                            self.logger.warning(f"Update affected 0 rows for {model_type}_{stage}, will try insert")
+                            _ml_log(logging.DEBUG, "Regular update affected 0 rows for %s_%s", model_type, stage)
                             raise Exception("No rows updated, trying insert")
                 except Exception as update_error:
                     # If update fails, try insert
-                    self.logger.info(f"Update failed, trying insert for {model_type}_{stage}: {update_error}")
+                    _ml_log(logging.DEBUG, "Update failed for %s_%s: %s", model_type, stage, update_error)
                     try:
                         if validated_client and hasattr(validated_client, 'insert'):
-                            self.logger.info(f"🔧 Attempting insert with validated client for {model_type}_{stage}")
+                            _ml_log(logging.DEBUG, "Attempting validated insert for %s_%s", model_type, stage)
                             response = validated_client.insert('ml_models', data)
-                            self.logger.info(f"✅ Model {model_type}_{stage} inserted with validated client")
-                            self.logger.info(f"🔧 Insert response: {response}")
-                            if hasattr(response, 'data'):
-                                self.logger.info(f"🔧 Insert response data: {response.data}")
+                            _ml_log(logging.INFO, "Model %s_%s inserted via validated client", model_type, stage)
+                            _ml_log(logging.DEBUG, "Insert response: %s", getattr(response, 'data', response))
                             return True
                         else:
-                            self.logger.info(f"🔧 Attempting insert with regular client for {model_type}_{stage}")
+                            _ml_log(logging.DEBUG, "Attempting regular insert for %s_%s", model_type, stage)
                             response = self.supabase.client.table('ml_models').insert(data).execute()
                             if response and hasattr(response, 'data') and len(response.data) > 0:
-                                self.logger.info(f"✅ Model {model_type}_{stage} inserted with regular client")
+                                _ml_log(logging.INFO, "Model %s_%s inserted via regular client", model_type, stage)
                                 return True
                             else:
                                 self.logger.error(f"Insert failed - no data returned for {model_type}_{stage}")

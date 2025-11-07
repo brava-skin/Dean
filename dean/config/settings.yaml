@@ -109,6 +109,14 @@ asc_plus:
     brand_tone: "calm confidence"
     target_audience: "Men aged 18-54"
 
+# Scheduler cadence aligns with Andromeda requirement (10 creatives, 30-minute checks)
+scheduler:
+  asc_plus_tick_minutes: 30                 # Primary automation tick cadence (GitHub Actions matched)
+  summary_minutes: 180                      # Summary digest cadence (3 hours)
+  daily_digest_time_local: "08:00"          # Daily digest dispatch time (local timezone)
+  run_order:
+    - "asc_plus"                            # Ensure ASC+ stage executes first each tick
+
 # ── Queue Management (Legacy - Not used by ASC+ which generates creatives dynamically) ──
 queue:
   source: "supabase"  # or "csv"

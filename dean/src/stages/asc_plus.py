@@ -228,6 +228,34 @@ def _evaluate_health(final_active: int, target: int, metrics_map: Dict[str, Dict
     return "HEALTHY", ""
 
 
+def _emit_health_notification(
+    status: str,
+    message: str,
+    totals: Dict[str, float],
+    active_count: int,
+    target_count: int,
+) -> str:
+    tick_time = datetime.now(LOCAL_TZ).strftime("%H:%M")
+    summary_lines = [
+        f"ASC+ {tick_time} CET · Health {status}",
+        (
+            f"Active {active_count}/{target_count} | "
+            f"Spend {fmt_eur(totals.get('spend', 0.0))} | "
+            f"IMP {fmt_int(totals.get('impressions', 0.0))} | "
+            f"Clicks {fmt_int(totals.get('clicks', 0.0))} | "
+            f"ATC {fmt_int(totals.get('add_to_cart', 0.0))} | "
+            f"PUR {fmt_int(totals.get('purchases', 0.0))}"
+        ),
+    ]
+    if message:
+        summary_lines.append(f"Next: {message}")
+
+    summary = "\n".join(summary_lines)
+    _asc_log(logging.INFO, "Health summary | %s", " | ".join(summary_lines))
+    notify(summary)
+    return summary
+
+
 def _generate_creatives_for_deficit(
     deficit: int,
     client: MetaClient,
@@ -2063,7 +2091,14 @@ def run_asc_plus_tick(
     _asc_log(logging.INFO, "Starting ASC+ tick")
     campaign_id, adset_id = ensure_asc_plus_campaign(client, settings, store)
     if not campaign_id or not adset_id:
-        notify("ASC+ tick WARNING -- failed to ensure campaign/adset | Health: WARNING")
+        empty_totals = {"spend": 0.0, "impressions": 0.0, "clicks": 0.0, "add_to_cart": 0.0, "purchases": 0.0}
+        result["health_summary"] = _emit_health_notification(
+            "WARNING",
+            "Failed to ensure campaign/adset",
+            empty_totals,
+            active_count=0,
+            target_count=result["target_count"],
+        )
         return result
 
     result["campaign_id"] = campaign_id
@@ -2141,20 +2176,14 @@ def run_asc_plus_tick(
     result["health"] = health_status
     result["health_message"] = health_message
 
-    tick_time = datetime.now(LOCAL_TZ).strftime("%H:%M")
-    summary = (
-        f"ASC+ tick {health_status} {tick_time} CET | "
-        f"Active {active_count} | "
-        f"Spend {fmt_eur(totals['spend'])} | "
-        f"IMP {fmt_int(totals['impressions'])} | "
-        f"Clicks {fmt_int(totals['clicks'])} | "
-        f"ATC {fmt_int(totals['add_to_cart'])} | "
-        f"PUR {fmt_int(totals['purchases'])} | "
-        f"Health: {health_status}"
+    health_summary = _emit_health_notification(
+        health_status,
+        health_message,
+        totals,
+        active_count,
+        result["target_count"],
     )
-    notify(summary)
-    if health_message:
-        notify(f"Next: {health_message}")
 
     result["ok"] = True
+    result["health_summary"] = health_summary
     return result
