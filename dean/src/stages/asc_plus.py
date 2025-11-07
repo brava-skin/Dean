@@ -777,6 +777,14 @@ def _sync_performance_metrics_records(
 
     upserts: List[Dict[str, Any]] = []
 
+    def _bounded(value: float, limit: float = 9.9999) -> float:
+        if value is None:
+            return 0.0
+        try:
+            return max(-limit, min(limit, float(value)))
+        except (TypeError, ValueError):
+            return 0.0
+
     for ad_id, metrics in metrics_map.items():
         if not ad_id:
             continue
@@ -809,11 +817,16 @@ def _sync_performance_metrics_records(
         if purchases > 0 and spend > 0:
             cpa = round(spend / purchases, 4)
 
-        atc_rate = round((add_to_cart / impressions) * 100, 4) if impressions > 0 else 0.0
-        ic_rate = round((initiate_checkout / impressions) * 100, 4) if impressions > 0 else 0.0
-        purchase_rate = round((purchases / impressions) * 100, 4) if impressions > 0 else 0.0
-        atc_to_ic_rate = round((initiate_checkout / add_to_cart) * 100, 4) if add_to_cart > 0 else 0.0
-        ic_to_purchase_rate = round((purchases / initiate_checkout) * 100, 4) if initiate_checkout > 0 else 0.0
+        ctr = _bounded(ctr)
+        cpc = _bounded(cpc)
+        cpm = _bounded(cpm)
+        roas = _bounded(roas)
+        cpa = _bounded(cpa)
+        atc_rate = _bounded((add_to_cart / impressions) * 100) if impressions > 0 else 0.0
+        ic_rate = _bounded((initiate_checkout / impressions) * 100) if impressions > 0 else 0.0
+        purchase_rate = _bounded((purchases / impressions) * 100) if impressions > 0 else 0.0
+        atc_to_ic_rate = _bounded((initiate_checkout / add_to_cart) * 100) if add_to_cart > 0 else 0.0
+        ic_to_purchase_rate = _bounded((purchases / initiate_checkout) * 100) if initiate_checkout > 0 else 0.0
 
         try:
             creation_time = storage.get_ad_creation_time(ad_id)

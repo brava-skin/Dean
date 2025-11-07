@@ -1074,31 +1074,14 @@ def store_timeseries_data_in_supabase(supabase_client, ad_id: str, ad_data: Dict
         spend = safe_float_global(ad_data.get('spend'))
         purchases = safe_float_global(ad_data.get('purchases'))
 
-        ctr = (clicks / impressions * 100) if impressions > 0 else 0.0
-        cpc = (spend / clicks) if clicks > 0 else 0.0
-        cpm = (spend / impressions * 1000) if impressions > 0 else 0.0
-        roas = safe_float_global(ad_data.get('roas'))
-        cpa_val = ad_data.get('cpa')
-        cpa = (spend / purchases) if purchases > 0 else safe_float_global(cpa_val)
-
         metrics_to_track = {
             'impressions': impressions,
             'spend': spend,
             'clicks': clicks,
             'purchases': purchases,
-            'ctr': ctr,
-            'cpc': cpc,
-            'cpm': cpm,
-            'roas': roas,
-            'cpa': cpa,
         }
 
         lifecycle_id = ad_data.get('lifecycle_id') or f'lifecycle_{ad_id}'
-        metadata = {
-            'campaign_id': ad_data.get('campaign_id'),
-            'adset_id': ad_data.get('adset_id'),
-            'stage': stage,
-        }
 
         for metric_name, metric_value in metrics_to_track.items():
             value = safe_float_global(metric_value)
@@ -1113,12 +1096,6 @@ def store_timeseries_data_in_supabase(supabase_client, ad_id: str, ad_data: Dict
                 'window_type': '1h',
                 'window_size': 1,
                 'time_period': '1h',
-                'trend_direction': 'stable',
-                'anomalies_detected': False,
-                'seasonality_detected': False,
-                'metadata': metadata,
-                'timestamps': [timestamp],
-                'values': [value],
             }
 
             timeseries_data = validate_all_timestamps(timeseries_data)

@@ -453,53 +453,47 @@ class CreativeIntelligenceSystem:
             
             # Generate advanced prompt for OpenAI based on copy bank analysis
             prompt = f"""
-            You are an expert copywriter specializing in high-converting men's skincare advertisements. Analyze this high-performing {creative_type} and create {count} variations that maintain performance while avoiding fatigue.
+            You are a CTR-obsessed performance copy chief for a premium men's skincare brand. Study the SOURCE CREATIVE below and produce {count} fresh {creative_type} variations engineered to win the click immediately while keeping the brand elevated.
 
             SOURCE CREATIVE:
             "{source_content}"
 
-            COPY BANK ANALYSIS - EXISTING PATTERNS:
-            Primary Texts: Direct, benefit-focused, masculine tone, problem-solution format
-            Headlines: Short, punchy, benefit-driven, action-oriented
-            Descriptions: Technical credibility, specific benefits, masculine appeal
+            CORE OBJECTIVE:
+            - Drive an instant thumb-stop and click from achievement-driven men
+            - Keep copy sharp, confident, minimalist—no fluff, no hype
+            - Preserve premium, engineered-for-men positioning
 
-            STRICT REQUIREMENTS:
+            VOICE + ENERGY:
+            - Commanding, assured, no-nonsense
+            - Speak directly to men who expect performance
+            - Use active verbs and present tense
+            - Keep language punchy and concrete; every word must earn the click
 
-            ✅ DO'S:
-            - Use masculine, confident tone (not feminine skincare language)
-            - Focus on specific benefits: "fresh", "matte", "clean", "comfortable"
-            - Use problem-solution format: "Tired of X? This does Y"
-            - Include technical credibility: "dermatologically tested", "oil-to-milk"
-            - Keep primary texts 15-25 words, headlines 3-6 words, descriptions 8-15 words
-            - Use active voice and present tense
-            - Include sensory language: "fresh", "clean", "smooth", "comfortable"
-            - Address specific pain points: shine, tightness, buildup, irritation
-            - Use masculine appeal: "men who want", "designed for men", "performs"
-            - Include product specifics: "150ml", "morning and night", "daily use"
+            STRATEGY GUIDELINES:
+            - Hook with a high-impact pain point or result within the first 5 words
+            - Pair hard benefits (oil control, fast routine, upgraded feel) with elite credibility cues
+            - Highlight speed, efficiency, control, or engineered performance
+            - Reinforce sensory payoffs: clean, matte, refreshed, comfortable
+            - Close with a decisive action or payoff—own it, upgrade, level up
 
-            ❌ DON'TS:
-            - NO feminine language: "glowing", "radiant", "beautiful skin"
-            - NO generic claims: "amazing", "incredible", "revolutionary"
-            - NO medical claims: "cures", "treats", "heals", "fixes"
-            - NO superlatives: "best", "perfect", "ultimate", "miracle"
-            - NO emotional manipulation: "you'll love", "you need this"
-            - NO complex sentences or run-ons
-            - NO passive voice
-            - NO future tense promises
-            - NO competitor bashing
-            - NO price mentions or discounts
+            FORMAT RULES:
+            - Primary text: 15-22 words, two short sentences max, structured as Problem ▶ Solution ▶ Payoff
+            - Headlines: 3-5 words, all words capitalized, deliver a bold benefit or command
+            - Descriptions: 8-14 words, blend authority signal + specific result + usage cue
+            - Text overlays (if applicable): 2-4 words, all caps, split by " / " if multiple beats
 
-            TONE REQUIREMENTS:
-            - Confident but not arrogant
-            - Direct and straightforward
-            - Masculine but not aggressive
-            - Professional but approachable
-            - Benefit-focused, not feature-focused
+            MANDATORY DO'S:
+            - Lean into masculine markers: engineered, built, performance, control
+            - Name tangible details when available (e.g., "150ml", "oil-to-milk cleanser")
+            - Use decisive imperatives: Own, Upgrade, Command, Take
+            - Keep everything present tense and confident
 
-            STRUCTURE REQUIREMENTS:
-            - Primary texts: Problem + Solution + Benefit
-            - Headlines: Benefit + Action
-            - Descriptions: Credibility + Specific Benefit + Usage
+            HARD NO'S:
+            - No feminine descriptors (glow, radiant, pamper, etc.)
+            - No empty hype words (amazing, incredible, ultimate)
+            - No medical or cure claims
+            - No passive voice, run-on sentences, or future tense promises
+            - No discounts, pricing, or competitor mentions
 
             Return ONLY the {creative_type}s, one per line, without numbering, labels, or explanations.
             """
