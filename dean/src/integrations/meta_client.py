@@ -14,11 +14,22 @@ import json
 
 import logging
 import requests
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 
 # Import moved to avoid circular dependency - will import locally when needed
 from .slack import notify
 
 logger = logging.getLogger(__name__)
+# ---------------------------------------------------------------------------
+# Logging helpers
+# ---------------------------------------------------------------------------
+
+
+def _meta_log(level: int, message: str, *args) -> None:
+    logger.log(level, f"[META] {message}", *args)
+
+
 from infrastructure.error_handling import (
     retry_with_backoff,
     enhanced_retry_with_backoff,
@@ -1105,46 +1116,147 @@ class MetaClient:
                     counts['campaign_direct'] = campaign_count
                     # Use the higher count (campaign query is more comprehensive)
                     active_count = max(active_count, campaign_count)
-                    logger.info(f"📊 Campaign-level query found {campaign_count} active ads (vs {direct_count} from adset)")
+        _meta_log(logging.INFO, "Campaign-level query found %s active ads (vs %s from adset)", campaign_count, direct_count)
                 except Exception as e:
-                    logger.warning(f"Campaign-level query failed (non-critical): {e}")
+                    _meta_log(logging.WARNING, "Campaign-level query failed (non-critical): %s", e)
             
             # Method 2: Use insights API to verify (ads with recent data are definitely active)
             try:
-                insights = self.get_ad_insights(
-                    level="ad",
-                    fields=["ad_id"],
-                    filtering=[{"field": "adset.id", "operator": "EQUAL", "value": adset_id}],
-                    date_preset="today",
-                    limit=500
-                )
-                insights_ad_ids = {insight.get("ad_id") for insight in insights if insight.get("ad_id")}
-                counts['insights'] = len(insights_ad_ids)
-                
-                # Use the higher count (some ads might be active but not have insights yet)
-                active_count = max(active_count, len(insights_ad_ids))
+                insight_rows = self.get_recent_ad_insights(adset_id=adset_id, campaign_id=campaign_id)
+                insights_active = {
+                    row.get("ad_id")
+                    for row in insight_rows
+                    if (float(row.get("spend", 0) or 0) > 0) or (int(row.get("impressions", 0) or 0) > 0)
+                }
+                counts['insights'] = len(insights_active)
             except Exception as e:
-                logger.debug(f"Insights verification failed (non-critical): {e}")
+                _meta_log(logging.DEBUG, "Insights verification failed (non-critical): %s", e)
             
             # Method 3: Fallback to creative_storage table
             storage_count = self._count_active_from_creative_storage()
             if storage_count is not None:
                 counts['storage'] = storage_count
-                # Use the highest count from all methods
-                active_count = max(active_count, storage_count)
-            
-            logger.info(f"📊 Active ads counts: {counts}, final={active_count}")
-            return active_count
+
+            # Majority vote with tie-breakers
+            final_count = self._resolve_active_count(counts)
+            _meta_log(logging.INFO, "Active ads counts consensus %s => %s", counts, final_count)
+            return final_count
         except Exception as e:
-            logger.error(f"Error counting active ads in adset {adset_id}: {e}")
+            _meta_log(logging.ERROR, "Error counting active ads in adset %s: %s", adset_id, e)
             # Fallback to creative_storage if available
             storage_count = self._count_active_from_creative_storage()
             if storage_count is not None:
-                logger.info(f"Using creative_storage fallback count: {storage_count}")
+                _meta_log(logging.INFO, "Using creative_storage fallback count: %s", storage_count)
                 return storage_count
             # Final fallback to basic count
             ads = self.list_ads_in_adset(adset_id)
             return sum(1 for a in ads if str(a.get("status", "")).upper() == "ACTIVE")
+
+    def _resolve_active_count(self, counts: Dict[str, int]) -> int:
+        if not counts:
+            return 0
+        counter = Counter(counts.values())
+        most_common = counter.most_common()
+        if not most_common:
+            return 0
+        top_freq = most_common[0][1]
+        candidates = [value for value, freq in counter.items() if freq == top_freq]
+        if len(candidates) == 1:
+            return candidates[0]
+
+        insights_value = counts.get('insights')
+        if insights_value in candidates and insights_value:
+            return insights_value
+
+        non_zero_candidates = [v for v in candidates if v > 0]
+        if insights_value in candidates and insights_value == 0 and non_zero_candidates:
+            _meta_log(logging.WARNING, "Insights returned zero active ads while others reported %s. Using non-insights consensus.", non_zero_candidates)
+            return max(non_zero_candidates)
+
+        if non_zero_candidates:
+            return max(non_zero_candidates)
+        return max(candidates)
+
+    # ------------------------------------------------------------------
+    # Enhanced insights helpers
+    # ------------------------------------------------------------------
+
+    def get_recent_ad_insights(
+        self,
+        adset_id: Optional[str] = None,
+        campaign_id: Optional[str] = None,
+        days_back: int = 3,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """Fetch insights using a two-pass strategy (today + trailing window)."""
+
+        filters: List[Dict[str, Any]] = []
+        if adset_id:
+            filters.append({"field": "adset.id", "operator": "EQUAL", "value": adset_id})
+        if campaign_id:
+            filters.append({"field": "campaign.id", "operator": "EQUAL", "value": campaign_id})
+
+        base_fields = [
+            "ad_id",
+            "ad_name",
+            "adset_id",
+            "campaign_id",
+            "impressions",
+            "clicks",
+            "spend",
+            "actions",
+            "action_values",
+            "purchase_roas",
+        ]
+
+        insight_rows: Dict[str, Dict[str, Any]] = {}
+
+        # Pass 1: today
+        today_rows = self.get_ad_insights(
+            level="ad",
+            date_preset="today",
+            filtering=filters,
+            fields=base_fields,
+            limit=limit,
+        )
+        for row in today_rows:
+            if row.get("ad_id"):
+                insight_rows[row["ad_id"]] = row
+
+        # Pass 2: trailing window
+        now = datetime.now(timezone.utc)
+        since = (now - timedelta(days=days_back)).date().isoformat()
+        until = now.date().isoformat()
+
+        trailing_rows = self.get_ad_insights(
+            level="ad",
+            filtering=filters,
+            fields=base_fields,
+            limit=limit,
+            time_range={"since": since, "until": until},
+        )
+        for row in trailing_rows:
+            ad_id = row.get("ad_id")
+            if not ad_id:
+                continue
+            existing = insight_rows.get(ad_id)
+            if not existing:
+                insight_rows[ad_id] = row
+                continue
+            # Merge by taking max metrics observed
+            for key in ("impressions", "clicks"):
+                existing[key] = max(int(existing.get(key, 0) or 0), int(row.get(key, 0) or 0))
+            for key in ("spend",):
+                existing[key] = max(float(existing.get(key, 0) or 0.0), float(row.get(key, 0) or 0.0))
+            if row.get("actions"):
+                existing["actions"] = row["actions"]
+            if row.get("action_values"):
+                existing["action_values"] = row["action_values"]
+            if row.get("purchase_roas"):
+                existing["purchase_roas"] = row["purchase_roas"]
+
+        _meta_log(logging.DEBUG, "Fetched %s insight rows after two-pass strategy", len(insight_rows))
+        return list(insight_rows.values())
 
     # ----- Helper: get current ad set budget (account currency, e.g., EUR) -----
     def get_adset_budget(self, adset_id: str) -> Optional[float]:

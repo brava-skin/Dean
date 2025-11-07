@@ -116,6 +116,7 @@ from integrations import MetaClient, AccountAuth, ClientConfig
 from rules.rules import AdvancedRuleEngine as RuleEngine
 from stages.asc_plus import run_asc_plus_tick
 from infrastructure import now_local, getenv_f, getenv_i, getenv_b, cfg, cfg_or_env_f, cfg_or_env_i, cfg_or_env_b, cfg_or_env_list, safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name
+from infrastructure.utils import Timekit
 from infrastructure import start_background_scheduler, stop_background_scheduler, get_scheduler
 
 # ------------------------------- Constants --------------------------------
@@ -1033,190 +1034,139 @@ def store_timeseries_data_in_supabase(supabase_client, ad_id: str, ad_data: Dict
         return
     
     try:
-        # Store current metrics as time-series data point
-        from datetime import timedelta
-        import random
-        
-        metrics_to_track = ['ctr', 'cpa', 'roas', 'spend', 'purchases', 'cpc', 'cpm']
-        
-        for metric_name in metrics_to_track:
-            metric_value = ad_data.get(metric_name)
-            if metric_value is not None:
-                # Generate realistic time series data
-                current_time = datetime.now()
-                timestamps = []
-                values = []
-                
-                # Generate 24 hours of data (hourly points)
-                for i in range(24):
-                    hour_time = current_time - timedelta(hours=23-i)
-                    timestamps.append(hour_time.isoformat())
-                    
-                    # Generate realistic values with some variation
-                    base_value = safe_float_global(metric_value, 0)
-                    if base_value > 0:
-                        # Add some realistic variation (±20%)
-                        variation = random.uniform(0.8, 1.2)
-                        values.append(base_value * variation)
-                    else:
-                        values.append(0.0)
-                
-                # Calculate trend direction based on recent values
-                if len(values) >= 3:
-                    recent_avg = sum(values[-3:]) / 3
-                    older_avg = sum(values[-6:-3]) / 3 if len(values) >= 6 else values[0]
-                    if recent_avg > older_avg * 1.1:
-                        trend_direction = "increasing"
-                    elif recent_avg < older_avg * 0.9:
-                        trend_direction = "decreasing"
-                    else:
-                        trend_direction = "stable"
-                else:
-                    trend_direction = "stable"
-                
-                # Simple anomaly detection (values that are 3x the average)
-                avg_value = sum(values) / len(values) if values else 0
-                anomalies_detected = any(abs(v - avg_value) > avg_value * 2 for v in values) if avg_value > 0 else False
-                
-                # Simple seasonality detection (check for daily patterns)
-                seasonality_detected = len(set(values)) > len(values) * 0.7  # If values are too varied, no clear pattern
-                
-                timeseries_data = {
-                    'ad_id': ad_id,
-                    'lifecycle_id': ad_data.get('lifecycle_id', ''),
-                    'stage': stage,
-                    'metric_name': metric_name,
-                    'metric_value': safe_float_global(metric_value, DB_GLOBAL_FLOAT_MAX),
-                    'timestamp': current_time.isoformat(),
-                    'window_type': '1h',  # Hourly window
-                    'metadata': {
-                        'impressions': ad_data.get('impressions', 0),
-                        'clicks': ad_data.get('clicks', 0),
-                        'campaign_id': ad_data.get('campaign_id', ''),
-                        'adset_id': ad_data.get('adset_id', ''),
-                        'creative_id': ad_data.get('creative_id', ''),
-                        'ad_name': ad_data.get('ad_name', ''),
-                        'campaign_name': ad_data.get('campaign_name', ''),
-                        'adset_name': ad_data.get('adset_name', '')
-                    },
-                    'window_size': 1,  # 1 hour window
-                    'anomalies_detected': anomalies_detected,
-                    'seasonality_detected': seasonality_detected,
-                    'time_period': '1d',  # 1 day period
-                    'timestamps': timestamps,
-                    'values': values,
-                    'trend_direction': trend_direction
-                }
-                
-                # Validate all timestamps in time series data
-                timeseries_data = validate_all_timestamps(timeseries_data)
-                
-                # Get validated client for automatic validation
-                validated_client = _get_validated_supabase()
-                if validated_client:
-                    validated_client.insert('time_series_data', timeseries_data)
-                else:
-                    supabase_client.table('time_series_data').insert(timeseries_data).execute()
-        
-        notify(f"📊 Time-series data stored for {ad_id}: {len(metrics_to_track)} metrics with full time series")
+        metrics_to_track = {
+            'impressions': ad_data.get('impressions'),
+            'spend': ad_data.get('spend'),
+            'clicks': ad_data.get('clicks'),
+            'purchases': ad_data.get('purchases'),
+        }
+
+        timestamp = datetime.now(timezone.utc).isoformat()
+
+        for metric_name, metric_value in metrics_to_track.items():
+            if metric_value is None:
+                continue
+
+            timeseries_data = {
+                'ad_id': ad_id,
+                'lifecycle_id': ad_data.get('lifecycle_id', ''),
+                'stage': stage,
+                'metric_name': metric_name,
+                'metric_value': safe_float_global(metric_value, DB_GLOBAL_FLOAT_MAX),
+                'timestamp': timestamp,
+                'window_type': '1h',
+                'metadata': {
+                    'campaign_id': ad_data.get('campaign_id'),
+                    'adset_id': ad_data.get('adset_id'),
+                    'reason': ad_data.get('metadata', {}).get('reason') if isinstance(ad_data.get('metadata'), dict) else None,
+                },
+                'window_size': 1,
+                'anomalies_detected': False,
+                'seasonality_detected': False,
+                'time_period': '1h',
+                'timestamps': [timestamp],
+                'values': [safe_float_global(metric_value, DB_GLOBAL_FLOAT_MAX)],
+                'trend_direction': 'stable',
+            }
+
+            timeseries_data = validate_all_timestamps(timeseries_data)
+
+            validated_client = _get_validated_supabase()
+            if validated_client:
+                validated_client.insert('time_series_data', timeseries_data)
+            else:
+                supabase_client.table('time_series_data').insert(timeseries_data).execute()
         
     except (KeyError, ValueError, TypeError) as e:
-        logger.error(f"Failed to store time-series data: {e}", exc_info=True)
+        logger.error("[ASC] Failed to store time-series data: %s", e, exc_info=True)
 
 
 def collect_stage_ad_data(meta_client, settings: Dict[str, Any], stage: str) -> Dict[str, Dict[str, Any]]:
     """Collect actual ad data for a stage from Meta API."""
-    ad_data = {}
+    ad_data: Dict[str, Dict[str, Any]] = {}
+    timekit = Timekit()
+    account_today = timekit.today_ymd_account()
+    ids_cfg = settings.get("ids", {}) if isinstance(settings, dict) else {}
+    target_campaign = ids_cfg.get("asc_plus_campaign_id")
+    target_adset = ids_cfg.get("asc_plus_adset_id")
+
     try:
-        # Get all active ads from account insights (more reliable than stage-specific adsets)
-        insights_data = meta_client.get_ad_insights(level="ad", fields=[
-            "ad_id", "spend", "impressions", "clicks", "reach", "unique_clicks",
-            "actions", "action_values", "purchase_roas",
-            "campaign_name", "adset_name", "campaign_id", "adset_id"
-        ], date_preset="today")
-        
-        if insights_data:
-            for insight in insights_data:
-                ad_id = insight.get("ad_id")
-                if ad_id:
-                    # Extract actions data (these come from the actions array, not direct fields)
-                    actions = insight.get("actions", [])
-                    add_to_cart = 0
-                    initiate_checkout = 0
-                    purchases = 0
-                    
-                    for action in actions:
-                        action_type = action.get("action_type", "")
-                        action_value = float(action.get("value", 0))
-                        if action_type == "add_to_cart":
-                            add_to_cart = action_value
-                        elif action_type == "initiate_checkout":
-                            initiate_checkout = action_value
-                        elif action_type == "purchase":
-                            purchases = action_value
-                    
-                    # Extract revenue from action_values array
-                    action_values = insight.get("action_values", [])
-                    revenue = 0.0
-                    for av in action_values:
-                        if av.get("action_type") == "purchase":
-                            revenue += float(av.get("value", 0))
-                    
-                    # Extract ROAS from purchase_roas array (if available)
-                    purchase_roas_list = insight.get("purchase_roas", [])
-                    roas = 0.0
-                    if purchase_roas_list:
-                        roas = float(purchase_roas_list[0].get("value", 0))
-                    elif revenue > 0:
-                        # Compute ROAS if not available: revenue / spend
-                        spend_val = float(insight.get("spend", 0))
-                        roas = (revenue / spend_val) if spend_val > 0 else 0.0
-                    
-                    # Compute metrics from available fields (these are NOT direct API fields)
-                    spend_val = float(insight.get("spend", 0))
-                    impressions_val = int(insight.get("impressions", 0))
-                    clicks_val = int(insight.get("clicks", 0))
-                    
-                    # CTR = (clicks / impressions) * 100
-                    ctr = (clicks_val / impressions_val * 100) if impressions_val > 0 else 0.0
-                    
-                    # CPC = spend / clicks
-                    cpc = (spend_val / clicks_val) if clicks_val > 0 else 0.0
-                    
-                    # CPM = (spend / impressions) * 1000
-                    cpm = (spend_val / impressions_val * 1000) if impressions_val > 0 else 0.0
-                    
-                    # CPA = spend / purchases
-                    cpa = (spend_val / purchases) if purchases > 0 else float('inf')
-                    
-                    ad_data[ad_id] = {
-                        "ad_id": ad_id,
-                        "lifecycle_id": f"lifecycle_{ad_id}",
-                        "stage": stage,
-                        "status": "active",
-                        "spend": spend_val,
-                        "impressions": impressions_val,
-                        "clicks": clicks_val,
-                        "ctr": ctr,  # Computed from clicks/impressions
-                        "cpc": cpc,  # Computed from spend/clicks
-                        "cpm": cpm,  # Computed from spend/impressions
-                        "purchases": purchases,  # Extracted from actions array
-                        "add_to_cart": add_to_cart,  # Extracted from actions array
-                        "atc": add_to_cart,  # Alias for compatibility
-                        "ic": initiate_checkout,  # Extracted from actions array
-                        "initiate_checkout": initiate_checkout,
-                        "roas": roas,  # From purchase_roas array or computed
-                        "cpa": cpa,  # Computed from spend/purchases
-                        "revenue": revenue,  # Extracted from action_values array
-                        "date_start": datetime.now().strftime("%Y-%m-%d"),
-                        "date_end": datetime.now().strftime("%Y-%m-%d"),
-                        "campaign_name": insight.get("campaign_name", ""),
-                        "adset_name": insight.get("adset_name", ""),
-                        "metadata": {}
-                    }
-    except Exception as e:
-        notify(f"⚠️ Failed to collect {stage} ad data: {e}")
-    
+        insights_rows = meta_client.get_recent_ad_insights(
+            adset_id=target_adset,
+            campaign_id=target_campaign,
+        )
+        for row in insights_rows:
+            ad_id = row.get("ad_id")
+            if not ad_id:
+                continue
+
+            spend_val = float(row.get("spend", 0) or 0.0)
+            impressions_val = int(row.get("impressions", 0) or 0)
+            clicks_val = int(row.get("clicks", 0) or 0)
+
+            actions = row.get("actions", []) or []
+            add_to_cart = 0
+            initiate_checkout = 0
+            purchases = 0
+            for action in actions:
+                action_type = action.get("action_type")
+                value = float(action.get("value", 0) or 0)
+                if action_type == "add_to_cart":
+                    add_to_cart = int(value)
+                elif action_type == "initiate_checkout":
+                    initiate_checkout = int(value)
+                elif action_type == "purchase":
+                    purchases = int(value)
+
+            revenue = 0.0
+            for action_value in row.get("action_values", []) or []:
+                if action_value.get("action_type") == "purchase":
+                    revenue += float(action_value.get("value", 0) or 0.0)
+
+            purchase_roas_list = row.get("purchase_roas") or []
+            if purchase_roas_list:
+                roas = float(purchase_roas_list[0].get("value", 0) or 0.0)
+            elif spend_val > 0:
+                roas = revenue / spend_val
+            else:
+                roas = 0.0
+
+            ctr = (clicks_val / impressions_val * 100) if impressions_val > 0 else 0.0
+            cpc = (spend_val / clicks_val) if clicks_val > 0 else 0.0
+            cpm = (spend_val / impressions_val * 1000) if impressions_val > 0 else 0.0
+            cpa = (spend_val / purchases) if purchases > 0 else None
+
+            ad_data[ad_id] = {
+                "ad_id": ad_id,
+                "lifecycle_id": f"lifecycle_{ad_id}",
+                "stage": stage,
+                "status": "active",
+                "spend": spend_val,
+                "impressions": impressions_val,
+                "clicks": clicks_val,
+                "ctr": ctr,
+                "cpc": cpc,
+                "cpm": cpm,
+                "purchases": purchases,
+                "add_to_cart": add_to_cart,
+                "atc": add_to_cart,
+                "ic": initiate_checkout,
+                "initiate_checkout": initiate_checkout,
+                "roas": roas,
+                "cpa": cpa,
+                "revenue": revenue,
+                "date_start": account_today,
+                "date_end": account_today,
+                "campaign_name": row.get("campaign_name", ""),
+                "campaign_id": row.get("campaign_id"),
+                "adset_name": row.get("adset_name", ""),
+                "adset_id": row.get("adset_id"),
+                "has_recent_activity": bool(spend_val or impressions_val or clicks_val),
+                "metadata": {"source": "meta_insights"},
+            }
+    except Exception as exc:
+        logger.warning("[ASC] Failed to collect %s ad data: %s", stage, exc)
+
     return ad_data
 
 def store_creative_data_in_supabase(supabase_client, meta_client, ad_id: str, stage: str) -> None:
