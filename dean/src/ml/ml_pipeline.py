@@ -338,9 +338,29 @@ class MLPipeline:
             
             # Alert if any model has low accuracy
             for model_name, metrics in results.items():
-                accuracy = metrics.get('accuracy', 0)
+                if not isinstance(metrics, dict):
+                    continue
+
+                status = metrics.get('status')
+                accuracy = metrics.get('accuracy')
+
+                # Skip warnings when model isn't available or there's no data yet
+                if status in {'missing_model', 'insufficient_data'}:
+                    self.logger.info(
+                        "Skipping validation warning for %s (status=%s)",
+                        model_name,
+                        status,
+                    )
+                    continue
+
+                if accuracy is None:
+                    # No accuracy metric to evaluate (likely error already logged)
+                    continue
+
                 if accuracy < 0.6:
-                    self.logger.warning(f"Model {model_name} accuracy dropped to {accuracy:.2%}")
+                    self.logger.warning(
+                        f"Model {model_name} accuracy dropped to {accuracy:.2%}"
+                    )
                     # Could trigger alerts here
             
             return results

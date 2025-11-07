@@ -1540,7 +1540,12 @@ class MetaClient:
                     counts['campaign_direct'] = campaign_count
                     # Use the higher count (campaign query is more comprehensive)
                     active_count = max(active_count, campaign_count)
-        _meta_log(logging.INFO, "Campaign-level query found %s active ads (vs %s from adset)", campaign_count, direct_count)
+                    _meta_log(
+                        logging.INFO,
+                        "Campaign-level query found %s active ads (vs %s from adset)",
+                        campaign_count,
+                        direct_count,
+                    )
                 except Exception as e:
                     _meta_log(logging.WARNING, "Campaign-level query failed (non-critical): %s", e)
             

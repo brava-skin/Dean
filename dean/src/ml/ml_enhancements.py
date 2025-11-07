@@ -174,14 +174,17 @@ class ModelValidator:
                 ).eq('stage', stage).eq('is_active', True).execute()
                 
                 if not model_exists.data:
-                    self.logger.info(f"Model {model_name} not found in database, skipping validation")
+                    self.logger.info(
+                        f"Model {model_name} not found in database, skipping validation"
+                    )
                     results[model_name] = {
-                        'accuracy': 0.0,
-                        'mae': 0.0,
-                        'r2_score': 0.0,
+                        'accuracy': None,
+                        'mae': None,
+                        'r2_score': None,
                         'is_performing_well': False,
                         'sample_size': 0,
-                        'error': 'Model not found in database'
+                        'status': 'missing_model',
+                        'message': 'Model not found in database'
                     }
                     continue
                 
@@ -194,9 +197,10 @@ class ModelValidator:
                             'mae': validation_result.mae,
                             'r2_score': validation_result.r2_score,
                             'is_performing_well': validation_result.is_performing_well,
-                            'sample_size': len(validation_result.prediction_vs_actual)
+                            'sample_size': len(validation_result.prediction_vs_actual),
+                            'status': 'validated'
                         }
-                        
+
                         self.logger.info(
                             f"Validated {model_name}: "
                             f"Accuracy={validation_result.accuracy:.2%}, "
@@ -204,20 +208,25 @@ class ModelValidator:
                         )
                     else:
                         results[model_name] = {
-                            'accuracy': 0.0,
-                            'mae': 0.0,
-                            'r2_score': 0.0,
+                            'accuracy': None,
+                            'mae': None,
+                            'r2_score': None,
                             'is_performing_well': False,
                             'sample_size': 0,
-                            'status': 'insufficient_data'
+                            'status': 'insufficient_data',
+                            'message': 'Not enough predictions to validate'
                         }
-                        
+
                 except Exception as e:
                     self.logger.warning(f"Could not validate {model_name}: {e}")
                     results[model_name] = {
-                        'accuracy': 0.0,
-                        'error': str(e),
-                        'status': 'error'
+                        'accuracy': None,
+                        'mae': None,
+                        'r2_score': None,
+                        'is_performing_well': False,
+                        'sample_size': 0,
+                        'status': 'error',
+                        'error': str(e)
                     }
             
             return results
