@@ -101,7 +101,7 @@ class SupabaseReportingClient:
             }
             
             # Stage-specific metrics
-        for stage in ['asc_plus']:
+            for stage in ['asc_plus']:
                 stage_df = df[df['stage'] == stage]
                 if not stage_df.empty:
                     summary['stages'][stage] = {
@@ -450,7 +450,7 @@ class SystemHealthAnalyzer:
             
             # Stage health
             stage_health = {}
-        for stage in ['asc_plus']:
+            for stage in ['asc_plus']:
                 stage_data = df[df['stage'] == stage]
                 if not stage_data.empty:
                     stage_health[stage] = stage_data['health_score'].mean()
