@@ -341,7 +341,7 @@ def format_run_header(status: str, time_str: str, profile: str, spend: float, pu
     def _fmt_int(value: int) -> str:
         return f"{value:,}"
 
-    ctr_str = "—" if ctr is None else _fmt_pct(ctr, 1)
+    ctr_str = "—" if ctr is None else fmt_pct(ctr, 1)
     cpc_str = "—" if cpc is None else _fmt_currency(cpc)
     cpm_str = "—" if cpm is None else _fmt_currency(cpm)
 
