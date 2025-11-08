@@ -1456,6 +1456,16 @@ class XGBoostPredictor:
                 and val_r2 > 0.98
                 and not self.config.allow_perfect_scores
             ):
+                if len(val_df) < 10:
+                    self.logger.info(
+                        "Validation R² %.4f for %s_%s appears perfect with only %s validation rows. Using fallback baseline.",
+                        val_r2,
+                        model_type,
+                        stage,
+                        len(val_df),
+                    )
+                    fallback_frame = train_df if not train_df.empty else df_features
+                    return self._train_baseline_from_frame(model_type, stage, target_col, fallback_frame, original_feature_cols)
                 self.logger.error(
                     "Validation R² %.4f for %s_%s appears unrealistic. "
                     "Training aborted; set allow_perfect_scores=True to override.",
