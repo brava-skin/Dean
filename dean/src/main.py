@@ -18,6 +18,7 @@ optimize performance and scale intelligently.
 """
 
 import argparse
+import io
 import json
 import logging
 import os
@@ -28,6 +29,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+from io import TextIOWrapper
 
 import pandas as pd
 import yaml
@@ -79,6 +82,64 @@ def configure_logging_filters() -> None:
 
 
 configure_logging_filters()
+
+
+def _install_stdout_noise_filter() -> None:
+    class _NoiseFilter(io.TextIOBase):
+        def __init__(self, wrapped: TextIOWrapper):
+            self._wrapped = wrapped
+            self._buffer = ""
+            self._suppressed_prefixes = (
+                "📋 Campaign Configuration",
+                "- Campaign Type:",
+                "- Budget:",
+                "- Target:",
+                "- Audience:",
+                "- Creative Type:",
+                "📁 Checking configuration files",
+                "total ",
+                "drwx",
+                "-rw-",
+                "production.yaml",
+                "rules.yaml",
+                "settings.yaml",
+                "# ── ASC+ Campaign Configuration",
+                "asc_plus:",
+                "  asc_plus:",
+                "  daily_budget_eur:",
+                "  keep_ads_live:",
+                "  max_active_ads:",
+                "  target_active_ads:",
+                "  optimization_goal:",
+            )
+
+        def write(self, data: str) -> int:  # type: ignore[override]
+            self._buffer += data
+            written = 0
+            while "\n" in self._buffer:
+                line, self._buffer = self._buffer.split("\n", 1)
+                if not self._should_suppress(line):
+                    self._wrapped.write(line + "\n")
+                    written += len(line) + 1
+            return written
+
+        def flush(self) -> None:  # type: ignore[override]
+            if self._buffer and not self._should_suppress(self._buffer):
+                self._wrapped.write(self._buffer)
+            self._buffer = ""
+            self._wrapped.flush()
+
+        def _should_suppress(self, line: str) -> bool:
+            stripped = line.strip()
+            if not stripped:
+                return False
+            return any(stripped.startswith(prefix) for prefix in self._suppressed_prefixes)
+
+    if not isinstance(sys.stdout, _NoiseFilter):
+        sys.stdout = _NoiseFilter(sys.stdout)  # type: ignore[assignment]
+
+
+_install_stdout_noise_filter()
 
 # -----------------------------------------------------
 # Shared metric helpers
