@@ -17,47 +17,39 @@ thresholds:
 
 # ── Minimum Requirements ──────────────────────────────
 minimums:
-  impressions: 200
-  clicks: 5
-  spend_eur: 20
+  impressions: 1500
+  clicks: 15
+  spend_eur: 35
 
 # ── ASC+ Campaign Rules ───────────────────────────────
 # Simple rules for ASC+ campaign - always 10 creatives live (Andromeda compliance)
 asc_plus:
   minimums:
-    min_impressions: 200
-    min_spend_eur: 20
-    min_clicks: 5
+    min_impressions: 1500
+    min_spend_eur: 35
+    min_clicks: 15
+    min_delivery_hours: 24
+    min_link_clicks: 15
+  
+  keep:
+    - {type: "ctr_gte", ctr_gte: 0.015}
+    - {type: "ctr_cpm_combo", ctr_gte: 0.012, cpm_lte: 55}
+  
+  locks:
+    - {type: "ctr_cpm_lock", ctr_gte: 0.018, cpm_lte: 55, evaluation_hours: 48, lock_hours: 72}
   
   kill:
-    # Early performance indicators
-    - {type: "zero_performance_quick_kill", spend_gte: 25, ctr_lt: 0.001}
-    
-    # CPM management
-    - {type: "cpm_above", cpm_above: 120, spend_gte: 30}
-    - {type: "cpm_above", cpm_above: 100, spend_gte: 40}
-    - {type: "cpm_increase", cpm_increase_pct: 80, spend_gte: 25}
-    
-    # Performance validation
-    - {type: "ctr_below", ctr_lt: 0.008, spend_gte: 30}
-    - {type: "spend_no_purchase", spend_gte: 60}
-    - {type: "atc_no_purchase", atc_gte: 1, spend_gte: 50, days: 3}
-    
-    # CPA validation
-    - {type: "cpa_gte", cpa_gte: 40}
-    - {type: "roas_below", roas_lt: 0.8, spend_gte: 50}
-    
-    # ATC Performance
-    - {type: "atc_rate_below", atc_rate_lt: 0.005, spend_gte: 50, clicks_gte: 50}
-    - {type: "cost_per_atc_above", cost_per_atc_gte: 15, spend_gte: 40}
+    - {type: "ctr_cpm_spend_combo", spend_gte: 45, ctr_lt: 0.01, cpm_gt: 65}
+    - {type: "ctr_spend_floor", spend_gte: 60, ctr_lt: 0.007}
+    - {type: "cpm_spend_ctr_combo", spend_gte: 60, cpm_gt: 120, ctr_lt: 0.012}
   
   # Engine configuration
   engine:
     consecutive_ticks_required: 2
     
     fairness:
-      min_spend_before_kill_eur: 20
-      min_runtime_hours: 12
+      min_spend_before_kill_eur: 35
+      min_runtime_hours: 24
     
     learning:
       max_learning_budget_eur: 60

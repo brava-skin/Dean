@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple, Iterable
 
 import pandas as pd
@@ -61,12 +61,6 @@ LOCAL_TZ = ZoneInfo(os.getenv("ACCOUNT_TZ", os.getenv("ACCOUNT_TIMEZONE", "Europ
 ACCOUNT_CURRENCY = os.getenv("ACCOUNT_CURRENCY", "EUR")
 
 
-def _ctr(row: Dict[str, Any]) -> float:
-    imps = safe_f(row.get("impressions"))
-    clicks = safe_f(row.get("clicks"))
-    return (clicks / imps) if imps > 0 else 0.0
-
-
 def _roas(row: Dict[str, Any]) -> float:
     """Extract ROAS from purchase_roas array."""
     roas_list = row.get("purchase_roas") or []
@@ -104,12 +98,187 @@ def _cpm(row: Dict[str, Any]) -> float:
     return (spend / imps * 1000) if imps > 0 else 0.0
 
 
+def _link_clicks(row: Dict[str, Any]) -> float:
+    """Prefer Meta inline/link clicks over generic click totals."""
+    if isinstance(row, dict):
+        if row.get("inline_link_clicks") is not None:
+            return safe_f(row.get("inline_link_clicks"))
+        if row.get("link_clicks") is not None:
+            return safe_f(row.get("link_clicks"))
+    return safe_f(row.get("clicks"))
+
+
+def _ctr(row: Dict[str, Any]) -> float:
+    imps = safe_f(row.get("impressions"))
+    clicks = _link_clicks(row)
+    return (clicks / imps) if imps > 0 else 0.0
+
+
 def _meets_minimums(row: Dict[str, Any], min_impressions: int, min_clicks: int, min_spend: float) -> bool:
     return (
         safe_f(row.get("spend")) >= min_spend
         and safe_f(row.get("impressions")) >= min_impressions
-        and safe_f(row.get("clicks")) >= min_clicks
+        and _link_clicks(row) >= min_clicks
     )
+
+
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        return datetime.fromisoformat(value)
+    except Exception:
+        return None
+
+
+def _compute_hours_live(created_at: Optional[datetime], now: Optional[datetime] = None) -> float:
+    if not created_at:
+        return 0.0
+    reference = now or datetime.now(timezone.utc)
+    if created_at > reference:
+        return 0.0
+    return max(0.0, (reference - created_at).total_seconds() / 3600.0)
+
+
+def _should_keep_creative(keep_rules: List[Dict[str, Any]], ctr: float, cpm: float) -> bool:
+    for rule in keep_rules or []:
+        rule_type = rule.get("type")
+        if rule_type == "ctr_gte":
+            if ctr >= rule.get("ctr_gte", 0):
+                return True
+        elif rule_type == "ctr_cpm_combo":
+            if ctr >= rule.get("ctr_gte", 0) and cpm <= rule.get("cpm_lte", float("inf")):
+                return True
+    return False
+
+
+def _evaluate_lock_rules(
+    lock_rules: List[Dict[str, Any]],
+    ctr: float,
+    cpm: float,
+    now: datetime,
+    existing_lock_info: Optional[Dict[str, Any]],
+) -> Tuple[bool, Dict[str, Any], bool]:
+    lock_info = dict(existing_lock_info or {})
+    changed = False
+
+    locked_until = _parse_iso_datetime(lock_info.get("locked_until") if isinstance(lock_info, dict) else None)
+    candidate_since = _parse_iso_datetime(lock_info.get("high_ctr_met_since") if isinstance(lock_info, dict) else None)
+
+    is_locked = False
+    if locked_until and now < locked_until:
+        is_locked = True
+    elif locked_until and now >= locked_until:
+        lock_info.pop("locked_until", None)
+        locked_until = None
+        changed = True
+
+    condition_met = False
+    for rule in lock_rules or []:
+        if rule.get("type") != "ctr_cpm_lock":
+            continue
+        if ctr >= rule.get("ctr_gte", 0) and cpm <= rule.get("cpm_lte", float("inf")):
+            condition_met = True
+            evaluation_hours = float(rule.get("evaluation_hours", 48))
+            lock_hours = float(rule.get("lock_hours", 72))
+            if not candidate_since:
+                candidate_since = now
+                lock_info["high_ctr_met_since"] = now.isoformat()
+                changed = True
+            elif now - candidate_since >= timedelta(hours=evaluation_hours):
+                locked_until = now + timedelta(hours=lock_hours)
+                lock_info["locked_until"] = locked_until.isoformat()
+                lock_info.pop("high_ctr_met_since", None)
+                changed = True
+                is_locked = True
+            break
+
+    if not condition_met and not is_locked and candidate_since:
+        lock_info.pop("high_ctr_met_since", None)
+        candidate_since = None
+        changed = True
+
+    return is_locked, lock_info, changed
+
+
+def _has_minimum_delivery(
+    ad_id: str,
+    ad: Dict[str, Any],
+    insight: Dict[str, Any],
+    minimums: Dict[str, Any],
+    creation_lookup: Dict[str, datetime],
+    now: datetime,
+) -> Tuple[bool, float, float, float, float]:
+    min_spend = float(minimums.get("min_spend_eur", minimums.get("min_spend", 0)) or 0)
+    min_impressions = int(minimums.get("min_impressions", 0) or 0)
+    min_link_clicks = int(minimums.get("min_link_clicks", minimums.get("min_clicks", 0) or 0) or 0)
+    min_hours = float(minimums.get("min_delivery_hours", 0) or 0)
+
+    spend = safe_f(insight.get("spend"))
+    impressions = safe_f(insight.get("impressions"))
+    link_clicks = _link_clicks(insight)
+
+    created_at = creation_lookup.get(ad_id)
+    if not created_at:
+        fallback = (
+            _parse_created_time(ad.get("created_time"))
+            or _parse_created_time(insight.get("created_time"))
+            or _parse_created_time(insight.get("date_start"))
+        )
+        if fallback:
+            creation_lookup[ad_id] = fallback
+            created_at = fallback
+
+    hours_live = _compute_hours_live(created_at, now)
+
+    if spend < min_spend or impressions < min_impressions or link_clicks < min_link_clicks:
+        return False, spend, impressions, link_clicks, hours_live
+    if min_hours and hours_live < min_hours:
+        return False, spend, impressions, link_clicks, hours_live
+    return True, spend, impressions, link_clicks, hours_live
+
+
+def _load_lock_metadata(
+    supabase_client: Any,
+    ad_ids: List[str],
+    stage: str = "asc_plus",
+) -> Tuple[Dict[str, Any], Dict[str, Dict[str, Any]]]:
+    metadata_map: Dict[str, Any] = {}
+    lock_state: Dict[str, Dict[str, Any]] = {}
+
+    if not supabase_client or not ad_ids:
+        return metadata_map, lock_state
+
+    try:
+        response = (
+            supabase_client.table("ad_lifecycle")
+            .select("ad_id, metadata")
+            .in_("ad_id", ad_ids)
+            .eq("stage", stage)
+            .execute()
+        )
+        for row in getattr(response, "data", []) or []:
+            ad_id = str(row.get("ad_id") or "")
+            if not ad_id:
+                continue
+            metadata = row.get("metadata")
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except Exception:
+                    metadata = {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata_map[ad_id] = metadata
+            lock_info = metadata.get("lock")
+            if isinstance(lock_info, dict):
+                lock_state[ad_id] = lock_info
+    except Exception as exc:
+        logger.debug(f"Failed to load lock metadata: {exc}")
+
+    return metadata_map, lock_state
 
 
 def _active_count(ads_list: List[Dict[str, Any]]) -> int:
@@ -2141,38 +2310,161 @@ def _legacy_run_asc_plus_tick(
         # Process ads for kill decisions
         asc_rules = cfg(rules, "asc_plus") or {}
         kill_rules = asc_rules.get("kill", [])
+        keep_rules = asc_rules.get("keep", [])
+        lock_rules = asc_rules.get("locks", [])
+        minimums_cfg = asc_rules.get("minimums", {})
+        now_utc = datetime.now(timezone.utc)
+
+        creation_lookup: Dict[str, datetime] = {}
+        metadata_map: Dict[str, Any] = {}
+        lock_state: Dict[str, Dict[str, Any]] = {}
+        metadata_updates: Dict[str, Dict[str, Any]] = {}
+        supabase_lock_client: Optional[Any] = None
+
+        try:
+            from infrastructure.supabase_storage import get_validated_supabase_client, SupabaseStorage
+
+            supabase_lock_client = get_validated_supabase_client(enable_validation=True)
+            if supabase_lock_client:
+                ad_ids_for_lookup = [str(ad.get("id") or "") for ad in active_ads if ad.get("id")]
+                metadata_map, lock_state = _load_lock_metadata(supabase_lock_client, ad_ids_for_lookup)
+                storage_for_minimums = SupabaseStorage(supabase_lock_client)
+                for lookup_ad_id in ad_ids_for_lookup:
+                    created_at_val = storage_for_minimums.get_ad_creation_time(lookup_ad_id)
+                    if created_at_val:
+                        creation_lookup[lookup_ad_id] = created_at_val
+        except ImportError:
+            supabase_lock_client = None
+        except Exception as exc:
+            logger.debug(f"Failed to initialize Supabase helpers for kill evaluation: {exc}")
+            supabase_lock_client = supabase_lock_client or None
         
         killed_count = 0
         for ad in active_ads:
-            ad_id = ad.get("id")
-            ad_insight = next((i for i in insights if i.get("ad_id") == ad_id), None)
-            
+            ad_id_raw = ad.get("id")
+            ad_id = str(ad_id_raw) if ad_id_raw else ""
+            if not ad_id:
+                continue
+
+            ad_insight = next((i for i in insights if str(i.get("ad_id")) == ad_id), None)
             if not ad_insight:
                 continue
+
+            has_minimums, spend, impressions, link_clicks, hours_live = _has_minimum_delivery(
+                ad_id,
+                ad,
+                ad_insight,
+                minimums_cfg,
+                creation_lookup,
+                now_utc,
+            )
+            if not has_minimums:
+                logger.debug(
+                    "Skipping kill evaluation for %s: insufficient delivery (spend=€%.2f, impressions=%.0f, link_clicks=%.0f, hours=%.1f)",
+                    _short_id(ad_id),
+                    spend,
+                    impressions,
+                    link_clicks,
+                    hours_live,
+                )
+                continue
             
-            # Evaluate kill rules
-            should_kill = False
-            kill_reason = ""
-            
-            spend = safe_f(ad_insight.get("spend"))
             ctr = _ctr(ad_insight)
             cpa = _cpa(ad_insight)
             roas = _roas(ad_insight)
             cpm = _cpm(ad_insight)
             purch, atc = _purchase_and_atc_counts(ad_insight)
+
+            # Evaluate lock rules first (may skip kill checks)
+            lock_info_existing = lock_state.get(ad_id, {})
+            is_locked = False
+            if lock_rules:
+                lock_result, lock_info, lock_changed = _evaluate_lock_rules(
+                    lock_rules,
+                    ctr,
+                    cpm,
+                    now_utc,
+                    lock_info_existing,
+                )
+                is_locked = lock_result
+                if lock_changed:
+                    meta = metadata_map.get(ad_id)
+                    if not isinstance(meta, dict):
+                        meta = {}
+                    if lock_info:
+                        meta["lock"] = {k: v for k, v in lock_info.items() if v is not None}
+                        lock_state[ad_id] = lock_info
+                    else:
+                        meta.pop("lock", None)
+                        lock_state.pop(ad_id, None)
+                    metadata_map[ad_id] = meta
+                    metadata_updates[ad_id] = meta
+                else:
+                    if lock_info:
+                        lock_state[ad_id] = lock_info
+            if is_locked:
+                logger.debug(
+                    "Creative %s is lock-protected; skipping performance kill checks.",
+                    _short_id(ad_id),
+                )
+                continue
+
+            # Apply keep rules (short-circuit kill evaluation)
+            if _should_keep_creative(keep_rules, ctr, cpm):
+                logger.debug(
+                    "Creative %s meets keep conditions (CTR=%.2f%%, CPM=€%.2f); skipping kill rules.",
+                    _short_id(ad_id),
+                    ctr * 100,
+                    cpm,
+                )
+                continue
             
-            # Apply kill rules
+            should_kill = False
+            kill_reason = ""
+            
             for rule in kill_rules:
                 rule_type = rule.get("type")
                 
-                if rule_type == "zero_performance_quick_kill":
+                if rule_type == "ctr_cpm_spend_combo":
+                    if (
+                        spend >= rule.get("spend_gte", 0)
+                        and ctr < rule.get("ctr_lt", 0)
+                        and cpm > rule.get("cpm_gt", float("inf"))
+                    ):
+                        should_kill = True
+                        kill_reason = (
+                            f"CTR {ctr*100:.2f}% with CPM €{cpm:.2f} after €{spend:.2f} spend"
+                        )
+                        break
+                
+                elif rule_type == "ctr_spend_floor":
+                    if spend >= rule.get("spend_gte", 0) and ctr < rule.get("ctr_lt", 0):
+                        should_kill = True
+                        kill_reason = (
+                            f"CTR {ctr*100:.2f}% below floor after €{spend:.2f} spend"
+                        )
+                        break
+                
+                elif rule_type == "cpm_spend_ctr_combo":
+                    if (
+                        spend >= rule.get("spend_gte", 0)
+                        and cpm > rule.get("cpm_gt", float("inf"))
+                        and ctr < rule.get("ctr_lt", 0)
+                    ):
+                        should_kill = True
+                        kill_reason = (
+                            f"CPM €{cpm:.2f} too high with CTR {ctr*100:.2f}% after €{spend:.2f} spend"
+                        )
+                        break
+
+                elif rule_type == "zero_performance_quick_kill":
                     if spend >= rule.get("spend_gte", 0) and ctr < rule.get("ctr_lt", 0):
                         should_kill = True
                         kill_reason = "Zero performance"
                         break
                 
                 elif rule_type == "cpm_above":
-                    if spend >= rule.get("spend_gte", 0) and cpm > rule.get("cpm_above", float('inf')):
+                    if spend >= rule.get("spend_gte", 0) and cpm > rule.get("cpm_above", float("inf")):
                         should_kill = True
                         kill_reason = f"CPM too high: €{cpm:.2f}"
                         break
@@ -2290,6 +2582,15 @@ def _legacy_run_asc_plus_tick(
                 except (KeyError, ValueError, TypeError, AttributeError) as e:
                     logger.error(f"Failed to kill ad {ad_id}: {e}", exc_info=True)
                     notify(f"⚠️ Failed to kill ad {ad_id}: {e}")
+        
+        if supabase_lock_client and metadata_updates:
+            for meta_ad_id, meta in metadata_updates.items():
+                if not isinstance(meta, dict):
+                    continue
+                try:
+                    supabase_lock_client.table("ad_lifecycle").update({"metadata": meta}).eq("ad_id", meta_ad_id).eq("stage", "asc_plus").execute()
+                except Exception as exc:
+                    logger.debug(f"Failed to persist lock metadata for {meta_ad_id}: {exc}")
         
         # Generate new creatives if needed - SMART: Only generate 1 at a time when needed
         # Refresh active count after kills using improved counting method (with campaign-level verification)
