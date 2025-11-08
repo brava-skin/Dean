@@ -1092,12 +1092,28 @@ def _guardrail_kill(metrics: Dict[str, Any]) -> Tuple[bool, str]:
     purchases = safe_f(metrics.get("purchases"))
     roas = safe_f(metrics.get("roas"))
     cpm = safe_f(metrics.get("cpm"))
-    ad_age_days = safe_f(metrics.get("ad_age_days"))
     stage_hours = safe_f(metrics.get("stage_duration_hours"))
 
-    reasons: List[str] = []
+    MIN_AGE_DAYS_FOR_KILL = 3.0
+    ad_age_days = safe_f(metrics.get("ad_age_days"))
+    derived_age_days = max(ad_age_days, (stage_hours / 24.0) if stage_hours else 0.0)
 
-    is_fresh = (stage_hours and stage_hours < 6) or (ad_age_days and ad_age_days < 0.25)
+    if derived_age_days < MIN_AGE_DAYS_FOR_KILL:
+        emergency_reasons: List[str] = []
+        if spend >= 30 and purchases == 0 and ctr < 0.3:
+            emergency_reasons.append(f"Emergency kill: Spend €{spend:.2f} with CTR {ctr:.2f}% and no conversions (<3d)")
+        if spend >= 20 and atc == 0 and clicks <= 1 and ctr < 0.2:
+            emergency_reasons.append("Emergency kill: No engagement after significant spend (<3d)")
+        if spend >= 15 and cpm > 150:
+            emergency_reasons.append(f"Emergency kill: CPM €{cpm:.2f} after spend €{spend:.2f} (<3d)")
+        if spend >= 20 and roas <= 0:
+            emergency_reasons.append(f"Emergency kill: ROAS {roas:.2f} after spend €{spend:.2f} (<3d)")
+
+        if emergency_reasons:
+            return True, emergency_reasons[0]
+        return False, ""
+
+    reasons: List[str] = []
 
     if spend >= 12 and purchases == 0 and ctr < 0.6:
         reasons.append(f"Spend €{spend:.2f} with CTR {ctr:.2f}% and no conversions")
@@ -1109,10 +1125,6 @@ def _guardrail_kill(metrics: Dict[str, Any]) -> Tuple[bool, str]:
         reasons.append(f"CPM €{cpm:.2f} after spend €{spend:.2f}")
     if spend >= 5 and atc == 0 and purchases == 0 and ctr < 0.7:
         reasons.append("No intent events despite initial spend")
-
-    if is_fresh and spend < 15:
-        # Give brand new ads a chance unless we already spent aggressively
-        reasons = [r for r in reasons if "Spend €" in r and spend >= 12]
 
     if reasons:
         return True, reasons[0]
@@ -3243,14 +3255,6 @@ def run_asc_plus_tick(
                 active_count = max(0, active_count - 1)
                 _record_lifecycle_event(ad_id, "PAUSED", kill_reason)
             continue
-        promote, promote_reason = _guardrail_promote(metrics)
-        if promote:
-            promoted_ad_id = _promote_ad(client, ad_id, adset_id)
-            if promoted_ad_id:
-                promoted_ads.append((ad_id, promoted_ad_id, promote_reason))
-                active_count += 1
-                metrics_map[promoted_ad_id] = _build_ad_metrics({"ad_id": promoted_ad_id, "spend": 0, "impressions": 0, "clicks": 0}, "asc_plus", account_today)
-                _record_lifecycle_event(promoted_ad_id, "ACTIVE", promote_reason)
 
     # Refresh active count after guardrails
     try:
