@@ -303,6 +303,20 @@ class CreativeIntelligenceSystem:
             if not self.supabase_client:
                 return False
             
+            def _float(value: Any, default: float = 0.0) -> float:
+                if value in (None, "", [], {}):
+                    return default
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return default
+
+            def _int(value: Any, default: int = 0) -> int:
+                try:
+                    return int(_float(value, float(default)))
+                except (TypeError, ValueError):
+                    return default
+            
             # Track performance for each creative type
             for creative_type, creative_id in creative_ids.items():
                 if not creative_id:
@@ -314,33 +328,31 @@ class CreativeIntelligenceSystem:
                     "stage": stage,
                     "date_start": performance_data.get("date_start", datetime.now().strftime("%Y-%m-%d")),
                     "date_end": performance_data.get("date_end", datetime.now().strftime("%Y-%m-%d")),
-                    "impressions": int(performance_data.get("impressions", 0)),
-                    "clicks": int(performance_data.get("clicks", 0)),
-                    "spend": float(performance_data.get("spend", 0)),
-                    "purchases": int(performance_data.get("purchases", 0)),
-                    "add_to_cart": int(performance_data.get("add_to_cart", 0)),
-                    "initiate_checkout": int(performance_data.get("initiate_checkout", 0)),
-                    "ctr": float(performance_data.get("ctr", 0)),
-                    "cpc": float(performance_data.get("cpc", 0)),
-                    "cpm": float(performance_data.get("cpm", 0)),
-                    "roas": float(performance_data.get("roas", 0)),
-                    "cpa": float(performance_data.get("cpa", 0)),
-                    "engagement_rate": float(performance_data.get("engagement_rate", 0)),
-                    "conversion_rate": float(performance_data.get("conversion_rate", 0))
+                    "impressions": _int(performance_data.get("impressions")),
+                    "clicks": _int(performance_data.get("clicks")),
+                    "spend": _float(performance_data.get("spend")),
+                    "purchases": _int(performance_data.get("purchases")),
+                    "add_to_cart": _int(performance_data.get("add_to_cart")),
+                    "initiate_checkout": _int(performance_data.get("initiate_checkout")),
+                    "ctr": _float(performance_data.get("ctr")),
+                    "cpc": _float(performance_data.get("cpc")),
+                    "cpm": _float(performance_data.get("cpm")),
+                    "roas": _float(performance_data.get("roas")),
+                    "cpa": _float(performance_data.get("cpa")),
+                    "engagement_rate": _float(performance_data.get("engagement_rate")),
+                    "conversion_rate": _float(performance_data.get("conversion_rate")),
                 }
                 
                 # Get validated client for automatic validation
                 validated_client = self._get_validated_client()
                 
                 if validated_client and hasattr(validated_client, 'upsert'):
-                    # Use validated client
-                        validated_client.upsert(
-                            'creative_performance',
-                            performance_record,
-                            on_conflict='creative_id,ad_id,date_start'
-                        )
+                    validated_client.upsert(
+                        'creative_performance',
+                        performance_record,
+                        on_conflict='creative_id,ad_id,date_start'
+                    )
                 else:
-                    # Fallback to regular client
                     self.supabase_client.table('creative_performance').upsert(
                         performance_record,
                         on_conflict='creative_id,ad_id,date_start'
