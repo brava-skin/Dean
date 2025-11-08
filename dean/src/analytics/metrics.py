@@ -295,13 +295,15 @@ def metrics_from_row(
     denom_imps = imps if imps > 0 else None
     denom_clicks = clicks if clicks > 0 else None
     
-    ctr = _safe_div(clicks * 100.0, denom_imps, None)
+    ctr = None
+    if imps > 0 and clicks >= 0:
+        ctr = max(0.0, min(100.0, (clicks / imps) * 100.0))
     ctr_lo, ctr_hi = _wilson_ci(clicks, imps, cfg.ci_z)
     ctr_sm = _beta_smooth(clicks, imps, *cfg.beta_prior_ctr)
 
     unique_ctr = _safe_div((uniq_clicks or 0.0), (reach or 0.0), None) if (uniq_clicks is not None and reach) else None
     cpc = _safe_div(spend, denom_clicks, None)
-    cpm = _safe_div(spend * 1000.0, denom_imps, None)
+    cpm = None if imps <= 0 else (spend * 1000.0) / imps
     cvr = _safe_div(purchases, denom_clicks, None)
     cvr_lo, cvr_hi = _wilson_ci(purchases, clicks, cfg.ci_z) if clicks > 0 else (None, None)
     cvr_sm = _beta_smooth(purchases, clicks, *cfg.beta_prior_cvr)
@@ -427,13 +429,15 @@ def aggregate_rows(
     denom_imps = imps if imps > 0 else None
     denom_clicks = clicks if clicks > 0 else None
 
-    ctr = _safe_div(clicks * 100.0, denom_imps, None)
+    ctr = None
+    if imps > 0 and clicks >= 0:
+        ctr = max(0.0, min(100.0, (clicks / imps) * 100.0))
     ctr_lo, ctr_hi = _wilson_ci(ctr_clicks_sum, ctr_imps_sum, cfg.ci_z)
     ctr_sm = _beta_smooth(ctr_clicks_sum, ctr_imps_sum, *cfg.beta_prior_ctr)
 
     unique_ctr = _safe_div(uniq_clicks_sum, reach_sum, None) if reach_sum > 0 else None
     cpc = _safe_div(spend, denom_clicks, None)
-    cpm = _safe_div(spend * 1000.0, denom_imps, None)
+    cpm = None if imps <= 0 else (spend * 1000.0) / imps
     cvr = _safe_div(cvr_purch_sum, cvr_clicks_sum if cvr_clicks_sum > 0 else None, None)
     cvr_lo, cvr_hi = _wilson_ci(cvr_purch_sum, cvr_clicks_sum, cfg.ci_z) if cvr_clicks_sum > 0 else (None, None)
     cvr_sm = _beta_smooth(cvr_purch_sum, cvr_clicks_sum, *cfg.beta_prior_cvr)

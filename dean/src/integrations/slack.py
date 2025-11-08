@@ -39,28 +39,31 @@ def _now_local() -> datetime:
 
 def _fmt_currency(amount: Optional[float | str]) -> str:
     if amount is None or amount == "":
-        return ""
+        return "—"
     try:
         val = float(str(amount).replace(",", ""))
     except Exception:
         return str(amount)
-    # Simple, deterministic formatting (no locale deps)
     return f"{ACCOUNT_CURRENCY_SYMBOL}{val:,.2f}"
+
 
 def _fmt_pct(v: Optional[float | str]) -> str:
     if v is None or v == "":
-        return ""
-    # Accept "0.0123" or "1.23%" or "1.23"
+        return "—"
     s = str(v).strip()
     if s.endswith("%"):
-        return s
+        try:
+            s = s.rstrip("%")
+            val = float(s)
+            return f"{val:.1f}%"
+        except Exception:
+            return s
     try:
         f = float(s)
     except Exception:
         return s
-    # Heuristic: if looks like 0.012, treat as fraction
     if 0 <= f <= 1:
-        f = f * 100.0
+        f *= 100.0
     return f"{f:.1f}%"
 
 def _fmt_int(v: Optional[int | float | str]) -> str:
@@ -335,15 +338,15 @@ def format_run_header(status: str, time_str: str, profile: str, spend: float, pu
     """Format the main run header line."""
     status_emoji = "✅" if status.upper() == "OK" else "⚠️"
     spend_str = _fmt_currency(spend)
-    cpa_str = "—" if cpa is None else _fmt_currency(cpa)
-    be_str = "—" if be is None else _fmt_currency(be)
+    cpa_str = fmt_eur(cpa)
+    be_str = fmt_eur(be)
 
     def _fmt_int(value: int) -> str:
         return f"{value:,}"
 
-    ctr_str = "—" if ctr is None else fmt_pct(ctr, 1)
-    cpc_str = "—" if cpc is None else _fmt_currency(cpc)
-    cpm_str = "—" if cpm is None else _fmt_currency(cpm)
+    ctr_str = fmt_pct(ctr, 1)
+    cpc_str = fmt_eur(cpc)
+    cpm_str = fmt_eur(cpm)
 
     main_line = (
         f"{status_emoji} {status.upper()} • {time_str}\n"

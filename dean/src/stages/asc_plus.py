@@ -848,9 +848,11 @@ def _sync_performance_metrics_records(
             return None
         try:
             val = float(value)
-            return max(-limit, min(limit, val))
         except (TypeError, ValueError):
             return None
+        if limit <= 0:
+            return val
+        return max(min(val, limit), -limit)
 
     for ad_id, metrics in metrics_map.items():
         if not ad_id:
