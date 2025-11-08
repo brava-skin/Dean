@@ -10,6 +10,7 @@ import os
 import json
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple, Iterable
+import math
 
 import pandas as pd
 from zoneinfo import ZoneInfo
@@ -1040,10 +1041,33 @@ def _sync_performance_metrics_records(
     def _float_or_none(value: Any) -> Optional[float]:
         if value in (None, "", float("inf"), float("-inf")):
             return None
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if cleaned.endswith("%"):
+                cleaned = cleaned[:-1]
+            if cleaned == "":
+                return None
+            value = cleaned
         try:
-            return float(value)
+            numeric = float(value)
         except (TypeError, ValueError):
             return None
+        if math.isnan(numeric) or math.isinf(numeric):
+            return None
+        return numeric
+
+    def _fraction_or_none(value: Any, *, allow_percent: bool = True) -> Optional[float]:
+        numeric = _float_or_none(value)
+        if numeric is None:
+            return None
+        if numeric < 0:
+            return 0.0
+        if numeric > 1.0:
+            if allow_percent and numeric <= 100.0:
+                numeric /= 100.0
+            else:
+                return min(numeric, 1.0)
+        return max(0.0, min(numeric, 1.0))
 
     upserts: List[Dict[str, Any]] = []
 
@@ -1060,7 +1084,7 @@ def _sync_performance_metrics_records(
         initiate_checkout = int(safe_f(metrics.get("initiate_checkout") or metrics.get("ic")))
         revenue = safe_f(metrics.get("revenue"))
 
-        ctr = _float_or_none(metrics.get("ctr"))
+        ctr = _fraction_or_none(metrics.get("ctr"))
         cpc = _float_or_none(metrics.get("cpc"))
         cpm = _float_or_none(metrics.get("cpm"))
         roas = _float_or_none(metrics.get("roas"))
@@ -1068,11 +1092,11 @@ def _sync_performance_metrics_records(
         frequency = _float_or_none(metrics.get("frequency"))
         dwell_time = _float_or_none(metrics.get("dwell_time"))
 
-        atc_rate = _float_or_none(add_to_cart / impressions) if impressions > 0 else None
-        ic_rate = _float_or_none(initiate_checkout / impressions) if impressions > 0 else None
-        purchase_rate = _float_or_none(purchases / impressions) if impressions > 0 else None
-        atc_to_ic_rate = _float_or_none(initiate_checkout / add_to_cart) if add_to_cart > 0 else None
-        ic_to_purchase_rate = _float_or_none(purchases / initiate_checkout) if initiate_checkout > 0 else None
+        atc_rate = _fraction_or_none(add_to_cart / impressions, allow_percent=False) if impressions > 0 else None
+        ic_rate = _fraction_or_none(initiate_checkout / impressions, allow_percent=False) if impressions > 0 else None
+        purchase_rate = _fraction_or_none(purchases / impressions, allow_percent=False) if impressions > 0 else None
+        atc_to_ic_rate = _fraction_or_none(initiate_checkout / add_to_cart, allow_percent=False) if add_to_cart > 0 else None
+        ic_to_purchase_rate = _fraction_or_none(purchases / initiate_checkout, allow_percent=False) if initiate_checkout > 0 else None
 
         try:
             creation_time = storage.get_ad_creation_time(ad_id)
