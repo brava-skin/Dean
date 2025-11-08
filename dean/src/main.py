@@ -50,6 +50,35 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def configure_logging_filters() -> None:
+    """Reduce log noise from verbose dependencies while keeping key summaries."""
+    noise_levels = {
+        "httpx": logging.WARNING,
+        "urllib3": logging.WARNING,
+        "matplotlib": logging.ERROR,
+        "matplotlib.font_manager": logging.ERROR,
+        "sentence_transformers": logging.WARNING,
+        "supabase": logging.WARNING,
+        "infrastructure.supabase_storage": logging.WARNING,
+        "infrastructure.data_optimizer": logging.WARNING,
+        "infrastructure.creative_storage": logging.WARNING,
+        "creative.creative_intelligence": logging.WARNING,
+    }
+    for name, level in noise_levels.items():
+        logging.getLogger(name).setLevel(level)
+
+    # Silence Slack stdout mirroring (Slack messages still send via API)
+    try:
+        from integrations import slack as slack_module
+
+        slack_module.LOG_STDOUT = False
+    except Exception:
+        logger.debug("Slack logger could not be reconfigured", exc_info=True)
+
+
+configure_logging_filters()
+
 # -----------------------------------------------------
 # Shared metric helpers
 # -----------------------------------------------------
