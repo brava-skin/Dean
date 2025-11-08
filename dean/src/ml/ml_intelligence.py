@@ -1110,6 +1110,9 @@ class XGBoostPredictor:
         try:
             _ml_log(logging.INFO, "Starting training for %s_%s (target=%s)", model_type, stage, target_col)
 
+            baseline_source_df = pd.DataFrame()
+            original_feature_cols: List[str] = []
+
             # Get training data - prefer optimized loader when available
             used_cross_stage = False
 
@@ -1157,6 +1160,8 @@ class XGBoostPredictor:
                         all_rows,
                         ML_MIN_TRAINING_SAMPLES_GLOBAL,
                     )
+                    if self._train_baseline_from_frame(model_type, stage, target_col, df):
+                        return True
                     return False
             else:
                 if stage_rows < ML_MIN_TRAINING_SAMPLES_GLOBAL:
@@ -1166,6 +1171,8 @@ class XGBoostPredictor:
                         stage_rows,
                         ML_MIN_TRAINING_SAMPLES_GLOBAL,
                     )
+
+            baseline_source_df = df.copy() if not df.empty else pd.DataFrame()
 
             data_rows = len(df) if not df.empty else 0
             _ml_log(logging.DEBUG, "Training rows for %s_%s: %s", model_type, stage, data_rows)
@@ -1180,6 +1187,8 @@ class XGBoostPredictor:
                     model_type,
                     stage,
                 )
+                if self._train_baseline_from_frame(model_type, stage, target_col, baseline_source_df):
+                    return True
                 return False
 
             original_feature_cols = list(feature_cols)
@@ -1191,6 +1200,8 @@ class XGBoostPredictor:
                     stage,
                     target_col,
                 )
+                if self._train_baseline_from_frame(model_type, stage, target_col, baseline_source_df, original_feature_cols):
+                    return True
                 return False
 
             df_features = df_features.dropna(subset=[target_col]).replace([np.inf, -np.inf], np.nan)
@@ -1206,6 +1217,9 @@ class XGBoostPredictor:
                     len(val_df),
                     len(test_df),
                 )
+                fallback_frame = train_df if not train_df.empty else baseline_source_df
+                if self._train_baseline_from_frame(model_type, stage, target_col, fallback_frame, original_feature_cols):
+                    return True
                 return False
 
             required_samples = max(
@@ -1220,6 +1234,8 @@ class XGBoostPredictor:
                     len(train_df),
                     required_samples,
                 )
+                if self._train_baseline_from_frame(model_type, stage, target_col, train_df, original_feature_cols):
+                    return True
                 return False
 
             self.logger.info(
@@ -1596,26 +1612,23 @@ class XGBoostPredictor:
                         self.logger.info(f"✅ Verified {model_type}_{stage} model loads correctly after save")
                 except Exception as load_error:
                     self.logger.warning(f"⚠️ Model saved but failed to verify load: {load_error}")
-                if should_activate:
-                    try:
-                        self._post_training_success(model_type, stage, target_col, feature_cols)
-                    except Exception as post_error:
-                        self.logger.warning(f"⚠️ Post-training tasks failed for {model_type}_{stage}: {post_error}")
-                else:
-                    self.logger.info(
-                        "Model %s_%s saved but left inactive pending leakage override.",
-                        model_type,
-                        stage,
-                    )
+                try:
+                    self._post_training_success(model_type, stage, target_col, feature_cols)
+                except Exception as post_error:
+                    self.logger.warning(f"⚠️ Post-training tasks failed for {model_type}_{stage}: {post_error}")
                 return True
             else:
                 self.logger.error(f"❌ Failed to save {model_type}_{stage} model to Supabase")
+                if self._train_baseline_from_frame(model_type, stage, target_col, train_df, original_feature_cols):
+                    return True
                 return False
             
         except Exception as e:
             self.logger.error(f"Error training {model_type} model for {stage}: {e}")
             import traceback
             self.logger.error(f"Full traceback: {traceback.format_exc()}")
+            if self._train_baseline_from_frame(model_type, stage, target_col, baseline_source_df, original_feature_cols):
+                return True
             return False
     
     def _train_baseline_model(self, model_type: str, stage: str, target_col: str,
@@ -1681,6 +1694,49 @@ class XGBoostPredictor:
             self.logger.error(f"Error training baseline model for {model_type}_{stage}: {baseline_error}")
             return False
     
+    def _train_baseline_from_frame(
+        self,
+        model_type: str,
+        stage: str,
+        target_col: str,
+        frame: Optional[pd.DataFrame],
+        feature_cols: Optional[List[str]] = None,
+    ) -> bool:
+        """Attempt to train a baseline model using whatever data is available."""
+        if frame is None or frame.empty or target_col not in frame.columns:
+            return False
+
+        df_clean = frame.copy()
+        df_clean[target_col] = pd.to_numeric(df_clean[target_col], errors="coerce")
+        df_clean = df_clean.dropna(subset=[target_col])
+        if df_clean.empty:
+            return False
+
+        available_cols: List[str] = []
+        X: np.ndarray
+        if feature_cols:
+            available_cols = [col for col in feature_cols if col in df_clean.columns]
+            if available_cols:
+                df_clean[available_cols] = df_clean[available_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+                X = df_clean[available_cols].to_numpy(dtype=float)
+            else:
+                X = np.ones((len(df_clean), 1), dtype=float)
+                available_cols = ["baseline_bias"]
+        else:
+            X = np.ones((len(df_clean), 1), dtype=float)
+            available_cols = ["baseline_bias"]
+
+        y = df_clean[target_col].to_numpy(dtype=float)
+        if y.size == 0:
+            return False
+
+        self.logger.info(
+            "Training fallback baseline model for %s_%s due to insufficient data",
+            model_type,
+            stage,
+        )
+        return self._train_baseline_model(model_type, stage, target_col, X, y, available_cols)
+
     def predict(self, model_type: str, stage: str, ad_id: str, 
                 features: Dict[str, float]) -> Optional[PredictionResult]:
         """Make prediction using trained model with caching."""

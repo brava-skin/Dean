@@ -25,7 +25,7 @@ import re
 import sys
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -59,6 +59,7 @@ def configure_logging_filters() -> None:
         "matplotlib": logging.ERROR,
         "matplotlib.font_manager": logging.ERROR,
         "sentence_transformers": logging.WARNING,
+        "integrations.meta_client": logging.WARNING,
         "supabase": logging.WARNING,
         "infrastructure.supabase_storage": logging.WARNING,
         "infrastructure.data_optimizer": logging.WARNING,
@@ -2267,8 +2268,10 @@ def main() -> None:
             notify("   Falling back to legacy system...")
             ml_mode_enabled = False
 
-    # Initialize Supabase client
     supabase_client = _get_supabase()
+
+    if ml_mode_enabled and ml_system and supabase_client:
+        ensure_ml_baseline_models(ml_system, supabase_client, stage="asc_plus")
 
     # Initialize Supabase storage for ad creation times and historical data
     supabase_storage = None
@@ -2839,6 +2842,47 @@ def main() -> None:
             notify(f"❌ Background scheduler error: {e}")
             stop_background_scheduler()
             sys.exit(1)
+
+
+def ensure_ml_baseline_models(
+    ml_system: Any,
+    supabase_client: Any,
+    stage: str = "asc_plus",
+) -> bool:
+    """Ensure at least one active ML model exists for the stage."""
+    if not ml_system or not supabase_client:
+        return False
+
+    try:
+        response = (
+            supabase_client.table("ml_models")
+            .select("id")
+            .eq("stage", stage)
+            .eq("is_active", True)
+            .limit(1)
+            .execute()
+        )
+        has_models = bool(getattr(response, "data", None))
+    except Exception as exc:
+        logger.warning("Unable to query ml_models table: %s", exc)
+        return False
+
+    if has_models:
+        return False
+
+    notify(f"⚙️ No active ML models found for stage '{stage}'. Running baseline training...")
+    try:
+        trained = bool(getattr(ml_system, "initialize_models", lambda **_: False)(force_retrain=True))
+    except Exception as exc:
+        logger.exception("Baseline ML training failed: %s", exc)
+        notify(f"⚠️ Baseline ML training failed: {exc}")
+        return False
+
+    if trained:
+        notify("✅ Baseline ML models trained and activated.")
+    else:
+        notify("⚠️ Baseline ML training skipped — insufficient data available.")
+    return trained
 
 
 if __name__ == "__main__":
