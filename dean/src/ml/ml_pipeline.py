@@ -98,7 +98,7 @@ class MLPipelineConfig:
     validation_frequency_hours: int = 168  # Weekly
     
     # Cold start
-    cold_start_min_samples: int = 10
+    cold_start_min_samples: int = 3
     use_similarity_for_cold_start: bool = True
     
     # Reinforcement learning

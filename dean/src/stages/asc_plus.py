@@ -1090,20 +1090,65 @@ def _guardrail_kill(metrics: Dict[str, Any]) -> Tuple[bool, str]:
     ctr = safe_f(metrics.get("ctr"))  # percentage
     atc = safe_f(metrics.get("add_to_cart"))
     purchases = safe_f(metrics.get("purchases"))
+    roas = safe_f(metrics.get("roas"))
+    cpm = safe_f(metrics.get("cpm"))
+    ad_age_days = safe_f(metrics.get("ad_age_days"))
+    stage_hours = safe_f(metrics.get("stage_duration_hours"))
 
-    if impressions > 2000 and ctr < 0.5 and clicks < 10:
-        return True, "Guardrail: low CTR after 2k impressions"
-    if spend > 10 and atc == 0 and purchases == 0:
-        return True, "Guardrail: spend without ATC/PUR"
+    reasons: List[str] = []
+
+    is_fresh = (stage_hours and stage_hours < 6) or (ad_age_days and ad_age_days < 0.25)
+
+    if spend >= 12 and purchases == 0 and ctr < 0.6:
+        reasons.append(f"Spend €{spend:.2f} with CTR {ctr:.2f}% and no conversions")
+    if impressions >= 2500 and ctr < 0.45 and clicks < 20:
+        reasons.append(f"CTR {ctr:.2f}% after {int(impressions)} impressions")
+    if spend >= 8 and roas < 0.5 and purchases == 0:
+        reasons.append(f"ROAS {roas:.2f} after spend €{spend:.2f}")
+    if spend >= 6 and cpm > 90:
+        reasons.append(f"CPM €{cpm:.2f} after spend €{spend:.2f}")
+    if spend >= 5 and atc == 0 and purchases == 0 and ctr < 0.7:
+        reasons.append("No intent events despite initial spend")
+
+    if is_fresh and spend < 15:
+        # Give brand new ads a chance unless we already spent aggressively
+        reasons = [r for r in reasons if "Spend €" in r and spend >= 12]
+
+    if reasons:
+        return True, reasons[0]
     return False, ""
 
 
 def _guardrail_promote(metrics: Dict[str, Any]) -> Tuple[bool, str]:
     ctr = safe_f(metrics.get("ctr"))
     cpc = safe_f(metrics.get("cpc"))
-    if ctr > 1.5 and cpc > 0 and cpc < 1.50:
-        return True, "Guardrail: strong CTR and efficient CPC"
+    purchases = safe_f(metrics.get("purchases"))
+    roas = safe_f(metrics.get("roas"))
+
+    if purchases >= 1 and roas >= 1.2:
+        return True, f"ROAS {roas:.2f} with {int(purchases)} purchases"
+    if ctr >= 2.0 and 0 < cpc < 1.20:
+        return True, f"High CTR {ctr:.2f}% with CPC €{cpc:.2f}"
     return False, ""
+
+
+def _select_ads_for_cap(
+    active_ads: List[Dict[str, Any]],
+    metrics_map: Dict[str, Dict[str, Any]],
+    excluded_ids: List[str],
+    limit: int,
+) -> List[Tuple[float, str, Dict[str, Any]]]:
+    excluded = set(excluded_ids)
+    candidates: List[Tuple[float, str, Dict[str, Any]]] = []
+    for ad in active_ads:
+        ad_id = str(ad.get("id") or "")
+        if not ad_id or ad_id in excluded:
+            continue
+        metrics = metrics_map.get(ad_id, {})
+        score = _ad_health_score(metrics)
+        candidates.append((score, ad_id, metrics))
+    candidates.sort(key=lambda x: x[0])  # lowest score first
+    return candidates[:limit]
 
 
 def _build_ad_metrics(row: Dict[str, Any], stage: str, date_label: str) -> Dict[str, Any]:
@@ -1191,6 +1236,33 @@ def _summarize_metrics(metrics_map: Dict[str, Dict[str, Any]]) -> Dict[str, floa
     return totals
 
 
+def _ad_health_score(metrics: Dict[str, Any]) -> float:
+    """Compute a rough performance score (higher is better)."""
+    roas = safe_f(metrics.get("roas"))
+    purchases = safe_f(metrics.get("purchases"))
+    ctr = safe_f(metrics.get("ctr"))
+    cpm = safe_f(metrics.get("cpm"))
+    spend = safe_f(metrics.get("spend"))
+    add_to_cart = safe_f(metrics.get("add_to_cart"))
+
+    score = 0.0
+    score += roas * 3.0
+    score += purchases * 5.0
+    score += ctr * 0.4
+    score += add_to_cart * 0.25
+
+    score -= cpm / 40.0
+    score -= spend / 8.0
+    return score
+
+
+def _short_id(value: Any) -> str:
+    text = str(value or "")
+    if len(text) <= 8:
+        return text
+    return f"...{text[-6:]}"
+
+
 def _evaluate_health(final_active: int, target: int, metrics_map: Dict[str, Dict[str, Any]]) -> Tuple[str, str]:
     if final_active < target:
         deficit = target - final_active
@@ -1238,11 +1310,11 @@ def _generate_creatives_for_deficit(
     adset_id: str,
     ml_system: Optional[Any],
     base_active_count: int,
-) -> List[str]:
+) -> List[Dict[str, Any]]:
     if deficit <= 0:
         return []
 
-    created_ads: List[str] = []
+    created_ads: List[Dict[str, Any]] = []
     supabase_client = None
     storage_manager = None
     try:
@@ -1297,7 +1369,14 @@ def _generate_creatives_for_deficit(
             campaign_id=campaign_id,
         )
         if success and ad_id:
-            created_ads.append(ad_id)
+            created_ads.append(
+                {
+                    "ad_id": ad_id,
+                    "creative_id": creative_id,
+                    "source": "queued",
+                    "storage_creative_id": creative_data.get("storage_creative_id"),
+                }
+            )
             created_count += 1
             deficit -= 1
             if storage_manager:
@@ -1324,7 +1403,14 @@ def _generate_creatives_for_deficit(
             campaign_id=campaign_id,
         )
         if success and ad_id:
-            created_ads.append(ad_id)
+            created_ads.append(
+                {
+                    "ad_id": ad_id,
+                    "creative_id": creative_id,
+                    "source": "generated",
+                    "attempt": attempt_index,
+                }
+            )
             created_count += 1
             deficit -= 1
         else:
@@ -1365,7 +1451,7 @@ def _record_lifecycle_event(ad_id: str, status: str, reason: str) -> None:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-        client.upsert("ad_lifecycle", payload, on_conflict="ad_id,stage,created_at")
+        client.upsert("ad_lifecycle", payload, on_conflict="ad_id,stage")
     except Exception as exc:
         _asc_log(logging.DEBUG, "Lifecycle logging failed for %s: %s", ad_id, exc)
 
@@ -3049,12 +3135,16 @@ def run_asc_plus_tick(
 ) -> Dict[str, Any]:
     """Modern ASC+ tick controller with guardrails and creative floor enforcement."""
     timekit = Timekit()
+    target_count = cfg(settings, "asc_plus.target_active_ads") or 10
+    max_active = cfg(settings, "asc_plus.max_active_ads") or target_count
+
     result: Dict[str, Any] = {
         "ok": False,
         "campaign_id": None,
         "adset_id": None,
         "active_count": 0,
-        "target_count": cfg(settings, "asc_plus.target_active_ads") or 10,
+        "target_count": target_count,
+        "max_active_count": max_active,
         "kills": [],
         "promotions": [],
         "created_ads": [],
@@ -3139,6 +3229,7 @@ def run_asc_plus_tick(
     # Step 3: apply guardrail kill/promote rules
     killed_ads: List[Tuple[str, str]] = []
     promoted_ads: List[Tuple[str, str, Optional[str]]] = []
+    killed_ids = set()
     for ad in active_ads:
         ad_id = ad.get("id")
         if not ad_id:
@@ -3148,8 +3239,9 @@ def run_asc_plus_tick(
         if kill:
             if _pause_ad(client, ad_id):
                 killed_ads.append((ad_id, kill_reason))
+                killed_ids.add(ad_id)
                 active_count = max(0, active_count - 1)
-                _record_lifecycle_event(ad_id, "killed", kill_reason)
+                _record_lifecycle_event(ad_id, "PAUSED", kill_reason)
             continue
         promote, promote_reason = _guardrail_promote(metrics)
         if promote:
@@ -3158,7 +3250,7 @@ def run_asc_plus_tick(
                 promoted_ads.append((ad_id, promoted_ad_id, promote_reason))
                 active_count += 1
                 metrics_map[promoted_ad_id] = _build_ad_metrics({"ad_id": promoted_ad_id, "spend": 0, "impressions": 0, "clicks": 0}, "asc_plus", account_today)
-                _record_lifecycle_event(promoted_ad_id, "promoted", promote_reason)
+                _record_lifecycle_event(promoted_ad_id, "ACTIVE", promote_reason)
 
     # Refresh active count after guardrails
     try:
@@ -3166,23 +3258,73 @@ def run_asc_plus_tick(
     except Exception:
         pass
 
-    deficit = max(0, result["target_count"] - active_count)
-    created_ads = _generate_creatives_for_deficit(deficit, client, settings, campaign_id, adset_id, ml_system, active_count)
-    if created_ads:
+    # Step 4: enforce max active ceiling by trimming lowest performers
+    excess = max(0, active_count - max_active)
+    if excess > 0:
+        cap_candidates = _select_ads_for_cap(active_ads, metrics_map, list(killed_ids), excess * 2)
+        trimmed: List[Tuple[str, str]] = []
+        for _, candidate_ad_id, candidate_metrics in cap_candidates:
+            if len(trimmed) >= excess:
+                break
+            if candidate_ad_id in killed_ids:
+                continue
+            reason = f"Capped to maintain {max_active} live ads (score { _ad_health_score(candidate_metrics):.2f})"
+            if _pause_ad(client, candidate_ad_id):
+                trimmed.append((candidate_ad_id, reason))
+                killed_ids.add(candidate_ad_id)
+                active_count = max(0, active_count - 1)
+                _record_lifecycle_event(candidate_ad_id, "PAUSED", reason)
+        if trimmed:
+            killed_ads.extend(trimmed)
+
+    effective_target = min(target_count, max_active)
+    deficit = max(0, effective_target - active_count)
+    created_records = _generate_creatives_for_deficit(deficit, client, settings, campaign_id, adset_id, ml_system, active_count)
+    if created_records:
         try:
             active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
         except Exception:
-            active_count += len(created_ads)
-        for new_ad in created_ads:
-            metrics_map[new_ad] = _build_ad_metrics({"ad_id": new_ad, "spend": 0, "impressions": 0, "clicks": 0}, "asc_plus", account_today)
+            active_count += len(created_records)
+        for record in created_records:
+            new_ad_id = record.get("ad_id")
+            if not new_ad_id:
+                continue
+            metrics_map[new_ad_id] = _build_ad_metrics({"ad_id": new_ad_id, "spend": 0, "impressions": 0, "clicks": 0}, "asc_plus", account_today)
+    else:
+        created_records = []
 
     result["active_count"] = active_count
     result["kills"] = killed_ads
     result["promotions"] = promoted_ads
-    result["created_ads"] = created_ads
+    result["created_ads"] = [record["ad_id"] for record in created_records if record.get("ad_id")]
+    result["created_details"] = created_records
     result["ad_metrics"] = metrics_map
 
-    health_status, health_message = _evaluate_health(active_count, result["target_count"], metrics_map)
+    # Slack actions summary
+    action_lines: List[str] = []
+    if killed_ads:
+        action_lines.append(f"🛑 Paused {len(killed_ads)} ads:")
+        for ad_id, reason in killed_ads[:10]:
+            action_lines.append(f"   • {_short_id(ad_id)} – {reason}")
+        if len(killed_ads) > 10:
+            action_lines.append(f"   • … {len(killed_ads) - 10} more")
+    if promoted_ads:
+        action_lines.append(f"🚀 Promoted {len(promoted_ads)} ads:")
+        for src_id, dst_id, reason in promoted_ads[:5]:
+            action_lines.append(f"   • {_short_id(src_id)} → {_short_id(dst_id)} – {reason or 'Promotion rule'}")
+        if len(promoted_ads) > 5:
+            action_lines.append(f"   • … {len(promoted_ads) - 5} more")
+    if created_records:
+        action_lines.append(f"✨ Created {len(created_records)} ads (target {effective_target}):")
+        for record in created_records[:5]:
+            action_lines.append(f"   • {_short_id(record.get('ad_id'))} – via {record.get('source')}")
+        if len(created_records) > 5:
+            action_lines.append(f"   • … {len(created_records) - 5} more")
+    if action_lines:
+        action_lines.append(f"📊 Active now: {active_count}/{effective_target} (max {max_active})")
+        notify("ASC+ actions update\n" + "\n".join(action_lines))
+
+    health_status, health_message = _evaluate_health(active_count, effective_target, metrics_map)
     result["health"] = health_status
     result["health_message"] = health_message
 

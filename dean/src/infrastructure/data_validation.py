@@ -437,8 +437,8 @@ class SupabaseDataValidator:
             'performance_metrics': TableValidator('performance_metrics', {
                 'ad_id': StringValidator('ad_id', required=True, max_length=100),
                 'lifecycle_id': StringValidator('lifecycle_id', max_length=100),
-                'stage': StringValidator('stage', required=True,
-                                       allowed_values=['asc_plus']),
+            'stage': StringValidator('stage', required=True,
+                                       allowed_values=['asc_plus', 'testing', 'validation', 'scaling']),
                 'window_type': StringValidator('window_type', required=True, 
                                              allowed_values=['1d', '7d', '30d']),
                 'date_start': DateValidator('date_start', required=True),
