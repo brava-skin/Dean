@@ -22,6 +22,7 @@ from integrations.slack import (
     notify, post_digest, alert_kill, alert_promote, alert_scale,
     alert_fatigue, alert_data_quality, alert_error
 )
+from ml.decision_metrics import decision_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,7 @@ class SupabaseReportingClient:
             }
             
             # Stage-specific metrics
-            for stage in ['testing', 'validation', 'scaling']:
+        for stage in ['asc_plus']:
                 stage_df = df[df['stage'] == stage]
                 if not stage_df.empty:
                     summary['stages'][stage] = {
@@ -449,7 +450,7 @@ class SystemHealthAnalyzer:
             
             # Stage health
             stage_health = {}
-            for stage in ['testing', 'validation', 'scaling']:
+        for stage in ['asc_plus']:
                 stage_data = df[df['stage'] == stage]
                 if not stage_data.empty:
                     stage_health[stage] = stage_data['health_score'].mean()
@@ -609,7 +610,7 @@ class SystemHealthAnalyzer:
         """Create default health report when no data is available."""
         return SystemHealthReport(
             overall_health=0.5,
-            stage_health={'testing': 0.5, 'validation': 0.5, 'scaling': 0.5},
+            stage_health={'asc_plus': 0.5},
             ml_model_health={},
             data_quality={'completeness': 0.0, 'consistency': 0.0, 'accuracy': 0.0},
             learning_velocity=0.0,
@@ -637,9 +638,10 @@ class MLReportingSystem:
             
             # Generate predictive insights
             predictive_insights = []
-            for stage in ['testing', 'validation', 'scaling']:
-                stage_insights = self.predictive_reporter.generate_predictive_insights(stage)
-                predictive_insights.extend(stage_insights)
+            for stage in ['asc_plus']:
+                predictive_insights.extend(
+                    self.predictive_reporter.generate_predictive_insights(stage)
+                )
             
             # Generate recommendations
             recommendations = self._generate_recommendations(performance_summary, ml_insights, predictive_insights)
@@ -649,6 +651,17 @@ class MLReportingSystem:
             
             # Calculate ML metrics
             ml_metrics = self._calculate_ml_metrics(ml_insights, predictive_insights)
+            decision_counts = decision_metrics.snapshot()
+            total_decisions = decision_counts["ml_assisted"] + decision_counts["rule_only"]
+            influence_pct = (decision_counts["ml_assisted"] / total_decisions) if total_decisions else 0.0
+            ml_metrics.update({
+                'ml_influence_pct': influence_pct,
+                'decisions_ml_assisted': decision_counts["ml_assisted"],
+                'decisions_rule_only': decision_counts["rule_only"],
+                'decisions_total': total_decisions,
+            })
+            if total_decisions == 0:
+                ml_metrics['ml_influence_note'] = "No active model or predictions yet."
             
             return MLReport(
                 report_type='daily',
@@ -819,6 +832,14 @@ class MLReportingSystem:
                 lines.append(f"• Avg Confidence: {ml_metrics.get('avg_confidence', 0):.2f}")
                 lines.append(f"• Prediction Accuracy: {ml_metrics.get('prediction_accuracy', 0):.2f}")
                 lines.append(f"• Learning Events: {len(ml_metrics.get('learning_events', []))}")
+                if 'ml_influence_pct' in ml_metrics:
+                    lines.append(f"• ML Influence: {ml_metrics.get('ml_influence_pct', 0.0) * 100:.1f}%")
+                    lines.append(
+                        f"• Decisions: {ml_metrics.get('decisions_ml_assisted', 0)} ML / "
+                        f"{ml_metrics.get('decisions_rule_only', 0)} rules"
+                    )
+                    if ml_metrics.get('ml_influence_note'):
+                        lines.append(f"• Note: {ml_metrics['ml_influence_note']}")
                 lines.append("")
             
             # Predictions

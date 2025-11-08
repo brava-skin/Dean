@@ -107,9 +107,9 @@ META_BUC_HEADERS = {
 }
 
 # Naming & compliance
-CAMPAIGN_NAME_RE = re.compile(r"^\[(TEST|VALID|SCALE|SCALE-CBO|ASC\+)\]\s+Brava\s+-\s+(ABO|CBO)\s+-\s+US Men$")
-ADSET_NAME_RE    = re.compile(r"^\[(TEST|VALID|SCALE|ASC\+)\]\s+.+$")
-AD_NAME_RE       = re.compile(r"^\[(TEST|VALID|SCALE|ASC\+)\]\s+.+$")
+CAMPAIGN_NAME_RE = re.compile(r"^\[ASC\+\]\s+Brava\s+-\s+(ABO|CBO)\s+-\s+US Men$")
+ADSET_NAME_RE    = re.compile(r"^\[ASC\+\]\s+.+$")
+AD_NAME_RE       = re.compile(r"^\[ASC\+\]\s+.+$")
 FORBIDDEN_TERMS  = tuple(x.strip().lower() for x in os.getenv("FORBIDDEN_TERMS", "cures,miracle,guaranteed").split(","))
 
 HUMAN_CONFIRM_JUMP_PCT = float(os.getenv("HUMAN_CONFIRM_JUMP_PCT", "200") or 200.0)
@@ -1277,16 +1277,16 @@ class MetaClient:
 
             if normalized_preset in ("maximum",):
                 rows = [
-                    mock_row(1, "TEST", 65.00, 90, 9000, 0, 0.0),
-                    mock_row(2, "TEST", 140.0, 160, 15000, 2, 160.0),
-                    mock_row(3, "VALID", 200.0, 210, 19000, 3, 300.0),
+                    mock_row(1, "ASC+", 65.00, 90, 9000, 0, 0.0),
+                    mock_row(2, "ASC+", 140.0, 160, 15000, 2, 160.0),
+                    mock_row(3, "ASC+", 200.0, 210, 19000, 3, 300.0),
                 ]
             else:
                 rows = [
-                    mock_row(1, "TEST", 22.17, 35, 4200, 0, 0.0),
-                    mock_row(2, "TEST", 38.76, 50, 5200, 1, 73.0),
-                    mock_row(3, "VALID", 41.22, 48, 3900, 1, 90.0),
-                    mock_row(4, "SCALE", 128.2, 120, 14000, 5, 520.0),
+                    mock_row(1, "ASC+", 22.17, 35, 4200, 0, 0.0),
+                    mock_row(2, "ASC+", 38.76, 50, 5200, 1, 73.0),
+                    mock_row(3, "ASC+", 41.22, 48, 3900, 1, 90.0),
+                    mock_row(4, "ASC+", 128.2, 120, 14000, 5, 520.0),
                 ]
             if stage:
                 rows = [r for r in rows if r["ad_name"].startswith(f"[{stage.upper()}]")]
@@ -1462,7 +1462,7 @@ class MetaClient:
             return [
                 {
                     "id": f"{adset_id}_AD_{i}",
-                    "name": f"[TEST] Mock_{i}",
+                    "name": f"[ASC+] Mock_{i}",
                     "status": "ACTIVE",
                     "effective_status": "ACTIVE",
                     "created_time": now_iso,
@@ -2700,10 +2700,10 @@ class MetaClient:
 
     # ------------- Convenience (budgets in EUR now) -------------
     def create_validation_adset(self, campaign_id: str, creative_label: str, daily_budget: float = 40.0, *, placements: Optional[List[str]] = None) -> Dict[str, Any]:
-        return self.ensure_adset(_s(campaign_id), f"[VALID] {_s(creative_label)}", daily_budget, placements=placements)
+        return self.ensure_adset(_s(campaign_id), f"[ASC+] {_s(creative_label)}", daily_budget, placements=placements)
 
     def create_scaling_adset(self, campaign_id: str, creative_label: str, daily_budget: float = 100.0, *, placements: Optional[List[str]] = None) -> Dict[str, Any]:
-        return self.ensure_adset(_s(campaign_id), f"[SCALE] {_s(creative_label)}", daily_budget, placements=placements)
+        return self.ensure_adset(_s(campaign_id), f"[ASC+] {_s(creative_label)}", daily_budget, placements=placements)
 
     # ------------- Data quality & reconciliation -------------
     @staticmethod

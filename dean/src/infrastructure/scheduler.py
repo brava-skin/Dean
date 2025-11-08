@@ -28,7 +28,7 @@ from rules.rules import AdvancedRuleEngine as RuleEngine
 class BackgroundScheduler:
     """
     Background scheduler that runs monitoring tasks at specified intervals.
-    - Hourly ticks for testing/validation/scaling
+    - Hourly ticks for ASC+ automation
     - 3-hour summaries of metrics and active ads
     - Daily morning summaries
     - Critical event alerts
@@ -229,7 +229,7 @@ class BackgroundScheduler:
             summary_lines = [
                 f"📈 Account: spend €{account_metrics.get('spend', 0):.2f}, purchases {account_metrics.get('purchases', 0)}",
                 f"🎯 CPA: {account_metrics.get('cpa', 'N/A')}, ROAS: {account_metrics.get('roas', 'N/A')}",
-                f"📱 Active ads: {active_ads.get('total', 0)} total, {active_ads.get('testing', 0)} testing, {active_ads.get('validation', 0)} validation, {active_ads.get('scaling', 0)} scaling"
+                f"📱 Active ads: {active_ads.get('total', 0)} total, {active_ads.get('asc_plus', 0)} ASC+"
             ]
             
             if active_ads.get('top_performers'):
@@ -325,7 +325,7 @@ class BackgroundScheduler:
             return {}
             
     def _get_active_ads_summary(self) -> Dict[str, Any]:
-        """Get summary of active ads by stage."""
+        """Get summary of active ASC+ ads."""
         try:
             rows = self.client.get_ad_insights(
                 level="ad",
@@ -337,9 +337,7 @@ class BackgroundScheduler:
                 paginate=True
             )
             
-            testing_ads = []
-            validation_ads = []
-            scaling_ads = []
+            asc_plus_ads = []
             
             for row in rows:
                 ad_name = row.get("ad_name", "")
@@ -355,29 +353,19 @@ class BackgroundScheduler:
                     "spend": spend,
                     "purchases": purchases
                 }
-                
-                if "[TEST]" in ad_name:
-                    testing_ads.append(ad_info)
-                elif "[VALID]" in ad_name:
-                    validation_ads.append(ad_info)
-                elif "[SCALE]" in ad_name:
-                    scaling_ads.append(ad_info)
+                asc_plus_ads.append(ad_info)
             
             # Sort by spend descending
-            testing_ads.sort(key=lambda x: x["spend"], reverse=True)
-            validation_ads.sort(key=lambda x: x["spend"], reverse=True)
-            scaling_ads.sort(key=lambda x: x["spend"], reverse=True)
+            asc_plus_ads.sort(key=lambda x: x["spend"], reverse=True)
             
             return {
                 "total": len(rows),
-                "testing": len(testing_ads),
-                "validation": len(validation_ads),
-                "scaling": len(scaling_ads),
-                "top_performers": (testing_ads + validation_ads + scaling_ads)[:5]
+                "asc_plus": len(rows),
+                "top_performers": asc_plus_ads[:5]
             }
         except Exception as e:
             notify(f"⚠️ Failed to get active ads summary: {e}")
-            return {"total": 0, "testing": 0, "validation": 0, "scaling": 0, "top_performers": []}
+            return {"total": 0, "asc_plus": 0, "top_performers": []}
             
     def _get_daily_metrics(self, date: datetime) -> Dict[str, Any]:
         """Get metrics for a specific date."""
@@ -418,7 +406,7 @@ class BackgroundScheduler:
             return {}
             
     def _get_daily_stage_stats(self, date: datetime) -> Dict[str, str]:
-        """Get daily statistics by stage."""
+        """Get daily statistics for ASC+ ads."""
         try:
             date_str = date.strftime("%Y-%m-%d")
             rows = self.client.get_ad_insights(
@@ -428,9 +416,7 @@ class BackgroundScheduler:
                 paginate=True
             )
             
-            testing_stats = {"ads": 0, "spend": 0, "purchases": 0}
-            validation_stats = {"ads": 0, "spend": 0, "purchases": 0}
-            scaling_stats = {"ads": 0, "spend": 0, "purchases": 0}
+            asc_stats = {"ads": 0, "spend": 0, "purchases": 0}
             
             for row in rows:
                 ad_name = row.get("ad_name", "")
@@ -441,23 +427,12 @@ class BackgroundScheduler:
                     if action.get("action_type") == "purchase":
                         purchases += int(action.get("value", 0))
                 
-                if "[TEST]" in ad_name:
-                    testing_stats["ads"] += 1
-                    testing_stats["spend"] += spend
-                    testing_stats["purchases"] += purchases
-                elif "[VALID]" in ad_name:
-                    validation_stats["ads"] += 1
-                    validation_stats["spend"] += spend
-                    validation_stats["purchases"] += purchases
-                elif "[SCALE]" in ad_name:
-                    scaling_stats["ads"] += 1
-                    scaling_stats["spend"] += spend
-                    scaling_stats["purchases"] += purchases
+                asc_stats["ads"] += 1
+                asc_stats["spend"] += spend
+                asc_stats["purchases"] += purchases
             
             return {
-                "Testing": f"{testing_stats['ads']} ads, €{testing_stats['spend']:.2f} spend, {testing_stats['purchases']} purchases",
-                "Validation": f"{validation_stats['ads']} ads, €{validation_stats['spend']:.2f} spend, {validation_stats['purchases']} purchases",
-                "Scaling": f"{scaling_stats['ads']} ads, €{scaling_stats['spend']:.2f} spend, {scaling_stats['purchases']} purchases"
+                "ASC+": f"{asc_stats['ads']} ads, €{asc_stats['spend']:.2f} spend, {asc_stats['purchases']} purchases"
             }
         except Exception as e:
             notify(f"⚠️ Failed to get daily stage stats: {e}")

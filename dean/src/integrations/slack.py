@@ -201,6 +201,13 @@ class SlackMessage:
     ttl_seconds: Optional[int] = None
     dedup_key: Optional[str] = None
 
+    def sanitized_text(self) -> str:
+        pattern = re.compile(r"[\x00-\x1f\x7f]")
+        s = pattern.sub("", self.text or "")
+        s = re.sub(r"[\[\](){}<>]", "", s)
+        s = re.sub(r"\s+", " ", s)
+        return s.strip()
+
     def route_webhook(self) -> str:
         if isinstance(self.meta.get("webhook"), str) and self.meta["webhook"]:
             return str(self.meta["webhook"])
@@ -289,12 +296,24 @@ def _mk_link(url: Optional[str], label: str = "Open in Ads Manager") -> Optional
         return None
     return f"<{url}|{label}>"
 
+def _sanitize_line(text: str) -> str:
+    if not text:
+        return ""
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", text)
+    text = re.sub(r"[“”]", '"', text)
+    text = re.sub(r"[‘’]", "'", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
 def build_basic_blocks(title: str, lines: List[str], severity: str = "info", footer: Optional[str] = None) -> List[Dict[str, Any]]:
-    blocks: List[Dict[str, Any]] = [_mk_section(_mk_title(severity, title))]
+    blocks: List[Dict[str, Any]] = [_mk_section(_mk_title(severity, _sanitize_line(title)))]
     if lines:
         # stitch lines into sections without exceeding Slack limits
         chunk, acc = [], ""
         for ln in lines:
+            ln = _sanitize_line(ln)
+            if not ln:
+                continue
             if len(acc) + len(ln) + 1 > MAX_BLOCK_TEXT:
                 if acc:
                     chunk.append(acc)
@@ -313,40 +332,26 @@ def build_basic_blocks(title: str, lines: List[str], severity: str = "info", foo
 # ---------- New messaging helpers ----------
 
 def format_run_header(status: str, time_str: str, profile: str, spend: float, purch: int, cpa: Optional[float], be: Optional[float], impressions: int = 0, clicks: int = 0, ctr: Optional[float] = None, cpc: Optional[float] = None, cpm: Optional[float] = None, atc: int = 0, ic: int = 0) -> str:
-    """Format the main run header line with comprehensive metrics in European format."""
-    status_emoji = "✅" if status == "OK" else "⚠️"
-    
-    # Format currency with European comma separator
-    def _fmt_eur_european(amount: float) -> str:
-        return f"€{amount:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    
-    # Format numbers with European comma separator
-    def _fmt_int_european(value: int) -> str:
-        return f"{value:,}".replace(",", ".")
-    
-    # Format percentage with European comma separator
-    def _fmt_pct_european(value: float) -> str:
-        return f"{value:.1f}%".replace(".", ",")
-    
-    # Format currency for CPC
-    def _fmt_cpc_european(value: float) -> str:
-        return f"€{value:.2f}".replace(".", ",")
-    
-    # Format currency for CPM
-    def _fmt_cpm_european(value: float) -> str:
-        return f"€{value:.2f}".replace(".", ",")
-    
-    spend_str = _fmt_eur_european(spend)
-    cpa_str = "–" if cpa is None else _fmt_eur_european(cpa)
-    be_str = "–" if be is None else _fmt_eur_european(be)
-    ctr_str = "–" if ctr is None else _fmt_pct_european(ctr)
-    cpc_str = "–" if cpc is None else _fmt_cpc_european(cpc)
-    cpm_str = "–" if cpm is None else _fmt_cpm_european(cpm)
-    
-    # Main metrics line in requested format
-    main_line = f"{status_emoji} Run {status}, {time_str}\nSpend {spend_str}. ATC: {atc}, IC: {ic}, PUR: {purch}. CPA: {cpa_str}, IMP: {_fmt_int_european(impressions)}, Clicks: {_fmt_int_european(clicks)}, CTR: {ctr_str}, CPC: {cpc_str}, CPM: {cpm_str}."
-    
-    return main_line
+    """Format the main run header line."""
+    status_emoji = "✅" if status.upper() == "OK" else "⚠️"
+    spend_str = _fmt_currency(spend)
+    cpa_str = "—" if cpa is None else _fmt_currency(cpa)
+    be_str = "—" if be is None else _fmt_currency(be)
+
+    def _fmt_int(value: int) -> str:
+        return f"{value:,}"
+
+    ctr_str = "—" if ctr is None else _fmt_pct(ctr, 1)
+    cpc_str = "—" if cpc is None else _fmt_currency(cpc)
+    cpm_str = "—" if cpm is None else _fmt_currency(cpm)
+
+    main_line = (
+        f"{status_emoji} {status.upper()} • {time_str}\n"
+        f"Spend {spend_str} · ATC {atc} · IC {ic} · PUR {purch}\n"
+        f"CPA {cpa_str} · BE {be_str} · IMP {_fmt_int(impressions)} · Clicks {_fmt_int(clicks)} · "
+        f"CTR {ctr_str} · CPC {cpc_str} · CPM {cpm_str}"
+    )
+    return main_line.strip()
 
 def format_stage_line(stage: str, counts: Dict[str, any]) -> str:
     """Format a single stage summary line - only show non-zero actions."""
@@ -810,7 +815,7 @@ class SlackClient:
                 self._on_failure()
         if self.enabled and not self.dry_run:
             self._start_sender()
-        _log(f"[SLACK {'SENT' if sent_any else 'QUEUED'} {msg.severity}/{msg.topic}] {msg.text}")
+        _log(f"[SLACK {'SENT' if sent_any else 'QUEUED'} {msg.severity}/{msg.topic}] {msg.sanitized_text()}")
 
     def batch(self, msg: SlackMessage) -> None:
         now = time.time()
@@ -982,18 +987,24 @@ def notify(text: str, severity: Literal["info", "warn", "error"] = "info", topic
         # Format message with smart templates
         formatted_text = smart_notifications.format_smart_message(message_type, text, {})
         
-        # Send the notification
-        client().notify_text(formatted_text, severity=severity, topic=topic, ttl_seconds=ttl_seconds)
+        formatted_text = _sanitize_line(formatted_text)
+        msg = SlackMessage(text=formatted_text, severity=severity, topic=topic, ttl_seconds=ttl_seconds)
+        msg.text = msg.sanitized_text()
+        client().notify(msg)
         
         # Log that we sent it
         smart_notifications.log_message(message_type, text, sent=True)
         
     except ImportError:
         # Fallback to original behavior if smart notifications not available
-        client().notify_text(text, severity=severity, topic=topic, ttl_seconds=ttl_seconds)
+        msg = SlackMessage(text=_sanitize_line(text), severity=severity, topic=topic, ttl_seconds=ttl_seconds)
+        msg.text = msg.sanitized_text()
+        client().notify(msg)
     except Exception as e:
         # Fallback to original behavior on any error
-        client().notify_text(text, severity=severity, topic=topic, ttl_seconds=ttl_seconds)
+        msg = SlackMessage(text=_sanitize_line(text), severity=severity, topic=topic, ttl_seconds=ttl_seconds)
+        msg.text = msg.sanitized_text()
+        client().notify(msg)
 
 def _determine_message_type(text: str, topic: str) -> str:
     """Determine message type from content and topic."""

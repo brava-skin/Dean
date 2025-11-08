@@ -12,7 +12,8 @@ This module provides:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, asdict
+import time
+from dataclasses import dataclass, asdict, field
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -22,6 +23,7 @@ import pytz
 from supabase import Client
 
 from infrastructure.utils import now_utc
+from ml.decision_metrics import decision_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -191,23 +193,29 @@ class MLHealthMetrics:
     timestamp: datetime
     
     # Model performance
-    avg_model_accuracy: float
-    avg_prediction_confidence: float
+    avg_model_accuracy: Optional[float]
+    avg_prediction_confidence: Optional[float]
     models_trained_24h: int
     predictions_made_24h: int
     
+    # Training evaluation
+    training_metrics: Dict[str, Any] = field(default_factory=dict)
+    
+    # Live inference
+    inference_metrics: Dict[str, Any] = field(default_factory=dict)
+    decision_metrics: Dict[str, Any] = field(default_factory=dict)
+    
     # Decision influence
-    ml_influence_avg: float
-    ml_overrides_count: int
-    ml_agreement_rate: float
+    ml_influence_avg: float = 0.0
+    ml_overrides_count: int = 0
+    ml_agreement_rate: float = 0.0
     
     # Data quality
-    anomalies_detected_24h: int
-    data_quality_score: float
+    anomalies_detected_24h: int = 0
+    data_quality_score: float = 1.0
     
     # System health
-    error_rate: float
-    avg_execution_time_ms: float
+    error_rate: float = 0.0
 
 class MLDashboard:
     """Monitoring dashboard for ML system."""
@@ -221,12 +229,21 @@ class MLDashboard:
         """Get current ML system health metrics."""
         try:
             start_time = (now_utc() - timedelta(hours=hours_back)).isoformat()
+            inference_metrics = {}
+            training_metrics = {}
+            
+            timer_start = time.perf_counter()
             
             # Get model metrics
             model_metrics = self._get_model_metrics(start_time)
+            training_metrics.update(model_metrics.get('details', {}))
             
             # Get prediction metrics
             prediction_metrics = self._get_prediction_metrics(start_time)
+            inference_metrics.update(prediction_metrics.get('details', {}))
+            
+            monitor_duration_ms = (time.perf_counter() - timer_start) * 1000.0
+            inference_metrics['monitor_exec_time_ms'] = round(monitor_duration_ms, 1)
             
             # Get decision metrics
             decision_metrics = self._get_decision_metrics(start_time)
@@ -236,34 +253,38 @@ class MLDashboard:
             
             return MLHealthMetrics(
                 timestamp=now_utc(),
-                avg_model_accuracy=model_metrics.get('avg_accuracy', 0.0),
-                avg_prediction_confidence=prediction_metrics.get('avg_confidence', 0.0),
+                avg_model_accuracy=model_metrics.get('avg_accuracy'),
+                avg_prediction_confidence=prediction_metrics.get('avg_confidence'),
                 models_trained_24h=model_metrics.get('count', 0),
                 predictions_made_24h=prediction_metrics.get('count', 0),
+                training_metrics=training_metrics,
+                inference_metrics=inference_metrics,
+                decision_metrics=decision_metrics.get('details', {}),
                 ml_influence_avg=decision_metrics.get('avg_influence', 0.0),
                 ml_overrides_count=decision_metrics.get('overrides', 0),
                 ml_agreement_rate=decision_metrics.get('agreement_rate', 0.0),
                 anomalies_detected_24h=anomaly_metrics.get('count', 0),
                 data_quality_score=anomaly_metrics.get('quality_score', 1.0),
                 error_rate=prediction_metrics.get('error_rate', 0.0),
-                avg_execution_time_ms=prediction_metrics.get('avg_time_ms', 0.0)
             )
             
         except Exception as e:
             self.logger.error(f"Error getting health metrics: {e}")
             return MLHealthMetrics(
                 timestamp=now_utc(),
-                avg_model_accuracy=0.0,
-                avg_prediction_confidence=0.0,
+                avg_model_accuracy=None,
+                avg_prediction_confidence=None,
                 models_trained_24h=0,
                 predictions_made_24h=0,
+                training_metrics={'error': str(e)},
+                inference_metrics={'monitor_exec_time_ms': 0.0},
+                decision_metrics={},
                 ml_influence_avg=0.0,
                 ml_overrides_count=0,
                 ml_agreement_rate=0.0,
                 anomalies_detected_24h=0,
                 data_quality_score=0.0,
                 error_rate=1.0,
-                avg_execution_time_ms=0.0
             )
     
     def _get_model_metrics(self, since: str) -> Dict[str, Any]:
@@ -281,77 +302,191 @@ class MLDashboard:
                     'id, trained_at'
                 ).gte('trained_at', since).execute()
             
-            if not response.data:
-                return {'avg_accuracy': 0.0, 'count': 0}
+            rows = getattr(response, 'data', None) or []
+            if not rows:
+                return {
+                    'avg_accuracy': None,
+                    'count': 0,
+                    'details': {
+                        'accuracy_samples': 0,
+                        'latest_trained_at': None,
+                    },
+                }
             
             # Extract accuracy from model data if available
             # Note: performance_metrics column may not exist in schema
-            accuracies = []
-            for m in response.data:
-                # Try to get performance_metrics if column exists
+            accuracy_samples: List[float] = []
+            for row in rows:
+                model_id = row.get('id')
+                if not model_id:
+                    continue
                 try:
-                    perf_response = self.client.table('ml_models').select('performance_metrics').eq('id', m['id']).execute()
-                    if perf_response.data and perf_response.data[0].get('performance_metrics'):
-                        perf_metrics = perf_response.data[0]['performance_metrics']
+                    perf_response = (
+                        self.client.table('ml_models')
+                        .select('performance_metrics')
+                        .eq('id', model_id)
+                        .execute()
+                    )
+                    perf_payload = getattr(perf_response, 'data', None)
+                    if perf_payload and perf_payload[0].get('performance_metrics'):
+                        perf_metrics = perf_payload[0]['performance_metrics']
                         if isinstance(perf_metrics, dict):
-                            # Use test_r2 or cv_score as accuracy proxy
-                            accuracy = perf_metrics.get('test_r2') or perf_metrics.get('cv_score', 0)
-                            if accuracy and not (np.isnan(accuracy) or np.isinf(accuracy)):
-                                accuracies.append(float(accuracy))
+                            candidate = perf_metrics.get('test_r2') or perf_metrics.get('cv_score')
+                            if candidate is not None:
+                                try:
+                                    value = float(candidate)
+                                    if not (np.isnan(value) or np.isinf(value)):
+                                        accuracy_samples.append(value)
+                                except (TypeError, ValueError):
+                                    continue
                 except Exception:
-                    # Column doesn't exist or is not accessible, skip
-                    pass
+                    # Column doesn't exist or lookup failed - skip
+                    continue
             
-            avg_accuracy = np.mean(accuracies) if accuracies else 0.0
-            # Ensure accuracy is never negative (R2 can be negative for poor models)
-            avg_accuracy = max(0.0, avg_accuracy)
+            avg_accuracy = None
+            if accuracy_samples:
+                avg_accuracy = float(np.mean(accuracy_samples))
+                avg_accuracy = max(0.0, avg_accuracy)
+            
+            latest_trained_values = [
+                row.get('trained_at') for row in rows if row.get('trained_at')
+            ]
+            latest_trained_at = max(latest_trained_values) if latest_trained_values else None
             
             return {
                 'avg_accuracy': avg_accuracy,
-                'count': len(response.data)
+                'count': len(rows),
+                'details': {
+                    'avg_accuracy': avg_accuracy,
+                    'accuracy_samples': len(accuracy_samples),
+                    'latest_trained_at': latest_trained_at,
+                },
             }
             
         except Exception as e:
             self.logger.error(f"Error getting model metrics: {e}")
-            return {'avg_accuracy': 0.0, 'count': 0}
+            return {
+                'avg_accuracy': None,
+                'count': 0,
+                'details': {
+                    'avg_accuracy': None,
+                    'accuracy_samples': 0,
+                    'latest_trained_at': None,
+                    'error': str(e),
+                },
+            }
     
     def _get_prediction_metrics(self, since: str) -> Dict[str, Any]:
         """Get prediction metrics."""
         try:
-            response = self.client.table('ml_predictions').select(
-                'id, confidence_score, created_at'
-            ).gte('created_at', since).execute()
+            response = (
+                self.client.table('ml_predictions')
+                .select('id, confidence_score, created_at')
+                .gte('created_at', since)
+                .execute()
+            )
             
-            if not response.data:
-                return {'avg_confidence': 0.0, 'count': 0, 'error_rate': 0.0, 'avg_time_ms': 0.0}
+            rows = getattr(response, 'data', None) or []
+            if not rows:
+                return {
+                    'avg_confidence': None,
+                    'count': 0,
+                    'error_rate': 0.0,
+                    'details': {
+                        'confidence_samples': 0,
+                        'latest_prediction_at': None,
+                    },
+                }
             
-            confidences = [p.get('confidence_score', 0) for p in response.data]
+            confidence_samples: List[float] = []
+            for row in rows:
+                try:
+                    value = float(row.get('confidence_score', 0.0))
+                    if np.isnan(value) or np.isinf(value):
+                        continue
+                    confidence_samples.append(value)
+                except (TypeError, ValueError):
+                    continue
+            
+            avg_confidence = (
+                float(np.mean(confidence_samples)) if confidence_samples else None
+            )
+            
+            latest_prediction_values = [
+                row.get('created_at') for row in rows if row.get('created_at')
+            ]
+            latest_prediction_at = max(latest_prediction_values) if latest_prediction_values else None
             
             return {
-                'avg_confidence': np.mean(confidences) if confidences else 0.0,
-                'count': len(response.data),
+                'avg_confidence': avg_confidence,
+                'count': len(rows),
                 'error_rate': 0.0,  # Would need error tracking
-                'avg_time_ms': 0.0  # Would need timing data
+                'details': {
+                    'avg_confidence': avg_confidence,
+                    'confidence_samples': len(confidence_samples),
+                    'latest_prediction_at': latest_prediction_at,
+                },
             }
             
         except Exception as e:
             self.logger.error(f"Error getting prediction metrics: {e}")
-            return {'avg_confidence': 0.0, 'count': 0, 'error_rate': 1.0, 'avg_time_ms': 0.0}
+            return {
+                'avg_confidence': None,
+                'count': 0,
+                'error_rate': 1.0,
+                'details': {
+                    'avg_confidence': None,
+                    'confidence_samples': 0,
+                    'latest_prediction_at': None,
+                    'error': str(e),
+                },
+            }
     
     def _get_decision_metrics(self, since: str) -> Dict[str, Any]:
         """Get decision influence metrics."""
         try:
-            # This would need a new table tracking ML decisions vs rule decisions
-            # For now, return placeholders
+            counts = decision_metrics.snapshot()
+            ml_count = counts.get("ml_assisted", 0)
+            rule_count = counts.get("rule_only", 0)
+            total = ml_count + rule_count
+            if total == 0:
+                return {
+                    'avg_influence': 0.0,
+                    'overrides': 0,
+                    'agreement_rate': 0.0,
+                    'details': {
+                        'ml_count': ml_count,
+                        'rule_count': rule_count,
+                        'total_decisions': total,
+                        'message': "No active model or predictions yet.",
+                    },
+                }
+
+            influence = ml_count / total
             return {
-                'avg_influence': 0.5,
+                'avg_influence': influence,
                 'overrides': 0,
-                'agreement_rate': 0.8
+                'agreement_rate': 0.0,
+                'details': {
+                    'ml_count': ml_count,
+                    'rule_count': rule_count,
+                    'total_decisions': total,
+                },
             }
-            
+
         except Exception as e:
             self.logger.error(f"Error getting decision metrics: {e}")
-            return {'avg_influence': 0.0, 'overrides': 0, 'agreement_rate': 0.0}
+            return {
+                'avg_influence': 0.0,
+                'overrides': 0,
+                'agreement_rate': 0.0,
+                'details': {
+                    'ml_count': 0,
+                    'rule_count': 0,
+                    'total_decisions': 0,
+                    'message': 'Failed to compute decision metrics.',
+                },
+            }
     
     def _get_anomaly_metrics(self, since: str) -> Dict[str, Any]:
         """Get anomaly detection metrics."""
@@ -377,20 +512,73 @@ class MLDashboard:
         """Generate human-readable summary of ML system."""
         metrics = self.get_health_metrics()
         
+        accuracy_display = (
+            "n/a"
+            if metrics.avg_model_accuracy is None
+            else f"{metrics.avg_model_accuracy:.1%}"
+        )
+        confidence_display = (
+            "n/a"
+            if metrics.avg_prediction_confidence is None
+            else f"{metrics.avg_prediction_confidence:.1%}"
+        )
+        training_details = metrics.training_metrics or {}
+        inference_details = metrics.inference_metrics or {}
+        exec_time = inference_details.get('monitor_exec_time_ms')
+        exec_display = (
+            f"{float(exec_time):.1f}ms"
+            if isinstance(exec_time, (int, float))
+            else "n/a"
+        )
+        
         report = [
             "🤖 **ML SYSTEM HEALTH REPORT**",
             f"   Generated: {metrics.timestamp.strftime('%Y-%m-%d %H:%M UTC')}",
             "",
-            "📊 **Model Performance (24h)**",
-            f"   • Average Accuracy: {metrics.avg_model_accuracy:.1%}",
+            "📊 **Training Evaluation (24h)**",
+            f"   • Accuracy: {accuracy_display}",
             f"   • Models Trained: {metrics.models_trained_24h}",
+        ]
+        if 'accuracy_samples' in training_details:
+            report.append(
+                f"   • Accuracy Samples: {training_details.get('accuracy_samples')}"
+            )
+        if training_details.get('latest_trained_at'):
+            report.append(
+                f"   • Latest Training: {training_details['latest_trained_at']}"
+            )
+        
+        report.extend([
+            "",
+            "🚀 **Live Inference (24h)**",
             f"   • Predictions Made: {metrics.predictions_made_24h}",
-            f"   • Avg Confidence: {metrics.avg_prediction_confidence:.1%}",
+            f"   • Avg Confidence: {confidence_display}",
+        ])
+        if 'confidence_samples' in inference_details:
+            report.append(
+                f"   • Confidence Samples: {inference_details.get('confidence_samples')}"
+            )
+        if inference_details.get('latest_prediction_at'):
+            report.append(
+                f"   • Latest Prediction: {inference_details['latest_prediction_at']}"
+            )
+        report.append(f"   • Monitoring Exec: {exec_display}")
+        
+        report.extend([
             "",
             "🎯 **Decision Influence (24h)**",
             f"   • ML Influence: {metrics.ml_influence_avg:.1%}",
             f"   • ML Overrides: {metrics.ml_overrides_count}",
             f"   • Agreement Rate: {metrics.ml_agreement_rate:.1%}",
+        ])
+        decision_details = metrics.decision_metrics or {}
+        ml_count = decision_details.get('ml_count', 0)
+        rule_count = decision_details.get('rule_count', 0)
+        total_decisions = decision_details.get('total_decisions', ml_count + rule_count)
+        report.append(f"   • ML vs Rules: {ml_count} vs {rule_count}")
+        if total_decisions == 0 and decision_details.get('message'):
+            report.append(f"   • Note: {decision_details['message']}")
+        report.extend([
             "",
             "⚠️ **Data Quality (24h)**",
             f"   • Anomalies Detected: {metrics.anomalies_detected_24h}",
@@ -398,14 +586,14 @@ class MLDashboard:
             "",
             "⚡ **System Performance**",
             f"   • Error Rate: {metrics.error_rate:.1%}",
-            f"   • Avg Execution: {metrics.avg_execution_time_ms:.0f}ms",
-        ]
+        ])
         
         # Add health status
-        if metrics.avg_model_accuracy > 0.7 and metrics.error_rate < 0.1:
+        accuracy_for_status = metrics.avg_model_accuracy or 0.0
+        if accuracy_for_status > 0.7 and metrics.error_rate < 0.1:
             report.append("")
             report.append("✅ **Status: HEALTHY**")
-        elif metrics.avg_model_accuracy > 0.5:
+        elif accuracy_for_status > 0.5:
             report.append("")
             report.append("⚠️ **Status: DEGRADED**")
         else:

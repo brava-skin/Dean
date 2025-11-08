@@ -21,7 +21,7 @@ from dataclasses import dataclass, asdict, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 import warnings
-from infrastructure.data_validation import date_validator, validate_all_timestamps
+from infrastructure.data_validation import date_validator, validate_all_timestamps, ValidationError
 
 import numpy as np
 import pandas as pd
@@ -30,7 +30,6 @@ from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import time
-from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.preprocessing import StandardScaler, RobustScaler
 from sklearn.dummy import DummyRegressor
 try:
@@ -50,6 +49,7 @@ except ImportError:
     VALIDATED_SUPABASE_AVAILABLE = False
 
 from infrastructure.utils import now_utc, today_ymd_account, yesterday_ymd_account
+from integrations.slack import notify
 
 # Import optimizations
 try:
@@ -149,6 +149,7 @@ class MLConfig:
     rolling_windows: List[int] = None
     feature_importance_threshold: float = 0.01
     max_features: int = 100
+    allow_perfect_scores: bool = False
     
     # Learning parameters
     learning_rate: float = 0.1
@@ -392,11 +393,20 @@ class SupabaseMLClient:
             self.logger.error(f"Error fetching time series data: {e}")
             return pd.DataFrame()
     
-    def save_prediction(self, prediction: PredictionResult, 
-                       ad_id: str, lifecycle_id: str, stage: str,
-                       model_id: str, features: Dict[str, float] = None,
-                       feature_importance: Dict[str, float] = None) -> str:
-        """Save ML prediction to database with comprehensive data."""
+    def save_prediction(
+        self,
+        prediction: PredictionResult,
+        ad_id: str,
+        lifecycle_id: str,
+        stage: str,
+        model_id: str,
+        features: Dict[str, float] = None,
+        feature_importance: Dict[str, float] = None,
+        model_version: Optional[str] = None,
+        feature_version: Optional[str] = None,
+        max_attempts: int = 3,
+    ) -> Optional[str]:
+        """Save ML prediction to database with comprehensive data, including retry logic."""
         try:
             from datetime import datetime, timedelta
             
@@ -429,7 +439,9 @@ class SupabaseMLClient:
             prediction_horizon_hours = prediction.prediction_horizon_hours or 24
             expires_at = now + timedelta(hours=prediction_horizon_hours)
             
-            model_name = prediction.model_version or (f"model_{model_id[:8]}" if model_id else f"model_{stage}_v1")
+            model_name = model_version or prediction.model_version or (f"model_{model_id[:8]}" if model_id else f"model_{stage}_v1")
+            if not getattr(prediction, "model_version", None):
+                prediction.model_version = model_name
             
             data = {
                 'id': prediction_id,
@@ -448,7 +460,9 @@ class SupabaseMLClient:
                 'prediction_horizon_hours': prediction_horizon_hours,
                 'created_at': now.isoformat(),
                 'expires_at': expires_at.isoformat(),
-                'model_name': model_name
+                'model_name': model_name,
+                'model_version': model_version or prediction.model_version,
+                'feature_version': feature_version,
             }
             
             # Validate all timestamps in prediction data
@@ -456,20 +470,44 @@ class SupabaseMLClient:
             
             # Get validated client for automatic validation
             validated_client = self._get_validated_client()
-            
-            if validated_client and hasattr(validated_client, 'insert'):
-                # Use validated client
-                response = validated_client.insert('ml_predictions', data)
-            else:
-                # Fallback to regular client
-                response = self.client.table('ml_predictions').insert(data).execute()
-            
-            if response and (not hasattr(response, 'data') or response.data):
-                self.logger.info(f"Saved prediction {prediction_id} for ad {ad_id} with confidence {confidence_score:.3f}")
-                return prediction_id
-            else:
-                self.logger.error(f"Failed to save prediction for ad {ad_id}")
-                return None
+
+            attempt = 0
+            while attempt < max_attempts:
+                try:
+                    if validated_client and hasattr(validated_client, 'insert'):
+                        response = validated_client.insert('ml_predictions', data)
+                    else:
+                        response = self.client.table('ml_predictions').insert(data).execute()
+
+                    if response and (not hasattr(response, 'data') or response.data):
+                        self.logger.info(
+                            "Saved prediction %s for ad %s (attempt %s) with confidence %.3f",
+                            prediction_id,
+                            ad_id,
+                            attempt + 1,
+                            confidence_score,
+                        )
+                        return prediction_id
+
+                    raise RuntimeError("Insert returned no data")
+                except ValidationError as ve:
+                    self.logger.error(f"Prediction validation failed for ad {ad_id}: {ve}")
+                    return None
+                except Exception as exc:
+                    attempt += 1
+                    if attempt >= max_attempts:
+                        self.logger.error(f"Failed to save prediction for ad {ad_id} after {max_attempts} attempts: {exc}")
+                        return None
+                    backoff = min(2 ** attempt, 5)
+                    self.logger.warning(
+                        "Prediction insert retry %s/%s for ad %s due to error: %s (waiting %.1fs)",
+                        attempt,
+                        max_attempts,
+                        ad_id,
+                        exc,
+                        backoff,
+                    )
+                    time.sleep(backoff)
                 
         except Exception as e:
             self.logger.error(f"Error saving prediction: {e}")
@@ -792,9 +830,12 @@ class XGBoostPredictor:
                 self.logger.warning(f"Failed to get validated client: {e}")
         return self.supabase.client
     
-    def prepare_training_data(self, df: pd.DataFrame, target_col: str) -> Tuple[np.ndarray, np.ndarray, List[str]]:
-        """Prepare training data for ML models with feature selection and caching."""
+    def _build_feature_dataframe(self, df: pd.DataFrame, target_col: str) -> Tuple[pd.DataFrame, List[str]]:
+        """Generate engineered features used for both training and inference."""
         try:
+            if df is None or df.empty:
+                return pd.DataFrame(), []
+
             # Check feature cache
             feature_config = {
                 'rolling_windows': self.config.rolling_windows,
@@ -847,33 +888,222 @@ class XGBoostPredictor:
                     # Clip extreme values to prevent overflow
                     df_features[col] = df_features[col].clip(-1e6, 1e6)
             
-            # Prepare X and y
             # Ensure DataFrame has string column names
             df_features.columns = [str(col) for col in df_features.columns]
             feature_cols = [str(col) for col in feature_cols]
-            
-            X = df_features[feature_cols].values
-            y = df_features[target_col].fillna(0).values
-            
-            # Final data validation
-            if np.any(np.isinf(X)) or np.any(np.isnan(X)):
-                self.logger.warning("Found infinity or NaN in features, cleaning...")
-                X = np.nan_to_num(X, nan=0.0, posinf=1e6, neginf=-1e6)
-            
-            if np.any(np.isinf(y)) or np.any(np.isnan(y)):
-                self.logger.warning("Found infinity or NaN in target, cleaning...")
-                y = np.nan_to_num(y, nan=0.0, posinf=1e6, neginf=-1e6)
-            
-            # Check if we have any valid features
-            if len(feature_cols) == 0 or X.shape[1] == 0:
-                self.logger.warning("No features available for training")
-                return np.array([]), np.array([]), []
-            
-            return X, y, feature_cols
+
+            return df_features, feature_cols
+        
+        except Exception as e:
+            self.logger.error(f"Error building feature dataframe: {e}")
+            return pd.DataFrame(), []
+
+    def _filter_leakage_features(
+        self,
+        feature_cols: List[str],
+        target_col: str,
+    ) -> Tuple[List[str], List[str]]:
+        """Remove features that leak target information."""
+        target_lower = (target_col or "").lower()
+        leakage_map = {
+            "roas": {
+                "roas",
+                "return_on_ad_spend",
+                "revenue_per",
+                "value_per",
+                "spend_per",
+                "purchase_rate",
+                "cpa_roas_efficiency",
+                "engagement_quality",
+            },
+            "ctr": {
+                "ctr",
+                "click_through",
+                "click_rate",
+                "clicks_per",
+                "cpc",
+            },
+            "cpa": {
+                "cpa",
+                "cost_per_acquisition",
+                "cost_per_purchase",
+                "spend_per_purchase",
+            },
+            "cpc": {
+                "cpc",
+                "cost_per_click",
+            },
+            "purchase_rate": {
+                "purchase_rate",
+                "conversion_rate",
+                "ic_rate",
+                "atc_rate",
+            },
+            "conversion_rate": {
+                "conversion_rate",
+                "purchase_rate",
+                "ic_rate",
+                "atc_rate",
+            },
+        }
+
+        patterns = set()
+        if target_lower:
+            patterns.add(target_lower)
+            patterns.update(leakage_map.get(target_lower, set()))
+
+        removed: List[str] = []
+        filtered: List[str] = []
+        for col in feature_cols:
+            lower = col.lower()
+            if any(pattern in lower for pattern in patterns):
+                removed.append(col)
+            else:
+                filtered.append(col)
+
+        if removed:
+            self.logger.info(
+                "Removed %d leakage features for target '%s': %s",
+                len(removed),
+                target_col,
+                ", ".join(sorted(removed)),
+            )
+
+        return filtered, removed
+
+    def _run_leakage_audit(
+        self,
+        df: pd.DataFrame,
+        feature_cols: List[str],
+        target_col: str,
+        removed_leakage: List[str],
+        original_feature_cols: List[str],
+        corr_threshold: float = 0.995,
+    ) -> Dict[str, Any]:
+        """Perform additional leakage checks on suspiciously perfect metrics."""
+        audit_result: Dict[str, Any] = {
+            "confirmed": bool(removed_leakage),
+            "removed_features": list(removed_leakage),
+            "high_correlation_features": [],
+            "correlations": {},
+            "original_feature_count": len(original_feature_cols),
+            "retained_feature_count": len(feature_cols),
+        }
+
+        if df is None or df.empty or target_col not in df.columns:
+            return audit_result
+
+        try:
+            target_series = df[target_col].astype(float)
+            target_std = target_series.std()
+            if target_std == 0:
+                return audit_result
+        except Exception:
+            return audit_result
+
+        suspicious_features: List[Tuple[str, float]] = []
+        correlations: Dict[str, float] = {}
+
+        for col in original_feature_cols:
+            if col not in df.columns:
+                continue
+            try:
+                feature_series = df[col].astype(float)
+                if feature_series.std() == 0:
+                    continue
+                corr = np.corrcoef(feature_series, target_series)[0, 1]
+                if np.isnan(corr):
+                    continue
+                correlations[col] = float(corr)
+                if abs(corr) >= corr_threshold:
+                    suspicious_features.append((col, float(corr)))
+            except Exception:
+                continue
+
+        if suspicious_features:
+            audit_result["high_correlation_features"] = suspicious_features
+            audit_result["confirmed"] = True
+
+        audit_result["correlations"] = correlations
+        return audit_result
+
+    def _time_based_split(
+        self,
+        df_features: pd.DataFrame,
+        target_col: str,
+        min_val: int = 5,
+        min_test: int = 5,
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Create chronological train/validation/test splits."""
+        if "date_end" not in df_features.columns:
+            return df_features, pd.DataFrame(), pd.DataFrame()
+
+        df_sorted = df_features.sort_values("date_end").reset_index(drop=True)
+        total = len(df_sorted)
+        if total < (min_val + min_test + 10):
+            return df_sorted, pd.DataFrame(), pd.DataFrame()
+
+        train_end = int(total * 0.6)
+        val_end = int(total * 0.8)
+
+        # Ensure minimum sizes
+        if total - train_end < (min_val + min_test):
+            train_end = total - (min_val + min_test)
+        val_end = min(max(val_end, train_end + min_val), total - min_test)
+
+        train_df = df_sorted.iloc[:train_end].copy()
+        val_df = df_sorted.iloc[train_end:val_end].copy()
+        test_df = df_sorted.iloc[val_end:].copy()
+
+        if len(val_df) < min_val or len(test_df) < min_test:
+            return df_sorted, pd.DataFrame(), pd.DataFrame()
+
+        return train_df, val_df, test_df
+
+    @staticmethod
+    def _evaluate_split_metrics(
+        model,
+        X: np.ndarray,
+        y: np.ndarray,
+        split_name: str,
+    ) -> Dict[str, float]:
+        """Compute MAE, RMSE, R² for a dataset split."""
+        if X.size == 0 or y.size == 0:
+            return {"mae": float("nan"), "rmse": float("nan"), "r2": float("nan")}
+
+        preds = model.predict(X)
+        mae = mean_absolute_error(y, preds)
+        rmse = mean_squared_error(y, preds, squared=False)
+        try:
+            r2 = r2_score(y, preds)
+        except ValueError:
+            r2 = float("nan")
+        logging.getLogger(__name__).debug(
+            "Split %s metrics -> MAE: %.4f, RMSE: %.4f, R2: %.4f",
+            split_name,
+            mae,
+            rmse,
+            r2,
+        )
+        return {"mae": mae, "rmse": rmse, "r2": r2}
+
+    def prepare_training_data(self, df: pd.DataFrame, target_col: str) -> Tuple[pd.DataFrame, List[str]]:
+        """Prepare feature-engineered dataframe for ML models."""
+        try:
+            df_features, feature_cols = self._build_feature_dataframe(df, target_col)
+
+            if df_features.empty or not feature_cols:
+                return pd.DataFrame(), []
+
+            df_features = df_features.replace([np.inf, -np.inf], np.nan)
+            df_features[feature_cols] = df_features[feature_cols].fillna(0)
+            df_features[target_col] = df_features[target_col].fillna(0)
+
+            return df_features, feature_cols
             
         except Exception as e:
             self.logger.error(f"Error preparing training data: {e}")
-            return np.array([]), np.array([]), []
+            return pd.DataFrame(), []
     
     def train_model(self, model_type: str, stage: str, target_col: str) -> bool:
         """Train XGBoost model for specific prediction task."""
@@ -942,66 +1172,103 @@ class XGBoostPredictor:
 
             # Prepare data
             _ml_log(logging.DEBUG, "Preparing training data for %s_%s", model_type, stage)
-            X, y, feature_cols = self.prepare_training_data(df, target_col)
-            _ml_log(logging.DEBUG, "Prepared data shape: X=%s, y=%s, features=%s", X.shape, y.shape, len(feature_cols))
-            
-            if len(X) == 0 or X.shape[1] == 0:
-                _ml_log(logging.INFO, "SKIP training for %s_%s: no usable features", model_type, stage)
-                return False
-            
-            # Check if we have enough data for training
-            required_samples = ML_MIN_TRAINING_SAMPLES_GLOBAL if used_cross_stage else ML_MIN_TRAINING_SAMPLES_STAGE
-            if len(X) < required_samples:
-                if len(X) == 0:
-                    _ml_log(
-                        logging.INFO,
-                        "SKIP training for %s_%s: no samples available after preparation",
-                        model_type,
-                        stage,
-                    )
-                    return False
-                
+            df_features, feature_cols = self.prepare_training_data(df, target_col)
+            if df_features.empty or not feature_cols:
                 _ml_log(
                     logging.INFO,
-                    "Training fallback baseline for %s_%s: %s samples (< %s required)",
+                    "SKIP training for %s_%s: no usable features after preparation",
                     model_type,
                     stage,
-                    len(X),
+                )
+                return False
+
+            original_feature_cols = list(feature_cols)
+            feature_cols, removed_leakage = self._filter_leakage_features(feature_cols, target_col)
+            if not feature_cols:
+                self.logger.warning(
+                    "All features removed due to leakage for %s_%s (target=%s)",
+                    model_type,
+                    stage,
+                    target_col,
+                )
+                return False
+
+            df_features = df_features.dropna(subset=[target_col]).replace([np.inf, -np.inf], np.nan)
+            df_features = df_features.dropna(subset=feature_cols + [target_col])
+
+            train_df, val_df, test_df = self._time_based_split(df_features, target_col)
+            if val_df.empty or test_df.empty:
+                self.logger.info(
+                    "Insufficient data for chronological validation/testing (%s_%s). Train=%s, Val=%s, Test=%s",
+                    model_type,
+                    stage,
+                    len(train_df),
+                    len(val_df),
+                    len(test_df),
+                )
+                return False
+
+            required_samples = max(
+                ML_MIN_TRAINING_SAMPLES_GLOBAL if used_cross_stage else ML_MIN_TRAINING_SAMPLES_STAGE,
+                10,
+            )
+            if len(train_df) < required_samples:
+                self.logger.info(
+                    "SKIP training for %s_%s: only %s training samples (<%s required)",
+                    model_type,
+                    stage,
+                    len(train_df),
                     required_samples,
                 )
-                return self._train_baseline_model(model_type, stage, X, y, feature_cols)
-            
-            # Apply feature selection if needed
+                return False
+
+            self.logger.info(
+                "Training %s_%s with %d features: %s",
+                model_type,
+                stage,
+                len(feature_cols),
+                ", ".join(feature_cols),
+            )
+
+            X_train = train_df[feature_cols].values
+            y_train = train_df[target_col].values
+            X_val = val_df[feature_cols].values
+            y_val = val_df[target_col].values
+            X_test = test_df[feature_cols].values
+            y_test = test_df[target_col].values
+
             feature_selector = None
             if len(feature_cols) > self.config.max_features:
                 try:
                     from sklearn.feature_selection import SelectKBest, mutual_info_regression
-                    
-                    # Use mutual information for feature selection
-                    feature_selector = SelectKBest(mutual_info_regression, k=min(self.config.max_features, len(feature_cols)))
-                    X = feature_selector.fit_transform(X, y)
-                    
-                    # Get selected feature names
-                    selected_indices = feature_selector.get_support(indices=True)
-                    feature_cols = [feature_cols[i] for i in selected_indices]
-                    
-                    self.logger.info(f"Feature selection: {len(selected_indices)}/{len(feature_cols)} features selected")
+
+                    selector = SelectKBest(
+                        mutual_info_regression,
+                        k=min(self.config.max_features, len(feature_cols)),
+                    )
+                    selector.fit(X_train, y_train)
+                    selected_idx = selector.get_support(indices=True)
+                    feature_selector = selector
+                    feature_cols = [feature_cols[i] for i in selected_idx]
+                    X_train = selector.transform(X_train)
+                    X_val = selector.transform(X_val)
+                    X_test = selector.transform(X_test)
+                    self.logger.info(
+                        "Feature selection retained %d/%d features",
+                        len(feature_cols),
+                        len(selected_idx),
+                    )
                 except Exception as e:
-                    self.logger.warning(f"Feature selection failed: {e}, using all features")
-            
-            # Store feature selector for later use
+                    self.logger.warning(f"Feature selection failed: {e}; using all features")
+                    feature_selector = None
+
             model_key = f"{model_type}_{stage}"
             if feature_selector is not None:
                 self.feature_selectors[model_key] = feature_selector
-            
-            # Split data
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=0.2, random_state=42
-            )
-            
-            # Scale features
+
             scaler = RobustScaler()
             X_train_scaled = scaler.fit_transform(X_train)
+            X_val_scaled = scaler.transform(X_val)
             X_test_scaled = scaler.transform(X_test)
             
             # Train ensemble of models with optimizations
@@ -1112,32 +1379,130 @@ class XGBoostPredictor:
                     ensemble_predictions.append(y_pred_mdl)
                 y_pred_ensemble = np.mean(ensemble_predictions, axis=0)
             
-            mae = mean_absolute_error(y_test, y_pred_ensemble)
-            r2 = r2_score(y_test, y_pred_ensemble)
             training_time = time.time() - training_start
             
-            # Cross-validation score (optimized - use fewer folds if data is small)
-            cv_folds = min(5, max(3, len(X_train_scaled) // 10))
-            if cv_folds >= 3:
-                cv_scores = cross_val_score(primary_model, X_train_scaled, y_train, cv=cv_folds, scoring='r2', n_jobs=-1)
-                cv_mean = cv_scores.mean()
-            else:
-                cv_mean = r2  # Use test R² as proxy
-            
-            self.logger.info(f"Trained {model_type} ensemble for {stage}: MAE={mae:.4f}, R²={r2:.4f}, CV={cv_mean:.4f}, Time={training_time:.2f}s")
+            train_eval = self._evaluate_split_metrics(primary_model, X_train_scaled, y_train, "train")
+            val_eval = self._evaluate_split_metrics(primary_model, X_val_scaled, y_val, "validation")
+            test_eval = self._evaluate_split_metrics(primary_model, X_test_scaled, y_test, "test")
+
+            val_r2 = val_eval.get("r2")
+            if (
+                val_r2 is not None
+                and not np.isnan(val_r2)
+                and val_r2 > 0.98
+                and not self.config.allow_perfect_scores
+            ):
+                self.logger.error(
+                    "Validation R² %.4f for %s_%s appears unrealistic. "
+                    "Training aborted; set allow_perfect_scores=True to override.",
+                    val_r2,
+                    model_type,
+                    stage,
+                )
+                return False
+
+            ensemble_metrics = {
+                "mae": mean_absolute_error(y_test, y_pred_ensemble),
+                "rmse": mean_squared_error(y_test, y_pred_ensemble, squared=False),
+                "r2": r2_score(y_test, y_pred_ensemble),
+            }
+
+            train_r2 = train_eval.get("r2", float("nan"))
+            val_r2 = val_eval.get("r2", float("nan"))
+            test_r2_val = test_eval.get("r2", float("nan"))
+            test_mae_val = test_eval.get("mae", float("nan"))
+            self.logger.info(
+                "Performance for %s_%s -> Train R²=%.3f, Val R²=%.3f, Test R²=%.3f",
+                model_type,
+                stage,
+                train_r2,
+                val_r2,
+                test_r2_val,
+            )
+            self.logger.info(
+                "Ensemble test metrics -> MAE=%.4f, RMSE=%.4f, R²=%.4f (training time %.2fs)",
+                ensemble_metrics["mae"],
+                ensemble_metrics["rmse"],
+                ensemble_metrics["r2"],
+                training_time,
+            )
+
+            suspicious_leakage = (
+                val_r2 is not None
+                and not np.isnan(val_r2)
+                and val_r2 > 0.98
+                and test_eval.get("mae") is not None
+                and not np.isnan(test_mae_val)
+                and test_mae_val <= 0.01
+            )
+            leakage_audit = {
+                "confirmed": bool(removed_leakage),
+                "removed_features": list(removed_leakage),
+                "note": "",
+                "high_correlation_features": [],
+            }
+            if suspicious_leakage:
+                leakage_audit["note"] = "Validation R² > 0.98 with near-zero MAE"
+                try:
+                    combined_df = pd.concat([train_df, val_df, test_df], ignore_index=True)
+                except Exception:
+                    combined_df = train_df
+                leakage_audit = self._run_leakage_audit(
+                    combined_df,
+                    feature_cols,
+                    target_col,
+                    removed_leakage,
+                    original_feature_cols,
+                )
+                leakage_audit["note"] = "Validation R² > 0.98 with near-zero MAE"
+
+            override_key = f"{model_type}:{stage}"
+            override_allowed = (
+                self.parent_system
+                and hasattr(self.parent_system, "leakage_overrides")
+                and override_key in self.parent_system.leakage_overrides
+            )
+            should_activate = True
+            model_status = "ready"
+            if suspicious_leakage and leakage_audit.get("confirmed") and not override_allowed:
+                should_activate = False
+                model_status = "requires_override"
+                high_corr = leakage_audit.get("high_correlation_features", [])
+                corr_excerpt = ""
+                if high_corr:
+                    corr_excerpt = " Suspect features: " + ", ".join(
+                        f"{name} ({corr:+.3f})" for name, corr in high_corr[:5]
+                    )
+                message = (
+                    f"⚠️ Leakage suspected for {model_type}_{stage}: "
+                    f"Val R² {val_r2:.3f}, Test MAE {test_mae_val:.4f}. "
+                    "Model will remain inactive until override."
+                    f"{corr_excerpt}"
+                )
+                self.logger.warning(message)
+                try:
+                    notify(message)
+                except Exception:
+                    pass
+                if self.parent_system:
+                    self.logger.info(
+                        "To override leakage guard, call MLIntelligenceSystem.allow_leakage_override('%s', '%s') and retrain.",
+                        model_type,
+                        stage,
+                    )
             
             # Track performance
             if self.performance_tracker:
                 from ml.ml_optimization import ModelPerformanceMetrics
                 metrics = ModelPerformanceMetrics(
                     model_id=f"{model_type}_{stage}",
-                    accuracy=r2,
+                    accuracy=max(0.0, min(1.0, val_eval.get("r2", 0.0) or 0.0)),
                     precision=0.0,  # Not applicable for regression
                     recall=0.0,
                     f1_score=0.0,
-                    mae=mae,
-                    rmse=np.sqrt(mean_squared_error(y_test, y_pred_ensemble)),
-                    r2_score=r2,
+                    mae=test_eval.get("mae", float("nan")),
+                    rmse=test_eval.get("rmse", float("nan")),
+                    r2_score=test_eval.get("r2", float("nan")),
                     training_time_seconds=training_time,
                     inference_time_ms=0.0,  # Will be updated during inference
                     last_trained=datetime.now(),
@@ -1177,21 +1542,52 @@ class XGBoostPredictor:
                 feature_importance = {str(col): 0.0 for col in feature_cols}
             
             self.feature_importance[model_key] = feature_importance
+            audit_serializable = dict(leakage_audit)
+            if "high_correlation_features" in audit_serializable:
+                audit_serializable["high_correlation_features"] = [
+                    {"feature": name, "correlation": float(corr)}
+                    for name, corr in audit_serializable.get("high_correlation_features", [])
+                ]
             self.feature_importance[f"{model_key}_confidence"] = {
-                'cv_score': float(cv_mean),
-                'test_r2': float(r2),
-                'test_mae': float(mae),
+                'cv_score': float(val_eval.get("r2", float("nan"))),
+                'train_r2': float(train_eval.get("r2", float("nan"))),
+                'val_r2': float(val_eval.get("r2", float("nan"))),
+                'test_r2': float(test_eval.get("r2", float("nan"))),
+                'train_mae': float(train_eval.get("mae", float("nan"))),
+                'val_mae': float(val_eval.get("mae", float("nan"))),
+                'test_mae': float(test_eval.get("mae", float("nan"))),
+                'ensemble_r2': float(ensemble_metrics["r2"]),
+                'ensemble_mae': float(ensemble_metrics["mae"]),
+                'ensemble_rmse': float(ensemble_metrics["rmse"]),
                 'ensemble_size': len(models_ensemble),
-                'training_samples': int(len(X)),
-                'validation_samples': int(len(X_test_scaled)),
+                'training_samples': int(len(X_train_scaled)),
+                'validation_samples': int(len(X_val_scaled)),
+                'test_samples': int(len(X_test_scaled)),
                 'baseline': False,
+                'requires_override': not should_activate,
+                'activation_status': model_status,
+                'leakage_audit': audit_serializable,
             }
             
             self.logger.info(f"🔧 Training completed for {model_type}_{stage}, preparing to save...")
             
             # Save to Supabase (FIX: use primary_model instead of undefined 'model')
             self.logger.info(f"🔧 Attempting to save {model_type}_{stage} model to Supabase...")
-            save_success = self.save_model_to_supabase(model_type, stage, primary_model, scaler, feature_cols, feature_importance)
+            metadata_extra = {
+                "activation_status": model_status,
+                "requires_override": not should_activate,
+                "leakage_audit": audit_serializable,
+            }
+            save_success = self.save_model_to_supabase(
+                model_type,
+                stage,
+                primary_model,
+                scaler,
+                feature_cols,
+                feature_importance,
+                is_active=should_activate,
+                metadata_extra=metadata_extra,
+            )
             if save_success:
                 self.logger.info(f"✅ Successfully saved {model_type}_{stage} model to Supabase")
                 # Load the model immediately after saving to ensure it's available for predictions
@@ -1200,6 +1596,17 @@ class XGBoostPredictor:
                         self.logger.info(f"✅ Verified {model_type}_{stage} model loads correctly after save")
                 except Exception as load_error:
                     self.logger.warning(f"⚠️ Model saved but failed to verify load: {load_error}")
+                if should_activate:
+                    try:
+                        self._post_training_success(model_type, stage, target_col, feature_cols)
+                    except Exception as post_error:
+                        self.logger.warning(f"⚠️ Post-training tasks failed for {model_type}_{stage}: {post_error}")
+                else:
+                    self.logger.info(
+                        "Model %s_%s saved but left inactive pending leakage override.",
+                        model_type,
+                        stage,
+                    )
                 return True
             else:
                 self.logger.error(f"❌ Failed to save {model_type}_{stage} model to Supabase")
@@ -1211,7 +1618,8 @@ class XGBoostPredictor:
             self.logger.error(f"Full traceback: {traceback.format_exc()}")
             return False
     
-    def _train_baseline_model(self, model_type: str, stage: str, X: np.ndarray, y: np.ndarray, feature_cols: List[str]) -> bool:
+    def _train_baseline_model(self, model_type: str, stage: str, target_col: str,
+                              X: np.ndarray, y: np.ndarray, feature_cols: List[str]) -> bool:
         """Train and register a lightweight baseline when data is scarce."""
         try:
             model_key = f"{model_type}_{stage}"
@@ -1260,6 +1668,10 @@ class XGBoostPredictor:
             )
             if save_success:
                 self.logger.info("✅ Baseline model for %s saved to Supabase", model_key)
+            try:
+                self._post_training_success(model_type, stage, target_col, feature_cols)
+            except Exception as post_error:
+                self.logger.warning(f"⚠️ Post-training tasks failed for baseline {model_type}_{stage}: {post_error}")
                 return True
             
             self.logger.error("❌ Failed to save baseline model for %s", model_key)
@@ -1746,9 +2158,18 @@ class XGBoostPredictor:
             self.logger.error(f"Error making prediction: {e}")
             return None
     
-    def save_model_to_supabase(self, model_type: str, stage: str, 
-                              model: any, scaler: StandardScaler,
-                              feature_cols: List[str], feature_importance: Dict[str, float]) -> bool:
+    def save_model_to_supabase(
+        self,
+        model_type: str,
+        stage: str,
+        model: any,
+        scaler: StandardScaler,
+        feature_cols: List[str],
+        feature_importance: Dict[str, float],
+        *,
+        is_active: bool = True,
+        metadata_extra: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """Save trained model to Supabase with graceful fallback."""
         try:
             _ml_log(logging.DEBUG, "Starting save process for %s_%s", model_type, stage)
@@ -1776,11 +2197,12 @@ class XGBoostPredictor:
             
             # Calculate actual performance metrics
             cv_score = sanitize_float(confidence_data.get('cv_score', 0))
+            val_r2 = sanitize_float(confidence_data.get('val_r2', confidence_data.get('test_r2', 0)))
             test_r2 = sanitize_float(confidence_data.get('test_r2', 0))
             test_mae = sanitize_float(confidence_data.get('test_mae', 0))
             
             # Calculate derived metrics from observed scores
-            accuracy = max(0.0, min(1.0, cv_score))
+            accuracy = max(0.0, min(1.0, val_r2))
             precision = max(0.0, min(1.0, test_r2))
             recall = max(0.0, min(1.0, test_r2))
             f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
@@ -1794,11 +2216,19 @@ class XGBoostPredictor:
                 'original_size_bytes': int(len(model_data)),
                 'compression_ratio': len(compressed_model) / len(model_data) if len(model_data) > 0 else 1.0,
                 'cv_score': cv_score,
+                'train_r2': sanitize_float(confidence_data.get('train_r2')),
+                'val_r2': val_r2,
                 'test_r2': test_r2,
+                'train_mae': sanitize_float(confidence_data.get('train_mae')),
+                'val_mae': sanitize_float(confidence_data.get('val_mae')),
                 'test_mae': test_mae,
+                'ensemble_r2': sanitize_float(confidence_data.get('ensemble_r2')),
+                'ensemble_mae': sanitize_float(confidence_data.get('ensemble_mae')),
+                'ensemble_rmse': sanitize_float(confidence_data.get('ensemble_rmse')),
                 'ensemble_size': int(confidence_data.get('ensemble_size', 1)),
                 'training_samples': int(confidence_data.get('training_samples', 1000)),
-                'validation_samples': int(confidence_data.get('validation_samples', 200))
+                'validation_samples': int(confidence_data.get('validation_samples', 200)),
+                'test_samples': int(confidence_data.get('test_samples', 200)),
             }
             
             # Serialize and compress scaler data
@@ -1810,6 +2240,9 @@ class XGBoostPredictor:
                 except Exception as e:
                     self.logger.warning(f"Failed to serialize scaler: {e}")
             
+            model_version = self._get_next_model_version(model_type, stage)
+            model_name = f"{model_type}_{stage}_v{model_version}"
+
             metadata_payload = {
                 'feature_columns': feature_cols,
                 'feature_importance': {k: sanitize_float(v) for k, v in feature_importance.items()},
@@ -1821,7 +2254,23 @@ class XGBoostPredictor:
                 'performance_metrics': performance_metrics,
                 'hyperparameters': self.config.xgb_params,
                 'scaler_data': scaler_data_binary.hex() if scaler_data_binary else None,
+                'model_name': model_name,
             }
+            if metadata_extra:
+                metadata_payload.update(metadata_extra)
+
+            parameters_summary = ", ".join(
+                f"{k}={sanitize_float(v) if isinstance(v, (int, float)) else v}"
+                for k, v in sorted(self.config.xgb_params.items())
+            )
+            if len(parameters_summary) > 1000:
+                parameters_summary = parameters_summary[:997] + "..."
+
+            artifact_path = f"supabase://ml_models/{model_type}/{stage}/v{model_version}/{training_data_hash}.hex"
+
+            metadata_payload['artifact_path'] = artifact_path
+            metadata_payload['parameters_summary'] = parameters_summary
+
             try:
                 metadata_json = json.loads(json.dumps(metadata_payload, default=sanitize_float))
             except Exception:
@@ -1831,14 +2280,16 @@ class XGBoostPredictor:
             data = {
                 'model_type': model_type,
                 'stage': stage,
-                'version': 1,
-                'model_name': f"{model_type}_{stage}_v1",
+                'version': model_version,
+                'model_name': model_name,
                 'model_data': compressed_model.hex(),
+                'parameters_summary': parameters_summary,
+                'artifact_path': artifact_path,
                 'accuracy': accuracy,
                 'precision': precision,
                 'recall': recall,
                 'f1_score': f1_score,
-                'is_active': True,
+                'is_active': is_active,
                 'trained_at': now_utc().isoformat(),
                 'metadata': metadata_json,
             }
@@ -1859,7 +2310,7 @@ class XGBoostPredictor:
             except Exception as lookup_error:
                 _ml_log(logging.DEBUG, "Model registry lookup failed for %s_%s: %s", model_type, stage, lookup_error)
 
-            if existing_model and existing_model.get('is_active'):
+            if is_active and existing_model and existing_model.get('is_active'):
                 if existing_accuracy >= accuracy - ML_MODEL_IMPROVEMENT_DELTA:
                     _ml_log(
                         logging.INFO,
@@ -1878,60 +2329,24 @@ class XGBoostPredictor:
                 validated_client = self._get_validated_client()
                 _ml_log(logging.DEBUG, "Validated client available: %s", bool(validated_client))
                 
-                # Try update first
                 try:
-                    if validated_client and hasattr(validated_client, 'update'):
-                        # Update existing model
-                        _ml_log(logging.DEBUG, "Attempting validated update for %s_%s", model_type, stage)
-                        response = validated_client.update(
-                            'ml_models', 
-                            data, 
-                            eq='model_type', 
-                            value=model_type,
-                            eq2='stage', 
-                            value2=stage
-                        )
-                        _ml_log(logging.DEBUG, "Update response: %s", getattr(response, 'data', response))
-                        
-                        # Check if any rows were actually updated
-                        if hasattr(response, 'data') and len(response.data) > 0:
-                            _ml_log(logging.INFO, "Model %s_%s updated via validated client", model_type, stage)
-                            return True
-                        else:
-                            _ml_log(logging.DEBUG, "Validated update affected 0 rows for %s_%s", model_type, stage)
-                            raise Exception("No rows updated, trying insert")
+                    if validated_client and hasattr(validated_client, 'insert'):
+                        _ml_log(logging.DEBUG, "Attempting validated insert for %s_%s (version %s)", model_type, stage, model_version)
+                        response = validated_client.insert('ml_models', data)
+                        _ml_log(logging.DEBUG, "Insert response: %s", getattr(response, 'data', response))
                     else:
-                        # Fallback to regular client update
-                        _ml_log(logging.DEBUG, "Attempting regular update for %s_%s", model_type, stage)
-                        response = self.supabase.client.table('ml_models').update(data).eq('model_type', model_type).eq('stage', stage).execute()
-                        if response and hasattr(response, 'data') and len(response.data) > 0:
-                            _ml_log(logging.INFO, "Model %s_%s updated via regular client", model_type, stage)
-                            return True
-                        else:
-                            _ml_log(logging.DEBUG, "Regular update affected 0 rows for %s_%s", model_type, stage)
-                            raise Exception("No rows updated, trying insert")
-                except Exception as update_error:
-                    # If update fails, try insert
-                    _ml_log(logging.DEBUG, "Update failed for %s_%s: %s", model_type, stage, update_error)
-                    try:
-                        if validated_client and hasattr(validated_client, 'insert'):
-                            _ml_log(logging.DEBUG, "Attempting validated insert for %s_%s", model_type, stage)
-                            response = validated_client.insert('ml_models', data)
-                            _ml_log(logging.INFO, "Model %s_%s inserted via validated client", model_type, stage)
-                            _ml_log(logging.DEBUG, "Insert response: %s", getattr(response, 'data', response))
-                            return True
-                        else:
-                            _ml_log(logging.DEBUG, "Attempting regular insert for %s_%s", model_type, stage)
-                            response = self.supabase.client.table('ml_models').insert(data).execute()
-                            if response and hasattr(response, 'data') and len(response.data) > 0:
-                                _ml_log(logging.INFO, "Model %s_%s inserted via regular client", model_type, stage)
-                                return True
-                            else:
-                                self.logger.error(f"Insert failed - no data returned for {model_type}_{stage}")
-                                return False
-                    except Exception as insert_error:
-                        self.logger.error(f"Both update and insert failed for {model_type}_{stage}: {insert_error}")
-                        return False  # Return False to indicate save failure
+                        _ml_log(logging.DEBUG, "Attempting regular insert for %s_%s (version %s)", model_type, stage, model_version)
+                        response = self.supabase.client.table('ml_models').insert(data).execute()
+
+                    if response and (not hasattr(response, 'data') or response.data):
+                        _ml_log(logging.INFO, "Model %s_%s inserted as %s", model_type, stage, model_name)
+                        return True
+
+                    self.logger.error(f"Insert failed - no data returned for {model_type}_{stage}")
+                    return False
+                except Exception as insert_error:
+                    self.logger.error(f"Insert failed for {model_type}_{stage}: {insert_error}")
+                    return False  # Return False to indicate save failure
                         
             except Exception as db_error:
                 # If database save fails, log and return False to indicate failure
@@ -1942,6 +2357,230 @@ class XGBoostPredictor:
         except Exception as e:
             self.logger.error(f"Error in save_model_to_supabase: {e}")
             return False  # Return False to indicate save failure
+    
+    def _get_next_model_version(self, model_type: str, stage: str) -> int:
+        """Determine the next sequential version number for a model/stage pair."""
+        try:
+            response = (
+                self.supabase.client.table('ml_models')
+                .select('version')
+                .eq('model_type', model_type)
+                .eq('stage', stage)
+                .order('version', desc=True)
+                .limit(1)
+                .execute()
+            )
+            if response and getattr(response, 'data', None):
+                current_version = response.data[0].get('version') or 0
+                return int(current_version) + 1
+        except Exception as exc:
+            self.logger.debug(f"Unable to determine next version for {model_type}_{stage}: {exc}")
+        return 1
+
+    def _activate_latest_model(self, model_type: str, stage: str) -> Optional[Dict[str, Any]]:
+        """Mark most recent model as active and deactivate older versions."""
+        try:
+            response = (
+                self.supabase.client.table('ml_models')
+                .select('id, model_name, trained_at')
+                .eq('model_type', model_type)
+                .eq('stage', stage)
+                .order('trained_at', desc=True)
+                .limit(1)
+                .execute()
+            )
+            latest = response.data[0] if response and getattr(response, 'data', None) else None
+            if not latest:
+                return None
+
+            latest_id = latest.get('id')
+            if latest_id:
+                try:
+                    (
+                        self.supabase.client.table('ml_models')
+                        .update({'is_active': False})
+                        .eq('model_type', model_type)
+                        .eq('stage', stage)
+                        .neq('id', latest_id)
+                        .execute()
+                    )
+                except Exception as deactivate_error:
+                    self.logger.debug(
+                        "Failed to deactivate previous models for %s_%s: %s",
+                        model_type,
+                        stage,
+                        deactivate_error,
+                    )
+
+                try:
+                    (
+                        self.supabase.client.table('ml_models')
+                        .update({'is_active': True})
+                        .eq('id', latest_id)
+                        .execute()
+                    )
+                except Exception as activate_error:
+                    self.logger.warning(f"Failed to mark model {latest_id} as active: {activate_error}")
+
+            return latest
+        except Exception as exc:
+            self.logger.warning(f"Unable to activate latest model for {model_type}_{stage}: {exc}")
+            return None
+
+    def _generate_predictions_for_active_ads(
+        self,
+        model_type: str,
+        stage: str,
+        target_col: str,
+        model_id: Optional[str],
+        feature_cols: List[str],
+        model_version: Optional[str],
+        feature_version: Optional[str],
+    ) -> int:
+        """Generate fresh predictions for currently active ads."""
+        try:
+            active_resp = (
+                self.supabase.client.table('ad_lifecycle')
+                .select('ad_id')
+                .eq('stage', stage)
+                .eq('status', 'active')
+                .execute()
+            )
+            active_rows = getattr(active_resp, 'data', None) or []
+            active_ad_ids = sorted(
+                {row.get('ad_id') for row in active_rows if row.get('ad_id')}
+            )
+            if not active_ad_ids:
+                self.logger.info("No active ads found for %s_%s; skipping prediction refresh.", model_type, stage)
+                return 0
+
+            df_recent = self.supabase.get_performance_data(
+                ad_ids=active_ad_ids,
+                stages=[stage],
+                days_back=7,
+            )
+            if df_recent.empty:
+                self.logger.info("No recent performance data for active ads in %s_%s.", model_type, stage)
+                return 0
+
+            df_recent = df_recent[df_recent['ad_id'].isin(active_ad_ids)]
+            if df_recent.empty:
+                return 0
+
+            df_recent = df_recent.sort_values('date_end')
+            latest_rows = df_recent.groupby('ad_id').tail(1).copy()
+            if latest_rows.empty:
+                return 0
+
+            features_df, engineered_cols = self._build_feature_dataframe(latest_rows, target_col)
+            if features_df.empty:
+                return 0
+
+            active_feature_cols = [col for col in feature_cols if col in features_df.columns]
+            if not active_feature_cols:
+                active_feature_cols = [col for col in engineered_cols if col in features_df.columns]
+
+            importance = self.feature_importance.get(f"{model_type}_{stage}", {})
+            predictions_saved = 0
+
+            for _, row in features_df.iterrows():
+                ad_id = row.get('ad_id')
+                if not ad_id:
+                    continue
+
+                feature_payload = {}
+                for col in active_feature_cols:
+                    value = row.get(col, 0)
+                    try:
+                        feature_payload[col] = float(value if value == value else 0)  # NaN safe
+                    except (TypeError, ValueError):
+                        feature_payload[col] = 0.0
+
+                prediction = self.predict(model_type, stage, ad_id, feature_payload)
+                if not prediction:
+                    continue
+
+                if model_version:
+                    prediction.model_version = model_version
+                setattr(prediction, "feature_version", feature_version)
+
+                lifecycle_id = row.get('lifecycle_id') or f"lifecycle_{ad_id}"
+                saved_id = self.save_prediction(
+                    prediction,
+                    ad_id=ad_id,
+                    lifecycle_id=lifecycle_id,
+                    stage=stage,
+                    model_id=model_id or f"{model_type}_{stage}",
+                    features=feature_payload,
+                    feature_importance=importance,
+                    model_version=model_version,
+                    feature_version=feature_version,
+                )
+
+                if saved_id:
+                    predictions_saved += 1
+
+            self.logger.info(
+                "Generated %s predictions for %s_%s (ads processed=%s)",
+                predictions_saved,
+                model_type,
+                stage,
+                len(features_df),
+            )
+            return predictions_saved
+        except Exception as exc:
+            self.logger.warning(f"Failed to refresh predictions for {model_type}_{stage}: {exc}")
+            return 0
+
+    def _post_training_success(
+        self,
+        model_type: str,
+        stage: str,
+        target_col: str,
+        feature_cols: List[str],
+    ) -> None:
+        """Handle post-training registry and prediction refresh."""
+        latest_model = self._activate_latest_model(model_type, stage)
+        model_id = latest_model.get('id') if latest_model else None
+        model_version = (
+            latest_model.get('model_name')
+            if latest_model
+            else None
+        )
+
+        feature_version = None
+        if feature_cols:
+            try:
+                import hashlib
+
+                concatenated = "|".join(sorted(feature_cols))
+                feature_version = hashlib.sha1(concatenated.encode("utf-8")).hexdigest()
+            except Exception as exc:
+                self.logger.debug(f"Unable to compute feature version hash: {exc}")
+
+        predictions = self._generate_predictions_for_active_ads(
+            model_type,
+            stage,
+            target_col,
+            model_id,
+            feature_cols,
+            model_version,
+            feature_version,
+        )
+
+        if predictions == 0:
+            self.logger.info(
+                "Post-training complete for %s_%s with no predictions generated; verify active ads.",
+                model_type,
+                stage,
+            )
+        else:
+            self.logger.info(
+                "Post-training complete for %s_%s with %s new predictions stored.",
+                model_type,
+                stage,
+                predictions,
+            )
     
     def load_model_from_supabase(self, model_type: str, stage: str) -> bool:
         """Load trained model from Supabase with graceful fallback."""
@@ -2483,6 +3122,12 @@ class MLIntelligenceSystem:
         self.temporal_analyzer = TemporalAnalyzer(self.supabase)
         self.cross_stage_learner = CrossStageLearner(self.supabase)
         self.logger = logging.getLogger(f"{__name__}.MLIntelligenceSystem")
+        self.leakage_overrides: set[str] = set()
+
+    def allow_leakage_override(self, model_type: str, stage: str) -> None:
+        """Explicitly allow activation of a model flagged for leakage."""
+        key = f"{model_type}:{stage}"
+        self.leakage_overrides.add(key)
     
     def _create_xgboost_wrapper(self, **params):
         """Create XGBoost wrapper with sklearn compatibility."""
@@ -2507,15 +3152,9 @@ class MLIntelligenceSystem:
             
             # Train core prediction models
             models_to_train = [
-                ('performance_predictor', 'testing', 'cpa'),
-                ('performance_predictor', 'validation', 'cpa'),
-                ('performance_predictor', 'scaling', 'cpa'),
-                ('roas_predictor', 'testing', 'roas'),
-                ('roas_predictor', 'validation', 'roas'),
-                ('roas_predictor', 'scaling', 'roas'),
-                ('purchase_probability', 'testing', 'purchases'),
-                ('purchase_probability', 'validation', 'purchases'),
-                ('purchase_probability', 'scaling', 'purchases')
+                ('performance_predictor', 'asc_plus', 'cpa'),
+                ('roas_predictor', 'asc_plus', 'roas'),
+                ('purchase_probability', 'asc_plus', 'purchases'),
             ]
             
             
@@ -2670,13 +3309,8 @@ class MLIntelligenceSystem:
             # Fatigue detection
             fatigue_analysis = self.temporal_analyzer.detect_fatigue(ad_id)
             
-            # Cross-stage insights
+            # Cross-stage insights are not applicable in single-stage ASC+ workflow
             cross_stage_insights = {}
-            if stage != 'testing':
-                prev_stage = 'testing' if stage == 'validation' else 'validation'
-                cross_stage_insights = self.cross_stage_learner.transfer_insights(
-                    prev_stage, stage, ad_id
-                )
             
             # Performance predictions - generate full feature set to match training
             # Get historical data for proper feature engineering

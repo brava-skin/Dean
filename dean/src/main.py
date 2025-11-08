@@ -100,6 +100,8 @@ try:
     from ml.ml_decision_engine import create_ml_decision_engine
     from ml.ml_pipeline import create_ml_pipeline, MLPipelineConfig
     from ml.ml_monitoring import create_ml_dashboard, get_ml_learning_summary, send_ml_learning_report
+    from ml.readiness import ReadinessIssue, evaluate_readiness, notify_degraded_mode
+    from ml.readiness import evaluate_readiness, notify_degraded_mode
     from ml.ml_advanced_features import (
         create_ql_agent, create_lstm_predictor, create_auto_feature_engineer,
         create_bayesian_optimizer, create_portfolio_optimizer, create_seasonality_detector, create_shap_explainer
@@ -136,11 +138,18 @@ except ImportError as e:
     def create_shap_explainer(*args, **kwargs): return None
     def create_causal_impact_analyzer(*args, **kwargs): return None
     def create_ml_decision_engine(*args, **kwargs): return None
+    def evaluate_readiness(*args, **kwargs): return (False, [])
+    def notify_degraded_mode(*args, **kwargs): return None
+    class ReadinessIssue:
+        def __init__(self, check: str, problem: str, fix: str):
+            self.check = check
+            self.problem = problem
+            self.fix = fix
 
 # Legacy modules (updated for ML integration)
 from infrastructure import Store
 from infrastructure.supabase_storage import create_supabase_storage
-from infrastructure.data_validation import date_validator, validate_all_timestamps
+from infrastructure.data_validation import date_validator, validate_all_timestamps, ValidationError
 from integrations import notify, post_run_header_and_get_thread_ts, post_thread_ads_snapshot, prettify_ad_name, fmt_eur, fmt_pct, fmt_roas, fmt_int
 from integrations import MetaClient, AccountAuth, ClientConfig
 from rules.rules import AdvancedRuleEngine as RuleEngine
@@ -934,7 +943,7 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                     'headline': headline,
                     'primary_text': primary_text,
                     'lifecycle_id': ad_data.get('lifecycle_id', ''),
-                    'stage': ad_data.get('stage', 'testing'),
+                    'stage': ad_data.get('stage', 'asc_plus'),
                     'metadata': metadata
                 }
                 
@@ -962,16 +971,33 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                         logger.debug(f"Failed to calculate performance metrics: {e}")
                 
                 # Insert creative intelligence data with automatic validation
-                result = validated_client.insert('creative_intelligence', creative_data)
+                try:
+                    result = validated_client.insert('creative_intelligence', creative_data)
+                except ValidationError as ve:
+                    error_message = (
+                        f"creative_intelligence insert blocked for ad {ad_data.get('ad_id', '')} "
+                        f"({creative_id}): {ve}"
+                    )
+                    logger.error(error_message)
+                    notify(f"⚠️ {error_message}")
+                    continue
+
                 if result:
-                    logger.info(f"Creative intelligence validated and inserted: {creative_id} for ad {ad_data.get('ad_id')}")
-                    
+                    logger.info(
+                        "Creative intelligence validated and inserted: %s for ad %s",
+                        creative_id,
+                        ad_data.get('ad_id'),
+                    )
+
                     # Schedule performance metrics update (async, non-blocking)
                     try:
                         from infrastructure.data_optimizer import CreativeIntelligenceOptimizer
+
                         optimizer = CreativeIntelligenceOptimizer(supabase_client)
                         # Update in background (will calculate from performance_metrics)
-                        optimizer.update_creative_performance(creative_id, ad_data.get('ad_id', ''))
+                        optimizer.update_creative_performance(
+                            creative_id, ad_data.get('ad_id', '')
+                        )
                     except Exception:
                         pass  # Non-critical, continue
         except (KeyError, ValueError, TypeError) as e:
@@ -1915,7 +1941,7 @@ def main() -> None:
     parser.add_argument("--rules", default="config/rules.yaml")
     parser.add_argument("--schema", default=SCHEMA_PATH_DEFAULT)
     parser.add_argument(
-        "--stage", choices=["all", "testing", "validation", "scaling"], default="all"
+        "--stage", choices=["all", "asc_plus"], default="all"
     )
     parser.add_argument("--profile", choices=["production", "staging"], default=None)
     parser.add_argument("--dry-run", action="store_true")
@@ -2195,7 +2221,15 @@ def main() -> None:
             # Show ML system health
             if ml_dashboard:
                 health = ml_dashboard.get_health_metrics(hours_back=24)
-                notify(f"🤖 ML Health: {health.avg_model_accuracy:.1%} accuracy, {health.predictions_made_24h} predictions/24h")
+                accuracy_display = (
+                    "n/a"
+                    if health.avg_model_accuracy is None
+                    else f"{health.avg_model_accuracy:.1%}"
+                )
+                notify(
+                    f"🤖 ML Health: accuracy {accuracy_display}, "
+                    f"{health.predictions_made_24h} predictions/24h"
+                )
             
             notify("✅ ML system initialized successfully (20 enhancements active)")
             
@@ -2239,6 +2273,48 @@ def main() -> None:
                 notify(f"   • Problematic tables: {initial_insights.problematic_tables}")
         except Exception as e:
             notify(f"⚠️ Failed to initialize table monitoring: {e}")
+
+    degraded_mode = False
+    readiness_issues: List[ReadinessIssue] = []
+    original_enable_ml_decisions = None
+    if ml_mode_enabled and ml_pipeline and hasattr(ml_pipeline, "config"):
+        original_enable_ml_decisions = getattr(ml_pipeline.config, "enable_ml_decisions", None)
+
+    if ml_mode_enabled:
+        if supabase_client:
+            try:
+                degraded_mode, readiness_issues = evaluate_readiness(
+                    supabase_client,
+                    ml_pipeline,
+                    table_monitor,
+                )
+            except Exception as exc:
+                degraded_mode = True
+                readiness_issues = [
+                    ReadinessIssue(
+                        "Readiness Gate",
+                        f"Exception during evaluation: {exc}",
+                        "Inspect logs and Supabase connectivity, then rerun readiness.",
+                    )
+                ]
+        else:
+            degraded_mode = True
+            readiness_issues = [
+                ReadinessIssue(
+                    "Supabase Connection",
+                    "Supabase client unavailable.",
+                    "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to enable ML features.",
+                )
+            ]
+
+    if degraded_mode and readiness_issues:
+        notify_degraded_mode(readiness_issues)
+        if ml_pipeline and hasattr(ml_pipeline, "config"):
+            ml_pipeline.config.enable_ml_decisions = False
+    elif ml_pipeline and hasattr(ml_pipeline, "config") and original_enable_ml_decisions is not None:
+        ml_pipeline.config.enable_ml_decisions = original_enable_ml_decisions
+
+    ml_mode_effective = ml_mode_enabled and not degraded_mode
     
     # Initialize Creative Intelligence System
     creative_system = None
@@ -2364,7 +2440,7 @@ def main() -> None:
             settings,
             rules_cfg,
             store,
-            ml_system=ml_system if ml_mode_enabled else None,
+            ml_system=ml_system if ml_mode_effective else None,
         )
         if overall.get("asc_plus"):
             stage_summaries.append({
@@ -2418,7 +2494,7 @@ def main() -> None:
     # Queue persist disabled - ASC+ generates creatives dynamically, no queue to persist
     
     # Run model validation if needed (NEW - weekly validation)
-    if ml_mode_enabled and ml_pipeline:
+    if ml_mode_effective and ml_pipeline:
         try:
             validation_results = ml_pipeline.validate_models_if_needed()
             if validation_results:
@@ -2439,7 +2515,7 @@ def main() -> None:
             notify(f"⚠️ Model validation error: {e}")
     
     # Generate ML dashboard summary (NEW)
-    if ml_mode_enabled and ml_dashboard:
+    if ml_mode_effective and ml_dashboard:
         try:
             summary = ml_dashboard.generate_summary_report()
             notify(summary)
@@ -2468,7 +2544,7 @@ def main() -> None:
     # Post consolidated run summary
     if not shadow_mode:
         time_str = local_now.strftime("%H:%M %Z")
-        status = "OK"  # Simplified status logic - could be enhanced based on failures_in_row
+        status = "DEGRADED" if degraded_mode else "OK"
         
         # Post the main run header and get thread timestamp
         thread_ts = post_run_header_and_get_thread_ts(
@@ -2491,7 +2567,7 @@ def main() -> None:
         
         # Collect ad insights and post as thread reply
         try:
-            if stage_choice in ("all", "asc_plus", "testing"):
+            if stage_choice in ("all", "asc_plus"):
                 # Get today's insights with local timezone
                 import zoneinfo
                 
@@ -2572,7 +2648,7 @@ def main() -> None:
         if hasattr(ml_system, 'predictor'):
             logger.debug(f"ML predictor type: {type(ml_system.predictor)}")
     
-    if ml_mode_enabled and ml_system:
+    if ml_mode_effective and ml_system:
         try:
             # Small delay to ensure data is fully committed to Supabase
             time.sleep(ML_TRAINING_DELAY_SECONDS)
@@ -2585,7 +2661,7 @@ def main() -> None:
             
             try:
                 logger.debug("Calling performance_predictor training...")
-                perf_success = ml_system.predictor.train_model('performance_predictor', 'testing', 'cpa')
+                perf_success = ml_system.predictor.train_model('performance_predictor', 'asc_plus', 'cpa')
                 logger.debug(f"Performance predictor training result: {perf_success}")
             except (AttributeError, ValueError, TypeError) as e:
                 logger.error(f"Performance predictor training error: {e}", exc_info=True)
@@ -2593,7 +2669,7 @@ def main() -> None:
             
             try:
                 logger.debug("Calling roas_predictor training...")
-                roas_success = ml_system.predictor.train_model('roas_predictor', 'testing', 'roas')
+                roas_success = ml_system.predictor.train_model('roas_predictor', 'asc_plus', 'roas')
                 logger.debug(f"ROAS predictor training result: {roas_success}")
             except (AttributeError, ValueError, TypeError) as e:
                 logger.error(f"ROAS predictor training error: {e}", exc_info=True)
@@ -2601,7 +2677,7 @@ def main() -> None:
             
             try:
                 logger.debug("Calling purchase_probability training...")
-                purchase_success = ml_system.predictor.train_model('purchase_probability', 'testing', 'purchases')
+                purchase_success = ml_system.predictor.train_model('purchase_probability', 'asc_plus', 'purchases')
                 logger.debug(f"Purchase predictor training result: {purchase_success}")
             except (AttributeError, ValueError, TypeError) as e:
                 logger.error(f"Purchase predictor training error: {e}", exc_info=True)
@@ -2627,7 +2703,7 @@ def main() -> None:
             notify(f"❌ ML training error: {e}")
 
     # ML Learning Report (enhanced diagnostics)
-    if ml_mode_enabled and supabase_client:
+    if ml_mode_effective and supabase_client:
         try:
             from ml.ml_monitoring import send_ml_learning_report
             send_ml_learning_report(supabase_client, notify)
@@ -2645,6 +2721,7 @@ def main() -> None:
             
             # Send table monitoring report
             table_report = table_monitor.format_insights_report(table_insights)
+            table_monitor.alert_ml_tables(table_insights)
             notify(table_report)
             
             # Alert if ML system doesn't have sufficient data

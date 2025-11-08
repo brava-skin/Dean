@@ -688,6 +688,24 @@ class AdvancedRuleEngine:
             self._stable(entity_id, f"scale_kill:{r['type']}", False)
         return False, ""
 
+    def should_kill_asc_plus(self, row: Dict[str, Any], entity_id: str = "ad") -> Tuple[bool, str]:
+        """Evaluate ASC+ kill rules."""
+        m = self.compute_metrics(row)
+        if not self._meets_minimums("asc_plus", m):
+            return False, ""
+
+        asc_cfg = (self.cfg.get("asc_plus", {}) or {})
+        kill_rules = asc_cfg.get("kill", []) or []
+
+        for rule in kill_rules:
+            ok, reason = self._eval(rule, m, row)
+            rule_key = f"asc_plus_kill:{rule.get('type')}"
+            if ok and self._stable(entity_id, rule_key, True):
+                return True, reason
+            self._stable(entity_id, rule_key, False)
+
+        return False, ""
+
     # ---------- Scaling actions (legacy YAML keys still supported) ----------
     def scaling_increase_budget_pct(self, row: Dict[str, Any], entity_id: str = "ad") -> int:
         """

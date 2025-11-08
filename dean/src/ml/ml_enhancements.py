@@ -157,12 +157,8 @@ class ModelValidator:
         try:
             # Model types to validate
             model_configs = [
-                ('performance_predictor', 'testing'),
-                ('performance_predictor', 'validation'),
-                ('performance_predictor', 'scaling'),
-                ('roas_predictor', 'testing'),
-                ('roas_predictor', 'validation'),
-                ('roas_predictor', 'scaling'),
+                ('performance_predictor', 'asc_plus'),
+                ('roas_predictor', 'asc_plus'),
             ]
             
             for model_type, stage in model_configs:

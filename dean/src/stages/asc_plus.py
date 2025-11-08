@@ -32,7 +32,11 @@ from config.constants import (
     ASC_PLUS_BUDGET_MIN, ASC_PLUS_BUDGET_MAX, ASC_PLUS_MIN_BUDGET_PER_CREATIVE,
     MAX_STAGE_DURATION_HOURS, DB_NUMERIC_MAX,
 )
-from infrastructure.data_validation import validate_all_timestamps
+from infrastructure.data_validation import (
+    validate_all_timestamps,
+    validate_supabase_data,
+    ValidationError,
+)
 
 # Import advanced ML systems
 try:
@@ -122,6 +126,19 @@ def _safe_float(value: Any, default: float = 0.0, precision: int = 4) -> float:
         return round(number, precision)
     except (TypeError, ValueError):
         return default
+
+
+def _clamp(value: Optional[float], minimum: float, maximum: float) -> Optional[float]:
+    """Clamp numeric values to a safe range, returning None when value is invalid."""
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return max(minimum, min(maximum, number))
 
 
 def _parse_created_time(value: Any) -> Optional[datetime]:
@@ -248,9 +265,9 @@ def _calculate_creative_performance(metrics: Optional[Dict[str, Any]]) -> Dict[s
 
 def _calculate_performance_score(perf: Dict[str, float]) -> float:
     """Heuristic performance score between 0-1."""
-    ctr = perf.get("avg_ctr", 0.0)
-    cpa = perf.get("avg_cpa", 0.0)
-    roas = perf.get("avg_roas", 0.0)
+    ctr = perf.get("avg_ctr") or 0.0
+    cpa = perf.get("avg_cpa") or 0.0
+    roas = perf.get("avg_roas") or 0.0
 
     score = 0.3 if ctr >= 1.0 else max(0.0, min(ctr / 5.0, 0.3))
     if roas >= 1.0:
@@ -263,9 +280,9 @@ def _calculate_performance_score(perf: Dict[str, float]) -> float:
 
 def _calculate_fatigue_index(perf: Dict[str, float]) -> float:
     """Simple fatigue indicator (higher = more fatigued)."""
-    ctr = perf.get("avg_ctr", 0.0)
-    cpa = perf.get("avg_cpa", 0.0)
-    roas = perf.get("avg_roas", 0.0)
+    ctr = perf.get("avg_ctr") or 0.0
+    cpa = perf.get("avg_cpa") or 0.0
+    roas = perf.get("avg_roas") or 0.0
 
     fatigue = 0.0
     if ctr < 1.0:
@@ -582,7 +599,7 @@ def _sync_creative_intelligence_records(
 
     storage_map = _collect_storage_metadata(supabase_client, storage_ids)
     now_iso = datetime.now(timezone.utc).isoformat()
-    upsert_records: List[Dict[str, Any]] = []
+    sanitized_records: List[Dict[str, Any]] = []
 
     for ad in ads:
         ad_id = str(ad.get("id") or "")
@@ -623,17 +640,51 @@ def _sync_creative_intelligence_records(
 
         created_at = existing.get("created_at") or now_iso
         lifecycle_id = f"lifecycle_{ad_id}"
-        performance_score = _calculate_performance_score(
-            {"avg_ctr": avg_ctr, "avg_cpa": avg_cpa, "avg_roas": avg_roas}
-        )
-        fatigue_index = _calculate_fatigue_index(
-            {"avg_ctr": avg_ctr, "avg_cpa": avg_cpa, "avg_roas": avg_roas}
-        )
+        avg_ctr = _clamp(avg_ctr, -9.9999, 9.9999) or 0.0
+        avg_cpa = _clamp(avg_cpa, -9.9999, 9.9999) or 0.0
+        avg_roas = _clamp(avg_roas, -9.9999, 9.9999) or 0.0
+
+        performance_score = _clamp(
+            _calculate_performance_score(
+                {"avg_ctr": avg_ctr, "avg_cpa": avg_cpa, "avg_roas": avg_roas}
+            ),
+            0.0,
+            1.0,
+        ) or 0.0
+        fatigue_index = _clamp(
+            _calculate_fatigue_index(
+                {"avg_ctr": avg_ctr, "avg_cpa": avg_cpa, "avg_roas": avg_roas}
+            ),
+            0.0,
+            1.0,
+        ) or 0.0
 
         description = existing.get("description") or metadata.get("ad_copy", {}).get("description") or ""
         headline = existing.get("headline") or metadata.get("ad_copy", {}).get("headline") or ad.get("name") or ""
         primary_text = existing.get("primary_text") or metadata.get("ad_copy", {}).get("primary_text") or ""
         similarity_vector = existing.get("similarity_vector")
+
+        if isinstance(similarity_vector, str):
+            try:
+                similarity_vector = json.loads(similarity_vector)
+            except json.JSONDecodeError:
+                similarity_vector = None
+
+        if isinstance(similarity_vector, list) and similarity_vector and len(similarity_vector) != 384:
+            logger.warning(
+                "Discarding similarity vector for creative %s (%s): expected 384 dimensions, got %s",
+                creative_id,
+                ad_id,
+                len(similarity_vector),
+            )
+            similarity_vector = None
+
+        try:
+            performance_rank = int(existing.get("performance_rank", 1))
+        except (TypeError, ValueError):
+            performance_rank = 1
+        if performance_rank < 1:
+            performance_rank = 1
 
         record: Dict[str, Any] = {
             "creative_id": creative_id,
@@ -647,7 +698,7 @@ def _sync_creative_intelligence_records(
             "avg_ctr": avg_ctr,
             "avg_cpa": avg_cpa,
             "avg_roas": avg_roas,
-            "performance_rank": existing.get("performance_rank") or 0,
+            "performance_rank": performance_rank,
             "performance_score": performance_score,
             "fatigue_index": fatigue_index,
             "similarity_vector": similarity_vector,
@@ -665,16 +716,30 @@ def _sync_creative_intelligence_records(
         }
 
         record = validate_all_timestamps(record)
-        upsert_records.append(record)
 
-    if not upsert_records:
-        return
+        validation = validate_supabase_data("creative_intelligence", record, strict_mode=True)
+        if not validation.is_valid:
+            logger.warning(
+                "Skipping creative_intelligence sync for creative %s (%s): %s",
+                creative_id,
+                ad_id,
+                "; ".join(validation.errors),
+            )
+            continue
+
+        sanitized_records.append(validation.sanitized_data)
+
+    if not sanitized_records:
+        return storage_map
 
     try:
-        supabase_client.table("creative_intelligence").upsert(
-            upsert_records,
+        supabase_client.upsert(
+            "creative_intelligence",
+            sanitized_records,
             on_conflict="creative_id,ad_id",
-        ).execute()
+        )
+    except ValidationError as exc:
+        logger.error("Creative intelligence upsert blocked: %s", exc)
     except Exception as exc:
         logger.debug(f"Failed to upsert creative intelligence records: {exc}")
 
@@ -778,13 +843,14 @@ def _sync_performance_metrics_records(
 
     upserts: List[Dict[str, Any]] = []
 
-    def _bounded(value: float, limit: float = 9.9999) -> float:
+    def _bounded(value: Optional[float], limit: float = 9.9999) -> Optional[float]:
         if value is None:
-            return 0.0
+            return None
         try:
-            return max(-limit, min(limit, float(value)))
+            val = float(value)
+            return max(-limit, min(limit, val))
         except (TypeError, ValueError):
-            return 0.0
+            return None
 
     for ad_id, metrics in metrics_map.items():
         if not ad_id:
@@ -798,36 +864,34 @@ def _sync_performance_metrics_records(
         add_to_cart = safe_f(metrics.get("add_to_cart"))
         initiate_checkout = safe_f(metrics.get("initiate_checkout") or metrics.get("ic"))
         revenue = safe_f(metrics.get("revenue"))
-        ctr = safe_f(metrics.get("ctr"))
+        ctr = metrics.get("ctr")
         cpa = metrics.get("cpa")
-        cpa = safe_f(cpa) if cpa not in (None, "", float("inf"), float("-inf")) else 0.0
-        roas = safe_f(metrics.get("roas"))
+        cpa = safe_f(cpa) if cpa not in (None, "", float("inf"), float("-inf")) else None
+        roas_value = metrics.get("roas")
+        roas = safe_f(roas_value) if roas_value not in (None, "", float("inf"), float("-inf")) else None
 
-        if impressions > 0:
-            ctr = round((clicks / impressions) * 100, 4)
-        if clicks > 0:
-            cpc = round(spend / clicks, 4)
-        else:
-            cpc = 0.0
-        if impressions > 0:
-            cpm = round((spend / impressions) * 1000, 4)
-        else:
-            cpm = 0.0
+        ctr = round((clicks / impressions) * 100, 4) if impressions > 0 else None
+        cpc = round(spend / clicks, 4) if clicks > 0 else None
+        cpm = round((spend / impressions) * 1000, 4) if impressions > 0 else None
         if spend > 0 and revenue > 0:
             roas = round(revenue / spend, 4)
+        elif roas is None:
+            roas = None
         if purchases > 0 and spend > 0:
             cpa = round(spend / purchases, 4)
+        elif cpa is None:
+            cpa = None
 
         ctr = _bounded(ctr)
         cpc = _bounded(cpc)
         cpm = _bounded(cpm)
         roas = _bounded(roas)
         cpa = _bounded(cpa)
-        atc_rate = _bounded((add_to_cart / impressions) * 100) if impressions > 0 else 0.0
-        ic_rate = _bounded((initiate_checkout / impressions) * 100) if impressions > 0 else 0.0
-        purchase_rate = _bounded((purchases / impressions) * 100) if impressions > 0 else 0.0
-        atc_to_ic_rate = _bounded((initiate_checkout / add_to_cart) * 100) if add_to_cart > 0 else 0.0
-        ic_to_purchase_rate = _bounded((purchases / initiate_checkout) * 100) if initiate_checkout > 0 else 0.0
+        atc_rate = _bounded((add_to_cart / impressions) * 100) if impressions > 0 else None
+        ic_rate = _bounded((initiate_checkout / impressions) * 100) if impressions > 0 else None
+        purchase_rate = _bounded((purchases / impressions) * 100) if impressions > 0 else None
+        atc_to_ic_rate = _bounded((initiate_checkout / add_to_cart) * 100) if add_to_cart > 0 else None
+        ic_to_purchase_rate = _bounded((purchases / initiate_checkout) * 100) if initiate_checkout > 0 else None
 
         try:
             creation_time = storage.get_ad_creation_time(ad_id)
@@ -843,14 +907,16 @@ def _sync_performance_metrics_records(
 
         stage_duration_hours = min(stage_duration_hours, float(DB_NUMERIC_MAX))
 
+        perf_ctr_for_scores = ctr if ctr is not None else 0.0
         performance_score = _calculate_performance_score(
-            {"avg_ctr": ctr, "avg_cpa": cpa, "avg_roas": roas}
+            {"avg_ctr": perf_ctr_for_scores, "avg_cpa": cpa or 0.0, "avg_roas": roas or 0.0}
         )
         fatigue_index = _calculate_fatigue_index(
-            {"avg_ctr": ctr, "avg_cpa": cpa, "avg_roas": roas}
+            {"avg_ctr": perf_ctr_for_scores, "avg_cpa": cpa or 0.0, "avg_roas": roas or 0.0}
         )
         stability_score = round(max(0.0, 1.0 - fatigue_index), 4)
-        momentum_score = round(min(ctr / 5.0, 1.0), 4)
+        ctr_for_momentum = perf_ctr_for_scores
+        momentum_score = round(min(ctr_for_momentum / 5.0, 1.0), 4)
 
         record = {
             "ad_id": ad_id,
@@ -908,11 +974,26 @@ def _sync_performance_metrics_records(
     if not upserts:
         return
 
+    def _backfill_metric_nulls(client) -> None:
+        try:
+            client.table("performance_metrics").update({"ctr": None}).eq("ctr", 0).eq("impressions", 0).execute()
+        except Exception:
+            logger.debug("Backfill ctr null update failed", exc_info=True)
+        try:
+            client.table("performance_metrics").update({"cpc": None}).eq("cpc", 0).eq("clicks", 0).execute()
+        except Exception:
+            logger.debug("Backfill cpc null update failed", exc_info=True)
+        try:
+            client.table("performance_metrics").update({"cpm": None}).eq("cpm", 0).eq("impressions", 0).execute()
+        except Exception:
+            logger.debug("Backfill cpm null update failed", exc_info=True)
+
     try:
         supabase_client.table("performance_metrics").upsert(
             upserts,
             on_conflict="ad_id,window_type,date_start",
         ).execute()
+        _backfill_metric_nulls(supabase_client)
     except Exception as exc:
         logger.debug(f"Failed to upsert performance metrics records: {exc}")
 
@@ -1029,20 +1110,29 @@ def _sync_creative_performance_records(
         ctr = _safe_float(metrics.get("ctr"))
         if impressions > 0 and clicks > 0:
             ctr = _safe_float((clicks / impressions) * 100)
-        cpc = _safe_float(metrics.get("cpc") if metrics.get("cpc") else (spend / clicks if clicks > 0 else 0))
-        cpm = _safe_float(metrics.get("cpm") if metrics.get("cpm") else (spend / impressions * 1000 if impressions > 0 else 0))
-        roas = _safe_float(metrics.get("roas"))
+        elif impressions <= 0:
+            ctr = None
+
+        cpc = _safe_float(metrics.get("cpc")) if metrics.get("cpc") is not None else (
+            _safe_float(spend / clicks) if clicks > 0 else None
+        )
+        cpm = _safe_float(metrics.get("cpm")) if metrics.get("cpm") is not None else (
+            _safe_float(spend / impressions * 1000) if impressions > 0 else None
+        )
+        roas = _safe_float(metrics.get("roas")) if metrics.get("roas") is not None else None
         if spend > 0 and metrics.get("revenue"):
             roas = _safe_float(metrics.get("revenue") / spend)
-        cpa = _safe_float(metrics.get("cpa") if metrics.get("cpa") else (spend / purchases if purchases > 0 else 0))
+        cpa = _safe_float(metrics.get("cpa")) if metrics.get("cpa") is not None else (
+            _safe_float(spend / purchases) if purchases > 0 else None
+        )
 
-        engagement_rate = _safe_float((clicks / impressions) * 100 if impressions > 0 else ctr)
-        conversion_rate = _safe_float((purchases / clicks) * 100 if clicks > 0 else 0)
+        engagement_rate = _safe_float((clicks / impressions) * 100) if impressions > 0 else None
+        conversion_rate = _safe_float((purchases / clicks) * 100) if clicks > 0 else None
         conversions = int(purchases)
         lifecycle_id = f"lifecycle_{ad_id}"
 
         performance_score = _calculate_performance_score(
-            {"avg_ctr": ctr, "avg_cpa": cpa, "avg_roas": roas}
+            {"avg_ctr": ctr or 0.0, "avg_cpa": cpa or 0.0, "avg_roas": roas or 0.0}
         )
 
         record = {

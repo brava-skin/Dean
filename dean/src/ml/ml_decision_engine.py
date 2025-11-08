@@ -62,16 +62,10 @@ class MLDecisionEngine:
             )
             
             # Rule-based decision
-            if stage == 'testing':
-                rule_kill, rule_reason = self.rule_engine.should_kill_testing(performance_data)
-            elif stage == 'validation':
-                rule_kill, rule_reason = self.rule_engine.should_kill_validation(performance_data)
-            else:
-                rule_kill = False
-                rule_reason = "No rule check"
+            rule_kill, rule_reason = self.rule_engine.should_kill_asc_plus(performance_data)
             
             # Get ML predictions
-            ml_analysis = self.ml_system.analyze_ad_intelligence(ad_id, stage)
+            ml_analysis = self.ml_system.analyze_ad_intelligence(ad_id, 'asc_plus')
             
             if not ml_analysis or not ml_analysis.get('predictions'):
                 # No ML data, use rules only
@@ -91,10 +85,10 @@ class MLDecisionEngine:
             # High confidence ML prediction
             if confidence > self.confidence_threshold:
                 # Predict poor future performance
-                if stage == 'testing' and predicted_cpa > 45:
-                    ml_recommends_kill = True
-                    ml_reasoning = f"ML predicts CPA will reach €{predicted_cpa:.2f} (confidence: {confidence:.2%})"
-                elif stage == 'validation' and predicted_cpa > 55:
+                thresholds = (self.rule_engine.cfg.get('thresholds') or {})
+                cpa_limits = thresholds.get('cpa', {}) if isinstance(thresholds, dict) else {}
+                max_cpa = float(cpa_limits.get('asc_plus_max', 40))
+                if predicted_cpa > max_cpa:
                     ml_recommends_kill = True
                     ml_reasoning = f"ML predicts CPA will reach €{predicted_cpa:.2f} (confidence: {confidence:.2%})"
                 
@@ -160,13 +154,7 @@ class MLDecisionEngine:
                     purchases=performance_data.get('purchases'),
                     add_to_cart=performance_data.get('atc', 0)
                 )
-                if stage == 'testing':
-                    rule_kill, rule_reason = self.rule_engine.should_kill_testing(performance_data)
-                elif stage == 'validation':
-                    rule_kill, rule_reason = self.rule_engine.should_kill_validation(performance_data)
-                else:
-                    rule_kill = False
-                    rule_reason = "No rule check"
+                rule_kill, rule_reason = self.rule_engine.should_kill_asc_plus(performance_data)
                 return rule_kill, f"Rules: {rule_reason} (ML error)", 0.0
             except Exception as rule_error:
                 self.logger.error(f"Error in fallback rules: {rule_error}")
@@ -191,16 +179,11 @@ class MLDecisionEngine:
             )
             
             # Rule-based decision
-            if stage == 'testing':
-                rule_promote, rule_reason = self.rule_engine.should_advance_from_testing(performance_data)
-            elif stage == 'validation':
-                rule_promote, rule_reason = self.rule_engine.should_advance_from_validation(performance_data)
-            else:
-                rule_promote = False
-                rule_reason = "Not applicable"
+            rule_promote = False
+            rule_reason = "Promotion not applicable in ASC+ stage"
             
             # Get ML predictions
-            ml_analysis = self.ml_system.analyze_ad_intelligence(ad_id, stage)
+            ml_analysis = self.ml_system.analyze_ad_intelligence(ad_id, 'asc_plus')
             
             if not ml_analysis or not ml_analysis.get('predictions'):
                 # No ML data, use rules only
@@ -229,41 +212,13 @@ class MLDecisionEngine:
                     ml_reasoning += f" + Similar to successful ads"
             
             # Combined decision
-            if confidence > self.confidence_threshold:
-                if ml_recommends_promote and rule_promote:
-                    # Both agree - promote with high confidence
-                    final_decision = True
-                    final_reason = f"Rules + ML agree: {rule_reason}. {ml_reasoning}"
-                    ml_influence = 0.5
-                elif ml_recommends_promote and not rule_promote:
-                    # ML says promote but rules don't - careful override
-                    if confidence > 0.90:
-                        final_decision = True
-                        final_reason = f"ML override: {ml_reasoning}"
-                        ml_influence = 0.9
-                    else:
-                        final_decision = False
-                        final_reason = f"Rules say wait (ML confidence {confidence:.2%})"
-                        ml_influence = 0.3
-                elif not ml_recommends_promote and rule_promote:
-                    # Rules say promote but ML says wait
-                    if confidence > 0.85:
-                        final_decision = False
-                        final_reason = f"ML override: Wait for better performance"
-                        ml_influence = 0.8
-                    else:
-                        final_decision = True
-                        final_reason = f"Rules: {rule_reason} (ML not confident)"
-                        ml_influence = 0.2
-                else:
-                    # Both agree to wait
-                    final_decision = False
-                    final_reason = "Rules + ML agree: Not ready yet"
-                    ml_influence = 0.5
+            if confidence > self.confidence_threshold and ml_recommends_promote:
+                final_decision = True
+                final_reason = ml_reasoning or "ML indicates strong performance"
+                ml_influence = 0.7
             else:
-                # Low confidence - use rules
-                final_decision = rule_promote
-                final_reason = f"Rules: {rule_reason} (ML confidence low)"
+                final_decision = False
+                final_reason = rule_reason if rule_reason else "Awaiting additional data"
                 ml_influence = 0.1
             
             return final_decision, final_reason, ml_influence
@@ -283,13 +238,8 @@ class MLDecisionEngine:
                     purchases=performance_data.get('purchases'),
                     add_to_cart=performance_data.get('atc', 0)
                 )
-                if stage == 'testing':
-                    rule_promote, rule_reason = self.rule_engine.should_advance_from_testing(performance_data)
-                elif stage == 'validation':
-                    rule_promote, rule_reason = self.rule_engine.should_advance_from_validation(performance_data)
-                else:
-                    rule_promote = False
-                    rule_reason = "Not applicable"
+                rule_promote = False
+                rule_reason = "Promotion not applicable in ASC+ stage"
                 return rule_promote, f"Rules: {rule_reason} (ML error)", 0.0
             except Exception as rule_error:
                 self.logger.error(f"Error in fallback rules: {rule_error}")

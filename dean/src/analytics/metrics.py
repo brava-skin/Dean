@@ -125,8 +125,8 @@ def _scan_values(row: Dict[str, Any], candidates: Sequence[str], sources: Sequen
     return total
 
 
-def _safe_div(n: float, d: float, default: Optional[float] = None) -> Optional[float]:
-    if d == 0:
+def _safe_div(n: Optional[float], d: Optional[float], default: Optional[float] = None) -> Optional[float]:
+    if n is None or d in (None, 0):
         return default
     return n / d
 
@@ -205,7 +205,7 @@ class Metrics:
     revenue: float = 0.0
     # Video metrics removed - not applicable for static image creatives
 
-    ctr: float = 0.0
+    ctr: Optional[float] = None
     ctr_wilson_lo: Optional[float] = None
     ctr_wilson_hi: Optional[float] = None
     ctr_smoothed: Optional[float] = None
@@ -292,10 +292,10 @@ def metrics_from_row(
     # Video metrics removed - not applicable for static image creatives
     # three_sec_views, video_3_sec_views, video_play_actions are not available for static images
 
-    denom_imps = imps if imps > 0 else (imps + (eps or 0.0))
-    denom_clicks = clicks if clicks > 0 else (clicks + (eps or 0.0))
-
-    ctr = (clicks / denom_imps) if denom_imps > 0 else 0.0
+    denom_imps = imps if imps > 0 else None
+    denom_clicks = clicks if clicks > 0 else None
+    
+    ctr = _safe_div(clicks * 100.0, denom_imps, None)
     ctr_lo, ctr_hi = _wilson_ci(clicks, imps, cfg.ci_z)
     ctr_sm = _beta_smooth(clicks, imps, *cfg.beta_prior_ctr)
 
@@ -424,21 +424,21 @@ def aggregate_rows(
         atc_sum += m.add_to_cart
         atc_clicks_sum += m.clicks
 
-    denom_imps = imps if imps > 0 else (imps + (eps or 0.0))
-    denom_clicks = clicks if clicks > 0 else (clicks + (eps or 0.0))
+    denom_imps = imps if imps > 0 else None
+    denom_clicks = clicks if clicks > 0 else None
 
-    ctr = (clicks / denom_imps) if denom_imps > 0 else 0.0
+    ctr = _safe_div(clicks * 100.0, denom_imps, None)
     ctr_lo, ctr_hi = _wilson_ci(ctr_clicks_sum, ctr_imps_sum, cfg.ci_z)
     ctr_sm = _beta_smooth(ctr_clicks_sum, ctr_imps_sum, *cfg.beta_prior_ctr)
 
     unique_ctr = _safe_div(uniq_clicks_sum, reach_sum, None) if reach_sum > 0 else None
     cpc = _safe_div(spend, denom_clicks, None)
     cpm = _safe_div(spend * 1000.0, denom_imps, None)
-    cvr = _safe_div(cvr_purch_sum, cvr_clicks_sum + (eps or 0.0), None) if (cvr_clicks_sum > 0 or eps) else None
+    cvr = _safe_div(cvr_purch_sum, cvr_clicks_sum if cvr_clicks_sum > 0 else None, None)
     cvr_lo, cvr_hi = _wilson_ci(cvr_purch_sum, cvr_clicks_sum, cfg.ci_z) if cvr_clicks_sum > 0 else (None, None)
     cvr_sm = _beta_smooth(cvr_purch_sum, cvr_clicks_sum, *cfg.beta_prior_cvr)
 
-    atc_rate = _safe_div(atc_sum, atc_clicks_sum + (eps or 0.0), None) if (atc_clicks_sum > 0 or eps) else None
+    atc_rate = _safe_div(atc_sum, atc_clicks_sum if atc_clicks_sum > 0 else None, None)
     atc_lo, atc_hi = _wilson_ci(atc_sum, atc_clicks_sum, cfg.ci_z) if atc_clicks_sum > 0 else (None, None)
     atc_sm = _beta_smooth(atc_sum, atc_clicks_sum, *cfg.beta_prior_atc_rate)
 

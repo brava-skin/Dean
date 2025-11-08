@@ -12,12 +12,14 @@ This module provides:
 
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 
 import pandas as pd
 from supabase import Client
+
+from integrations.slack import notify
 
 
 @dataclass
@@ -31,6 +33,8 @@ class TableHealth:
     is_healthy: bool
     last_updated: datetime
     issues: List[str] = field(default_factory=list)
+    last_insert_at: Optional[datetime] = None
+    recent_activity: bool = False
 
 
 @dataclass
@@ -80,6 +84,12 @@ class TableMonitor:
             'ml_predictions': {'min_rows': 1, 'description': 'ML predictions storage'},
             'learning_events': {'min_rows': 1, 'description': 'ML learning events'}
         }
+
+        # Timestamp fields used to measure recent activity
+        self.table_timestamp_fields: Dict[str, str] = {
+            'ml_models': 'trained_at',
+            'ml_predictions': 'created_at',
+        }
     
     def get_table_row_count(self, table_name: str) -> int:
         """Get current row count for a table."""
@@ -97,6 +107,43 @@ class TableMonitor:
         except Exception as e:
             # Don't print error directly as it corrupts the report formatting
             return 0
+
+    def _get_last_insert_time(self, table_name: str) -> Optional[datetime]:
+        """Fetch the most recent insert timestamp for a table."""
+        if not self.supabase_client:
+            return None
+
+        timestamp_field = self.table_timestamp_fields.get(table_name)
+        if not timestamp_field:
+            return None
+
+        try:
+            response = (
+                self.supabase_client.table(table_name)
+                .select(timestamp_field)
+                .order(timestamp_field, desc=True)
+                .limit(1)
+                .execute()
+            )
+            if not response or not getattr(response, 'data', None):
+                return None
+
+            raw_value = response.data[0].get(timestamp_field)
+            if not raw_value:
+                return None
+
+            if isinstance(raw_value, datetime):
+                ts = raw_value
+            elif isinstance(raw_value, str):
+                ts = datetime.fromisoformat(raw_value.replace('Z', '+00:00'))
+            else:
+                return None
+
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            return ts
+        except Exception:
+            return None
     
     def analyze_table_health(self, table_name: str) -> TableHealth:
         """Analyze health of a specific table."""
@@ -108,6 +155,9 @@ class TableMonitor:
         # Determine if table is healthy
         issues = []
         is_healthy = True
+        last_insert_at = self._get_last_insert_time(table_name)
+        now = datetime.now(timezone.utc)
+        recent_activity = False
         
         if current_rows == 0:
             issues.append("Table is empty")
@@ -117,6 +167,16 @@ class TableMonitor:
         elif new_rows < 0:
             issues.append("Row count decreased (possible data loss)")
             is_healthy = False
+
+        if table_name in self.table_timestamp_fields:
+            if last_insert_at:
+                recent_activity = (now - last_insert_at) <= timedelta(hours=24)
+            else:
+                recent_activity = False
+
+            if current_rows > 0 and not recent_activity:
+                issues.append("No rows inserted in the last 24h")
+                is_healthy = False
         
         # Check ML requirements
         if table_name in self.ml_table_requirements:
@@ -133,7 +193,9 @@ class TableMonitor:
             growth_rate=growth_rate,
             is_healthy=is_healthy,
             last_updated=datetime.now(timezone.utc),
-            issues=issues
+            issues=issues,
+            last_insert_at=last_insert_at,
+            recent_activity=recent_activity,
         )
     
     def get_all_table_insights(self) -> TableInsights:
@@ -273,7 +335,18 @@ class TableMonitor:
             status = "[OK] Ready" if is_ready else "[ERROR] Not Ready"
             requirements = self.ml_table_requirements.get(table_name, {})
             min_rows = requirements.get('min_rows', 0)
-            table_health = insights.tables.get(table_name, TableHealth("", 0, 0, 0, 0, False, datetime.now()))
+            table_health = insights.tables.get(
+                table_name,
+                TableHealth(
+                    table_name="",
+                    current_rows=0,
+                    previous_rows=0,
+                    new_rows=0,
+                    growth_rate=0.0,
+                    is_healthy=False,
+                    last_updated=datetime.now(timezone.utc),
+                ),
+            )
             current_rows = table_health.current_rows
             
             # Ensure current_rows is a valid number for display
@@ -336,6 +409,37 @@ class TableMonitor:
             ml_status['recommendations'].append("✅ All ML tables have sufficient data for training")
         
         return ml_status
+
+    def alert_ml_tables(self, insights: TableInsights) -> None:
+        """Emit Slack alerts when ML tables lack fresh data."""
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        for table_name in ['ml_models', 'ml_predictions']:
+            health = insights.tables.get(table_name)
+            if not health:
+                continue
+
+            if health.current_rows == 0:
+                cause = "table is empty"
+                suggestion = (
+                    "rerun the ML training pipeline to repopulate `ml_models` "
+                    "and regenerate predictions."
+                    if table_name == 'ml_models'
+                    else "trigger the ML pipeline to regenerate predictions."
+                )
+                notify(
+                    f"🚨 `{table_name}` has no rows as of {timestamp}. "
+                    f"Cause: {cause}. Suggested fix: {suggestion}"
+                )
+            elif table_name in self.table_timestamp_fields and not health.recent_activity:
+                last_seen = health.last_insert_at.isoformat() if health.last_insert_at else "unknown"
+                if table_name == 'ml_models':
+                    suggestion = "rerun ML training to register a fresh active model."
+                else:
+                    suggestion = "invoke ML predictions to refresh `ml_predictions`."
+                notify(
+                    f"⚠️ `{table_name}` has no rows in the last 24h (last insert {last_seen}). "
+                    f"Timestamp: {timestamp}. Suggested fix: {suggestion}"
+                )
 
 
 def create_table_monitor(supabase_client: Optional[Client] = None) -> TableMonitor:

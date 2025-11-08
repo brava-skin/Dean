@@ -41,6 +41,7 @@ from ml.ml_enhancements import (
     ModelValidator, DataProgressTracker, AnomalyDetector,
     TimeSeriesForecaster, CreativeSimilarityAnalyzer, CausalImpactAnalyzer
 )
+from ml.decision_metrics import decision_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,7 @@ class MLPipelineResult:
     confidence: float
     reasoning: str
     ml_influence: float
+    used_ml_predictions: bool
     predictions: Dict[str, Any]
     anomalies_detected: bool
     cold_start_mode: bool
@@ -286,39 +288,46 @@ class MLPipeline:
             
             # Build result
             execution_time = (datetime.now() - start_time).total_seconds() * 1000
+            used_ml = bool(predictions)
             
-            return MLPipelineResult(
+            result = MLPipelineResult(
                 stage=stage,
                 ad_id=ad_id,
                 decision=decision,
                 confidence=confidence,
                 reasoning=reasoning,
                 ml_influence=ml_influence,
+                used_ml_predictions=used_ml,
                 predictions=predictions,
                 anomalies_detected=anomalies_detected,
                 cold_start_mode=cold_start_mode,
                 execution_time_ms=execution_time,
                 timestamp=now_utc()
             )
+            decision_metrics.record(used_ml)
+            return result
             
         except Exception as e:
             self.logger.error(f"Error in ML pipeline for {ad_id}: {e}")
             execution_time = (datetime.now() - start_time).total_seconds() * 1000
             
             # Fallback to conservative decision
-            return MLPipelineResult(
+            result = MLPipelineResult(
                 stage=stage,
                 ad_id=ad_id,
                 decision='hold',
                 confidence=0.0,
                 reasoning=f"ML pipeline error: {str(e)}",
                 ml_influence=0.0,
+                used_ml_predictions=False,
                 predictions={},
                 anomalies_detected=False,
                 cold_start_mode=False,
                 execution_time_ms=execution_time,
                 timestamp=now_utc()
             )
+            decision_metrics.record(False)
+            return result
     
     def validate_models_if_needed(self) -> Optional[Dict[str, Any]]:
         """Run model validation if it's time."""

@@ -179,7 +179,7 @@ class SupabaseStorage:
                     self.record_ad_creation(
                         ad_id=ad_id,
                         lifecycle_id=record.get('lifecycle_id', ''),
-                        stage=record.get('stage', 'testing')
+                        stage=record.get('stage', 'asc_plus')
                     )
                     logger.info(f"Fixed invalid creation time for ad {ad_id}")
                     
