@@ -47,6 +47,11 @@ ml_system:
     include_temporal: true
     max_features: 100
 
+# ── Placements Overrides ──────────────────────────────
+placements:
+  asc_plus:
+    advantage_plus_placements: true  # Use Advantage+ Placements
+
 # ── Adaptive Rules Engine ─────────────────────────────
 adaptive_rules:
   enabled: true
@@ -264,3 +269,41 @@ features:
   cross_stage_transfer: true
   auto_budget_optimization: true
   predictive_scaling: true
+
+# ── ASC+ Campaign Configuration ───────────────────────
+asc_plus:
+  daily_budget_eur: 50                     # Base budget: €50/day (€5 per creative for 10 creatives)
+  keep_ads_live: 10
+  max_active_ads: 10
+  target_active_ads: 10                    # Always maintain 10 creatives live (Andromeda requirement)
+  optimization_goal: "PURCHASE"
+  naming_prefix: "[ASC+]"
+
+  # Budget allocation for 10 creatives (base: €50, scales up when ready)
+  budget_per_creative_eur: 5.0             # €5 per creative (€50 ÷ 10) - base budget
+  min_budget_per_creative_eur: 5.0         # Minimum budget per creative
+  max_budget_per_creative_eur: 15.0        # Maximum budget per creative (scales up to €150/day when ready)
+
+  # Scaling configuration
+  scaling:
+    enabled: true
+    min_confidence: 0.75                   # Only scale if ML confidence > 75%
+    min_roas_for_scale: 1.5                # Minimum ROAS to consider scaling
+    min_purchases_for_scale: 5             # Minimum purchases before scaling
+    scale_up_threshold_pct: 20             # Only scale up if recommendation is >20% increase
+
+  queue:
+    enable_rotation: true
+    refill_on_kill: true
+    max_launches_per_day: 10               # Always keep 10 creatives running
+    maintain_creative_count: 10            # Always maintain 10 creatives (Andromeda requirement)
+
+  product:
+    name: "Brava Product"
+    description: "Luxury product for men"
+    features:
+      - "Premium quality"
+      - "Luxury design"
+      - "Sophisticated"
+    brand_tone: "calm confidence"
+    target_audience: "Men aged 18-54"

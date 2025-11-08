@@ -1706,11 +1706,14 @@ class MetaClient:
     def count_active_ads_in_adset(self, adset_id: str, campaign_id: Optional[str] = None) -> int:
         """Count active ads in an adset using multiple methods for accuracy."""
         counts = {}
+        allowed_statuses = {"ACTIVE", "ELIGIBLE"}
         
         try:
             # Method 1: Direct API call from adset - count only ACTIVE ads
             ads = self.list_ads_in_adset(adset_id)
-            direct_count = sum(1 for a in ads if str(a.get("status", "")).upper() == "ACTIVE")
+            direct_count = sum(
+                1 for a in ads if str(a.get("status", "")).upper() in allowed_statuses
+            )
             counts['adset_direct'] = direct_count
             active_count = direct_count
             
@@ -1720,7 +1723,9 @@ class MetaClient:
                     campaign_ads = self.list_ads_in_campaign(campaign_id)
                     # Filter to ads in this specific adset
                     adset_ads = [a for a in campaign_ads if a.get("adset_id") == adset_id]
-                    campaign_count = sum(1 for a in adset_ads if str(a.get("status", "")).upper() == "ACTIVE")
+                    campaign_count = sum(
+                        1 for a in adset_ads if str(a.get("status", "")).upper() in allowed_statuses
+                    )
                     counts['campaign_direct'] = campaign_count
                     # Use the higher count (campaign query is more comprehensive)
                     active_count = max(active_count, campaign_count)
@@ -1763,7 +1768,9 @@ class MetaClient:
                 return storage_count
             # Final fallback to basic count
             ads = self.list_ads_in_adset(adset_id)
-            return sum(1 for a in ads if str(a.get("status", "")).upper() == "ACTIVE")
+            return sum(
+                1 for a in ads if str(a.get("status", "")).upper() in allowed_statuses
+            )
 
     def _resolve_active_count(self, counts: Dict[str, int]) -> int:
         if not counts:

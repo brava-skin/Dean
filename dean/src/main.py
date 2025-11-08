@@ -28,7 +28,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Sequence
 
 from io import TextIOWrapper
 
@@ -45,6 +45,7 @@ from config.constants import (
     MAX_AD_AGE_DAYS, MAX_STAGE_DURATION_HOURS, DEFAULT_SAFE_FLOAT_MAX,
     ML_TRAINING_DELAY_SECONDS
 )
+from config.validate import validate_asc_plus_config
 
 # Configure logging
 logging.basicConfig(
@@ -140,6 +141,24 @@ def _install_stdout_noise_filter() -> None:
 
 
 _install_stdout_noise_filter()
+
+
+def log_config_files(paths: Sequence[str]) -> None:
+    """Log exact file sizes for configuration assets to avoid redacted output."""
+    for raw_path in paths:
+        if not raw_path:
+            continue
+        path = Path(raw_path)
+        if not path.exists():
+            logger.info("Config file %s (missing)", path)
+            continue
+        try:
+            size_bytes = path.stat().st_size
+        except OSError:
+            logger.info("Config file %s (size unknown)", path)
+        else:
+            logger.info("Config file %s (%d bytes)", path, size_bytes)
+
 
 # -----------------------------------------------------
 # Shared metric helpers
@@ -2062,16 +2081,21 @@ def main() -> None:
 
     # Load config and rules
     settings, rules_cfg = load_cfg(args.settings, args.rules)
+    production_config_path = "config/production.yaml"
     
     # Load production config if profile is production
     production_cfg = {}
     if args.profile == "production":
-        production_config_path = "config/production.yaml"
         if os.path.exists(production_config_path):
             production_cfg = load_yaml(production_config_path)
             # Merge production config into settings (production config takes precedence)
             if production_cfg:
                 settings.update(production_cfg)
+    
+    config_paths = [args.settings, args.rules]
+    if args.profile == "production":
+        config_paths.append(production_config_path)
+    log_config_files(config_paths)
     
     # Determine ML mode (default enabled, can be disabled with --no-ml)
     # Check production config first, then args
@@ -2137,6 +2161,13 @@ def main() -> None:
                     result[key] = value
             return result
         settings = deep_merge(settings, rules_cfg)
+
+    try:
+        validate_asc_plus_config(settings)
+    except ValueError as exc:
+        notify(f"❌ ASC+ configuration invalid: {exc}")
+        print("Fatal configuration error. Exiting.", file=sys.stderr)
+        sys.exit(1)
 
     # Resolve profile/dry-run/shadow
     profile = (

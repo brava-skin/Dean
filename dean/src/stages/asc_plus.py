@@ -37,6 +37,7 @@ from infrastructure.data_validation import (
     validate_supabase_data,
     ValidationError,
 )
+from config.validate import validate_asc_plus_config
 
 # Import advanced ML systems
 try:
@@ -935,6 +936,9 @@ def _sync_creative_storage_records(
     now_iso = datetime.now(timezone.utc).isoformat()
     updates: List[Dict[str, Any]] = []
 
+    allowed_statuses = {"ACTIVE", "ELIGIBLE"}
+    archived_statuses = {"ARCHIVED"}
+
     for ad in ads:
         ad_id = str(ad.get("id") or "")
         if not ad_id:
@@ -945,6 +949,14 @@ def _sync_creative_storage_records(
         if not creative_id:
             continue
         creative_id = str(creative_id)
+
+        status_value = str(ad.get("effective_status") or ad.get("status", "")).upper()
+        if status_value in allowed_statuses:
+            storage_status = "active"
+        elif status_value in archived_statuses:
+            storage_status = "archived"
+        else:
+            storage_status = "paused"
 
         storage_row = storage_map.get(creative_id)
         if not storage_row:
@@ -965,7 +977,7 @@ def _sync_creative_storage_records(
         update_record = {
             "creative_id": creative_id,
             "ad_id": ad_id,
-            "status": "active",
+            "status": storage_status,
             "usage_count": usage_count,
             "last_used_at": now_iso,
             "metadata": metadata,
@@ -2145,6 +2157,13 @@ def ensure_asc_plus_campaign(
             notify("❌ Failed to create ASC+ campaign")
             return None, None
         
+        placements_cfg = cfg(settings, "placements.asc_plus") or {}
+        default_placements = cfg(settings, "placements.default.publisher_platforms") or ["facebook", "instagram"]
+        if placements_cfg.get("advantage_plus_placements"):
+            adset_placements: Optional[List[str]] = None
+        else:
+            adset_placements = placements_cfg.get("publisher_platforms") or default_placements
+
         # Create ASC+ adset with Advantage+ placements
         asc_config = cfg(settings, "asc_plus") or {}
         daily_budget = cfg_or_env_f(asc_config, "daily_budget_eur", "ASC_PLUS_BUDGET", 50.0)
@@ -2184,7 +2203,7 @@ def ensure_asc_plus_campaign(
             billing_event="IMPRESSIONS",
             bid_strategy="LOWEST_COST_WITHOUT_CAP",
             targeting=targeting,
-            placements=["facebook", "instagram"],  # Advantage+ will be applied automatically
+            placements=list(adset_placements) if adset_placements else None,
             status="PAUSED",
         )
         
@@ -3542,6 +3561,7 @@ def run_asc_plus_tick(
     ml_system: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Modern ASC+ tick controller with guardrails and creative floor enforcement."""
+    validate_asc_plus_config(settings)
     timekit = Timekit()
     target_count = cfg(settings, "asc_plus.target_active_ads") or 10
     max_active = cfg(settings, "asc_plus.max_active_ads") or target_count
@@ -3632,7 +3652,12 @@ def run_asc_plus_tick(
         metrics_map,
         stage="asc_plus",
     )
-    active_ads = [ad for ad in ads_list if str(ad.get("status", "")).upper() == "ACTIVE"]
+    allowed_statuses = {"ACTIVE", "ELIGIBLE"}
+    active_ads = [
+        ad
+        for ad in ads_list
+        if str(ad.get("effective_status") or ad.get("status", "")).upper() in allowed_statuses
+    ]
 
     # Step 3: apply guardrail kill/promote rules
     killed_ads: List[Tuple[str, str]] = []
