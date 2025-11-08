@@ -1829,10 +1829,22 @@ def _create_creative_and_ad(
             logger.error("FB_PAGE_ID environment variable is required")
             return None, None, False
         
-        # Get Instagram actor ID
-        instagram_actor_id = os.getenv("IG_ACTOR_ID")
+        # Resolve Instagram actor ID (env override -> automatic lookup)
+        env_instagram_actor_id = os.getenv("IG_ACTOR_ID")
+        instagram_actor_id = env_instagram_actor_id or client.get_instagram_actor_id(page_id)
+        if not instagram_actor_id:
+            logger.info(
+                "Instagram actor ID unavailable; creative will not run on Instagram placements unless the page is linked."
+            )
         
-        logger.info(f"Creating Meta creative: name='{creative_name}', page_id='{page_id}', instagram_actor_id={bool(instagram_actor_id)}, has_supabase_url={bool(supabase_storage_url)}, has_image_path={bool(image_path)}")
+        logger.info(
+            "Creating Meta creative: name='%s', page_id='%s', instagram_actor_id=%s, has_supabase_url=%s, has_image_path=%s",
+            creative_name,
+            page_id,
+            bool(instagram_actor_id),
+            bool(supabase_storage_url),
+            bool(image_path),
+        )
         try:
             # Clean primary text - remove "Brava Product" and em dashes
             primary_text = ad_copy_dict.get("primary_text", "")
@@ -1904,10 +1916,13 @@ def _create_creative_and_ad(
         if len(ad_name) > 100:
             ad_name = f"[ASC+] {headline_snippet[:20]} - {date_str} - #{seq_num}"
         
-        # Get Instagram actor ID for ad level (alternative approach)
-        instagram_actor_id = os.getenv("IG_ACTOR_ID")
-        
-        logger.info(f"Creating ad with name='{ad_name}', adset_id='{adset_id}', creative_id='{meta_creative_id}', instagram_actor_id={bool(instagram_actor_id)}")
+        logger.info(
+            "Creating ad with name='%s', adset_id='%s', creative_id='%s', instagram_actor_id=%s",
+            ad_name,
+            adset_id,
+            meta_creative_id,
+            bool(instagram_actor_id),
+        )
         try:
             # Ensure creative_id is a string (Meta API requires string format)
             creative_id_str = str(meta_creative_id).strip()

@@ -791,6 +791,9 @@ class MetaClient:
 
         self._init_sdk_if_needed()
 
+        # Cache for Instagram actor lookups (page_id -> ig_actor_id or None)
+        self._instagram_actor_cache: Dict[str, Optional[str]] = {}
+
     # ------------- SDK init / failover -------------
     @property
     def account(self) -> AccountAuth:
@@ -1076,6 +1079,54 @@ class MetaClient:
                     time.sleep(min(wait, 30.0))
                     continue
                 raise e
+
+    # ------------- Instagram helpers -------------
+    def get_instagram_actor_id(self, page_id: Optional[str], *, force_refresh: bool = False) -> Optional[str]:
+        """
+        Resolve the Instagram actor ID linked to the provided Page.
+
+        Meta requires instagram_actor_id to be present on creatives/ads to enable IG placements.
+        We first look at the IG_ACTOR_ID env var for backwards compatibility. When absent, this
+        helper automatically fetches the currently connected Instagram business account.
+        """
+        if not page_id:
+            return None
+
+        page_id = str(page_id).strip()
+        if not page_id:
+            return None
+
+        if not force_refresh and page_id in self._instagram_actor_cache:
+            return self._instagram_actor_cache[page_id]
+
+        fields = "connected_instagram_account,instagram_business_account"
+        try:
+            data = self._graph_get_object(page_id, params={"fields": fields})
+        except Exception as exc:
+            logger.warning("Failed to look up Instagram actor for page %s: %s", page_id, exc)
+            self._instagram_actor_cache[page_id] = None
+            return None
+
+        ig_actor_id: Optional[str] = None
+        if isinstance(data, dict):
+            connected = data.get("connected_instagram_account")
+            if isinstance(connected, dict):
+                ig_actor_id = connected.get("id") or connected.get("instagram_actor_id")
+
+            if not ig_actor_id:
+                business_account = data.get("instagram_business_account")
+                if isinstance(business_account, dict):
+                    ig_actor_id = business_account.get("id")
+
+        if not ig_actor_id:
+            logger.info(
+                "No Instagram actor linked to page %s. "
+                "Set IG_ACTOR_ID or connect the page to an Instagram business account.",
+                page_id,
+            )
+
+        self._instagram_actor_cache[page_id] = ig_actor_id
+        return ig_actor_id
 
     # ------------- Compliance & idempotency -------------
     def _check_names(self, *, campaign: Optional[str] = None, adset: Optional[str] = None, ad: Optional[str] = None):
