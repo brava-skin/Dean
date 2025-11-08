@@ -781,15 +781,17 @@ class SupabaseDataValidator:
         if value is None or value == '':
             return errors
         
+        min_size_bytes = 64  # Allow lightweight baselines while preventing empty payloads
+
         if isinstance(value, bytes):
             # Binary data - check minimum size
-            if len(value) < 1000:  # Minimum reasonable model size
+            if len(value) < min_size_bytes:
                 errors.append("Model data appears too small")
         elif isinstance(value, str):
             # Check if it's valid hex
             try:
-                bytes.fromhex(value)
-                if len(value) < 1000:  # Minimum reasonable model size
+                raw_bytes = bytes.fromhex(value)
+                if len(raw_bytes) < min_size_bytes:
                     errors.append("Model data appears too small")
             except ValueError:
                 errors.append("Model data must be valid hex string")

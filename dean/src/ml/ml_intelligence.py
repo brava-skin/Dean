@@ -1073,7 +1073,8 @@ class XGBoostPredictor:
 
         preds = model.predict(X)
         mae = mean_absolute_error(y, preds)
-        rmse = mean_squared_error(y, preds, squared=False)
+        mse = mean_squared_error(y, preds)
+        rmse = float(np.sqrt(mse)) if mse >= 0 else float("nan")
         try:
             r2 = r2_score(y, preds)
         except ValueError:
@@ -1681,12 +1682,12 @@ class XGBoostPredictor:
             )
             if save_success:
                 self.logger.info("✅ Baseline model for %s saved to Supabase", model_key)
-            try:
-                self._post_training_success(model_type, stage, target_col, feature_cols)
-            except Exception as post_error:
-                self.logger.warning(f"⚠️ Post-training tasks failed for baseline {model_type}_{stage}: {post_error}")
+                try:
+                    self._post_training_success(model_type, stage, target_col, feature_cols)
+                except Exception as post_error:
+                    self.logger.warning(f"⚠️ Post-training tasks failed for baseline {model_type}_{stage}: {post_error}")
                 return True
-            
+
             self.logger.error("❌ Failed to save baseline model for %s", model_key)
             return False
         
@@ -2561,7 +2562,7 @@ class XGBoostPredictor:
                 setattr(prediction, "feature_version", feature_version)
 
                 lifecycle_id = row.get('lifecycle_id') or f"lifecycle_{ad_id}"
-                saved_id = self.save_prediction(
+                saved_id = self.supabase.save_prediction(
                     prediction,
                     ad_id=ad_id,
                     lifecycle_id=lifecycle_id,
