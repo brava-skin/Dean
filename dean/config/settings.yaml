@@ -64,6 +64,15 @@ placements:
     messenger_positions: []
     audience_network_positions: []
 
+# ── ASC+ Campaign Configuration (lint baseline; production overrides detailed settings) ──
+asc_plus:
+  daily_budget_eur: 50
+  keep_ads_live: 10
+  max_active_ads: 10
+  target_active_ads: 10
+  optimization_goal: "PURCHASE"
+  naming_prefix: "[ASC+]"
+
 # Scheduler cadence aligns with Andromeda requirement (10 creatives, 30-minute checks)
 scheduler:
   asc_plus_tick_minutes: 30                 # Primary automation tick cadence (GitHub Actions matched)
