@@ -17,6 +17,7 @@ import logging
 import os
 import pickle
 import uuid
+import hashlib
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -1660,6 +1661,7 @@ class XGBoostPredictor:
                 scaler,
                 feature_cols,
                 feature_importance,
+                target_col=target_col,
                 is_active=should_activate,
                 metadata_extra=metadata_extra,
             )
@@ -1737,6 +1739,7 @@ class XGBoostPredictor:
                 None,
                 feature_cols,
                 feature_importance,
+                target_col=target_col,
             )
             if save_success:
                 self.logger.info("✅ Baseline model for %s saved to Supabase", model_key)
@@ -2277,12 +2280,13 @@ class XGBoostPredictor:
         self,
         model_type: str,
         stage: str,
-        model: any,
-        scaler: StandardScaler,
+        model: Any,
+        scaler: Optional[Any],
         feature_cols: List[str],
         feature_importance: Dict[str, float],
         *,
-        is_active: bool = True,
+        target_col: Optional[str] = None,
+        is_active: bool = False,
         metadata_extra: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Save trained model to Supabase with graceful fallback."""
@@ -2358,8 +2362,20 @@ class XGBoostPredictor:
             model_version = self._get_next_model_version(model_type, stage)
             model_name = f"{model_type}_{stage}_v{model_version}"
 
+            feature_version: Optional[str] = None
+            if feature_cols:
+                try:
+                    feature_version = hashlib.sha1(
+                        "|".join(sorted(str(col) for col in feature_cols)).encode("utf-8")
+                    ).hexdigest()
+                except Exception as hash_error:
+                    self.logger.debug("Failed to hash feature columns for %s_%s: %s", model_type, stage, hash_error)
+                    feature_version = None
+
             metadata_payload = {
                 'feature_columns': feature_cols,
+                'feature_version': feature_version,
+                'target_column': target_col,
                 'feature_importance': {k: sanitize_float(v) for k, v in feature_importance.items()},
                 'training_date': now_utc().isoformat(),
                 'model_type': model_type,
@@ -2406,6 +2422,7 @@ class XGBoostPredictor:
                 'f1_score': f1_score,
                 'is_active': is_active,
                 'trained_at': now_utc().isoformat(),
+                'feature_version': feature_version,
                 'metadata': metadata_json,
             }
             
@@ -2959,6 +2976,91 @@ class XGBoostPredictor:
         except Exception as e:
             self.logger.warning(f"Failed to load model {model_type}_{stage}: {e}")
             return False
+
+    def refresh_predictions_for_active_models(self, stage: str = "asc_plus") -> int:
+        """Regenerate predictions for all active models if data is stale."""
+        model_specs = [
+            ("performance_predictor", "cpa"),
+            ("roas_predictor", "roas"),
+            ("purchase_probability", "purchases"),
+        ]
+
+        total_predictions = 0
+
+        for model_type, default_target in model_specs:
+            try:
+                response = (
+                    self.supabase.client.table('ml_models')
+                    .select('id, model_type, model_name, metadata, feature_version')
+                    .eq('stage', stage)
+                    .eq('model_type', model_type)
+                    .eq('is_active', True)
+                    .order('trained_at', desc=True)
+                    .limit(1)
+                    .execute()
+                )
+            except Exception as query_error:
+                self.logger.warning("Failed to look up active model for %s_%s: %s", model_type, stage, query_error)
+                continue
+
+            rows = getattr(response, 'data', None) or []
+            if not rows:
+                self.logger.debug("No active %s model found for stage %s", model_type, stage)
+                continue
+
+            model_record = rows[0]
+            metadata = model_record.get('metadata') or {}
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except Exception:
+                    metadata = {}
+
+            feature_cols = metadata.get('feature_columns') or []
+            feature_cols = [str(col) for col in feature_cols] if feature_cols else []
+            if not feature_cols:
+                inferred_cols = self.feature_importance.get(f"{model_type}_{stage}", {})
+                feature_cols = list(inferred_cols.keys()) if inferred_cols else []
+
+            target_col = metadata.get('target_column') or default_target
+            if not target_col:
+                self.logger.debug("Skipping %s_%s refresh due to missing target column", model_type, stage)
+                continue
+
+            feature_version = (
+                metadata.get('feature_version')
+                or model_record.get('feature_version')
+            )
+            if not feature_version and feature_cols:
+                try:
+                    feature_version = hashlib.sha1(
+                        "|".join(sorted(feature_cols)).encode("utf-8")
+                    ).hexdigest()
+                except Exception:
+                    feature_version = None
+
+            model_id = model_record.get('id')
+            model_version = model_record.get('model_name')
+
+            model_key = f"{model_type}_{stage}"
+            if model_key not in self.models:
+                if not self.load_model_from_supabase(model_type, stage):
+                    self.logger.warning("Skipping %s_%s refresh; unable to load model", model_type, stage)
+                    continue
+
+            predictions = self._generate_predictions_for_active_ads(
+                model_type,
+                stage,
+                target_col,
+                model_id,
+                feature_cols,
+                model_version,
+                feature_version,
+            )
+            total_predictions += predictions
+
+        self.logger.info("Refreshed %s predictions for stage %s", total_predictions, stage)
+        return total_predictions
 
 class TemporalAnalyzer:
     """Advanced temporal analysis and trend detection with historical data integration."""

@@ -2390,6 +2390,7 @@ def main() -> None:
 
     if ml_mode_enabled and ml_system and supabase_client:
         ensure_ml_baseline_models(ml_system, supabase_client, stage="asc_plus")
+        refresh_ml_predictions_if_stale(ml_system, supabase_client, stage="asc_plus")
 
     # Initialize Supabase storage for ad creation times and historical data
     supabase_storage = None
@@ -3015,6 +3016,63 @@ def ensure_ml_baseline_models(
     else:
         notify("⚠️ Baseline ML training skipped — insufficient data available.")
     return trained
+
+
+def refresh_ml_predictions_if_stale(
+    ml_system: Any,
+    supabase_client: Any,
+    stage: str = "asc_plus",
+    max_age_hours: int = 6,
+) -> bool:
+    """Regenerate predictions when table monitor reports stale data."""
+    if not ml_system or not supabase_client:
+        return False
+
+    latest_prediction_ts: Optional[datetime] = None
+    try:
+        response = (
+            supabase_client.table("ml_predictions")
+            .select("created_at")
+            .eq("stage", stage)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = getattr(response, "data", None) or []
+        if rows:
+            raw = rows[0].get("created_at")
+            if raw:
+                try:
+                    latest_prediction_ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+                except Exception:
+                    latest_prediction_ts = None
+    except Exception as exc:
+        logger.warning("Unable to query latest prediction timestamp: %s", exc)
+
+    if latest_prediction_ts:
+        if latest_prediction_ts.tzinfo is None:
+            latest_prediction_ts = latest_prediction_ts.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - latest_prediction_ts
+        if age <= timedelta(hours=max_age_hours):
+            return False
+
+    refresher = getattr(ml_system, "refresh_predictions_for_active_models", None)
+    if not callable(refresher):
+        logger.info("ML system does not expose refresh_predictions_for_active_models; skipping auto-refresh")
+        return False
+
+    try:
+        generated = refresher(stage=stage)
+    except Exception as exc:
+        logger.exception("Failed to refresh ML predictions automatically")
+        notify(f"⚠️ Automatic ML prediction refresh failed: {exc}")
+        return False
+
+    if generated > 0:
+        notify(f"🤖 Auto-refreshed {generated} ML predictions for stage {stage}")
+    else:
+        notify(f"⚠️ Prediction refresh executed but produced no new rows for {stage}")
+    return generated > 0
 
 
 if __name__ == "__main__":
