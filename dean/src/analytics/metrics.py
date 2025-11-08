@@ -225,7 +225,7 @@ class Metrics:
 
     aov: Optional[float] = None
     cpa: Optional[float] = None
-    roas: float = 0.0
+    roas: Optional[float] = None
     # thumbstop_rate removed - not applicable for static image creatives
 
     profit: Optional[float] = None
@@ -261,9 +261,7 @@ def metrics_from_row(
     clicks = _to_float(row.get("clicks"))
     uniq_clicks = _to_float(row.get("unique_clicks")) if row.get("unique_clicks") is not None else None
     reach = _to_float(row.get("reach")) if row.get("reach") is not None else None
-    frequency = _to_float(row.get("frequency")) if row.get("frequency") is not None else (
-        _safe_div(imps, reach) if (reach and reach > 0) else None
-    )
+    frequency = _safe_div(imps, reach, None) if (reach and reach > 0) else None
 
     used_act: Dict[str, str] = {}
     used_val: Dict[str, str] = {}
@@ -295,15 +293,13 @@ def metrics_from_row(
     denom_imps = imps if imps > 0 else None
     denom_clicks = clicks if clicks > 0 else None
     
-    ctr = None
-    if imps > 0 and clicks >= 0:
-        ctr = max(0.0, min(100.0, (clicks / imps) * 100.0))
+    ctr = _safe_div(clicks, imps, None) if clicks >= 0 else None
     ctr_lo, ctr_hi = _wilson_ci(clicks, imps, cfg.ci_z)
     ctr_sm = _beta_smooth(clicks, imps, *cfg.beta_prior_ctr)
 
     unique_ctr = _safe_div((uniq_clicks or 0.0), (reach or 0.0), None) if (uniq_clicks is not None and reach) else None
     cpc = _safe_div(spend, denom_clicks, None)
-    cpm = None if imps <= 0 else (spend * 1000.0) / imps
+    cpm = _safe_div(spend * 1000.0, imps, None)
     cvr = _safe_div(purchases, denom_clicks, None)
     cvr_lo, cvr_hi = _wilson_ci(purchases, clicks, cfg.ci_z) if clicks > 0 else (None, None)
     cvr_sm = _beta_smooth(purchases, clicks, *cfg.beta_prior_cvr)
@@ -315,7 +311,7 @@ def metrics_from_row(
     aov = _safe_div(revenue, purchases, None) if purchases > 0 else None
     cpa = _safe_div(spend, purchases, None) if purchases > 0 else None
 
-    roas = _safe_div(revenue, spend, 0.0) if spend > 0 else 0.0
+    roas = _safe_div(revenue, spend, None) if spend > 0 else None
     if cfg.prefer_roas_field:
         proas = row.get("purchase_roas")
         if isinstance(proas, list) and proas:
@@ -363,7 +359,7 @@ def metrics_from_row(
         atc_rate_smoothed=atc_sm,
         aov=aov,
         cpa=cpa,
-        roas=roas or 0.0,
+        roas=roas,
         # thumbstop_rate removed - not applicable for static images
         profit=profit,
         poas=poas,
@@ -429,15 +425,13 @@ def aggregate_rows(
     denom_imps = imps if imps > 0 else None
     denom_clicks = clicks if clicks > 0 else None
 
-    ctr = None
-    if imps > 0 and clicks >= 0:
-        ctr = max(0.0, min(100.0, (clicks / imps) * 100.0))
+    ctr = _safe_div(clicks, imps, None) if clicks >= 0 else None
     ctr_lo, ctr_hi = _wilson_ci(ctr_clicks_sum, ctr_imps_sum, cfg.ci_z)
     ctr_sm = _beta_smooth(ctr_clicks_sum, ctr_imps_sum, *cfg.beta_prior_ctr)
 
     unique_ctr = _safe_div(uniq_clicks_sum, reach_sum, None) if reach_sum > 0 else None
     cpc = _safe_div(spend, denom_clicks, None)
-    cpm = None if imps <= 0 else (spend * 1000.0) / imps
+    cpm = _safe_div(spend * 1000.0, imps, None)
     cvr = _safe_div(cvr_purch_sum, cvr_clicks_sum if cvr_clicks_sum > 0 else None, None)
     cvr_lo, cvr_hi = _wilson_ci(cvr_purch_sum, cvr_clicks_sum, cfg.ci_z) if cvr_clicks_sum > 0 else (None, None)
     cvr_sm = _beta_smooth(cvr_purch_sum, cvr_clicks_sum, *cfg.beta_prior_cvr)
@@ -448,7 +442,7 @@ def aggregate_rows(
 
     aov = _safe_div(revenue, purchases, None) if purchases > 0 else None
     cpa = _safe_div(spend, purchases, None) if purchases > 0 else None
-    roas = _safe_div(revenue, spend, 0.0) if spend > 0 else 0.0
+    roas = _safe_div(revenue, spend, None) if spend > 0 else None
     # thumb/thumbstop_rate removed - video metrics not applicable for static images
 
     profit = poas = None
@@ -484,7 +478,7 @@ def aggregate_rows(
         atc_rate_smoothed=atc_sm,
         aov=aov,
         cpa=cpa,
-        roas=roas or 0.0,
+        roas=roas,
         # thumbstop_rate removed - not applicable for static images
         profit=profit,
         poas=poas,

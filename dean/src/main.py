@@ -210,8 +210,14 @@ try:
     from ml.ml_decision_engine import create_ml_decision_engine
     from ml.ml_pipeline import create_ml_pipeline, MLPipelineConfig
     from ml.ml_monitoring import create_ml_dashboard, get_ml_learning_summary, send_ml_learning_report
-    from ml.readiness import ReadinessIssue, evaluate_readiness, notify_degraded_mode
-    from ml.readiness import evaluate_readiness, notify_degraded_mode
+    from health.readiness_gate import (
+        HealthState,
+        HealthStatus,
+        ReadinessIssue,
+        evaluate_health_state,
+        get_reconciled_counters,
+        notify_health_state,
+    )
     from ml.ml_advanced_features import (
         create_ql_agent, create_lstm_predictor, create_auto_feature_engineer,
         create_bayesian_optimizer, create_portfolio_optimizer, create_seasonality_detector, create_shap_explainer
@@ -248,8 +254,28 @@ except ImportError as e:
     def create_shap_explainer(*args, **kwargs): return None
     def create_causal_impact_analyzer(*args, **kwargs): return None
     def create_ml_decision_engine(*args, **kwargs): return None
-    def evaluate_readiness(*args, **kwargs): return (False, [])
-    def notify_degraded_mode(*args, **kwargs): return None
+    class HealthState:
+        status = "OK"
+        degraded = False
+        issues = []
+
+        def banner(self) -> str:
+            return "✅ OK • ML systems ready (stub)"
+
+    class HealthStatus:
+        OK = "OK"
+        WARN = "WARN"
+        DEGRADED = "DEGRADED"
+
+    def evaluate_health_state(*args, **kwargs):
+        return HealthState()
+
+    def notify_health_state(state):
+        return None
+
+    def get_reconciled_counters(account_snapshot, stage_result=None):
+        return account_snapshot, stage_result or {}
+
     class ReadinessIssue:
         def __init__(self, check: str, problem: str, fix: str):
             self.check = check
@@ -2398,45 +2424,54 @@ def main() -> None:
         except Exception as e:
             notify(f"⚠️ Failed to initialize table monitoring: {e}")
 
-    degraded_mode = False
-    readiness_issues: List[ReadinessIssue] = []
     original_enable_ml_decisions = None
     if ml_mode_enabled and ml_pipeline and hasattr(ml_pipeline, "config"):
         original_enable_ml_decisions = getattr(ml_pipeline.config, "enable_ml_decisions", None)
 
+    health_state: Optional[HealthState] = None
     if ml_mode_enabled:
         if supabase_client:
             try:
-                degraded_mode, readiness_issues = evaluate_readiness(
+                health_state = evaluate_health_state(
                     supabase_client,
                     ml_pipeline,
                     table_monitor,
                 )
             except Exception as exc:
-                degraded_mode = True
-                readiness_issues = [
-                    ReadinessIssue(
-                        "Readiness Gate",
-                        f"Exception during evaluation: {exc}",
-                        "Inspect logs and Supabase connectivity, then rerun readiness.",
-                    )
-                ]
-        else:
-            degraded_mode = True
-            readiness_issues = [
-                ReadinessIssue(
-                    "Supabase Connection",
-                    "Supabase client unavailable.",
-                    "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to enable ML features.",
+                logger.exception("Readiness evaluation failed")
+                health_state = HealthState(
+                    status=HealthStatus.DEGRADED,
+                    degraded=True,
+                    issues=[
+                        ReadinessIssue(
+                            "Readiness Gate",
+                            f"Exception during evaluation: {exc}",
+                            "Inspect logs and Supabase connectivity, then rerun readiness.",
+                        )
+                    ],
+                    message="Readiness evaluation crashed",
                 )
-            ]
+        else:
+            health_state = HealthState(
+                status=HealthStatus.DEGRADED,
+                degraded=True,
+                issues=[
+                    ReadinessIssue(
+                        "Supabase Connection",
+                        "Supabase client unavailable.",
+                        "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to enable ML features.",
+                    )
+                ],
+                message="Supabase connection missing",
+            )
 
-    if degraded_mode and readiness_issues:
-        notify_degraded_mode(readiness_issues)
-        if ml_pipeline and hasattr(ml_pipeline, "config"):
+    degraded_mode = bool(health_state.degraded) if health_state else False
+    if health_state:
+        notify_health_state(health_state)
+        if health_state.degraded and ml_pipeline and hasattr(ml_pipeline, "config"):
             ml_pipeline.config.enable_ml_decisions = False
-    elif ml_pipeline and hasattr(ml_pipeline, "config") and original_enable_ml_decisions is not None:
-        ml_pipeline.config.enable_ml_decisions = original_enable_ml_decisions
+        elif ml_pipeline and hasattr(ml_pipeline, "config") and original_enable_ml_decisions is not None:
+            ml_pipeline.config.enable_ml_decisions = original_enable_ml_decisions
 
     ml_mode_effective = ml_mode_enabled and not degraded_mode
     
@@ -2566,12 +2601,17 @@ def main() -> None:
             store,
             ml_system=ml_system if ml_mode_effective else None,
         )
-        if overall.get("asc_plus"):
+        asc_result = overall.get("asc_plus")
+
+        reconciled_counts: Dict[str, Any] = {}
+        account_info, reconciled_counts = get_reconciled_counters(account_info, asc_result)
+        if asc_result:
             stage_summaries.append({
                 "stage": "ASC+",
-                "result": overall["asc_plus"],
+                "result": asc_result,
+                "counts": reconciled_counts,
             })
-        
+
         # System is ASC+ only - all old stages removed
         
         # Store ASC+ performance data in Supabase for ML system

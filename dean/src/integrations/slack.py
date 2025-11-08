@@ -360,6 +360,11 @@ def format_stage_line(stage: str, counts: Dict[str, any]) -> str:
     """Format a single stage summary line - only show non-zero actions."""
     actions = []
     for key, value in counts.items():
+        if key == "caps_enforced":
+            if not bool(value):
+                actions.append("Caps relaxed")
+            continue
+
         # Handle both simple integers and complex data structures
         if isinstance(value, dict):
             # If it's a dictionary, try to extract a count or use the first value
@@ -382,11 +387,15 @@ def format_stage_line(stage: str, counts: Dict[str, any]) -> str:
             
         if count_value > 0:  # Only show actions that happened
             if key == "kills":
-                actions.append(f"Killed {count_value}")
+                actions.append(f"Killed {int(count_value)}")
             elif key == "promotions":
-                actions.append(f"Promoted {count_value}")
-            elif key == "launched":
-                actions.append(f"Launched {count_value}")
+                actions.append(f"Promoted {int(count_value)}")
+            elif key == "launched" or key == "created":
+                actions.append(f"Launched {int(count_value)}")
+            elif key == "active":
+                actions.append(f"Active {int(count_value)}")
+            elif key == "hydrated":
+                actions.append(f"Hydrated {int(count_value)}")
             elif key == "fatigue_flags":
                 actions.append(f"Fatigue {count_value}")
             elif key == "data_quality_alerts":
@@ -403,7 +412,7 @@ def format_stage_line(stage: str, counts: Dict[str, any]) -> str:
                 actions.append(f"Refreshed {count_value}")
     
     if not actions:
-        return f"{stage}: ✓"
+        return f"{stage}: –"
     
     return f"{stage}: {', '.join(actions)}"
 
@@ -416,7 +425,7 @@ def prettify_ad_name(name: str) -> str:
 def fmt_eur(amount: Optional[float]) -> str:
     """Format currency with Euro symbol."""
     if amount is None:
-        return "–"
+        return "-"
     # Import locally to avoid circular dependency
     from infrastructure.utils import fmt_currency
     return fmt_currency(amount)
@@ -424,7 +433,7 @@ def fmt_eur(amount: Optional[float]) -> str:
 def fmt_pct(value: Optional[float], decimals: int = 1) -> str:
     """Format percentage with specified decimal places."""
     if value is None:
-        return "–"
+        return "-"
     # Import locally to avoid circular dependency
     from infrastructure.utils import fmt_pct as utils_fmt_pct
     return utils_fmt_pct(value, decimals)
@@ -432,7 +441,7 @@ def fmt_pct(value: Optional[float], decimals: int = 1) -> str:
 def fmt_roas(value: Optional[float]) -> str:
     """Format ROAS with 2 decimal places."""
     if value is None:
-        return "–"
+        return "-"
     # Import locally to avoid circular dependency
     from infrastructure.utils import fmt_roas as utils_fmt_roas
     return utils_fmt_roas(value)
@@ -440,7 +449,7 @@ def fmt_roas(value: Optional[float]) -> str:
 def fmt_int(value: Optional[int]) -> str:
     """Format integer."""
     if value is None:
-        return "–"
+        return "-"
     # Import locally to avoid circular dependency
     from infrastructure.utils import fmt_int as utils_fmt_int
     return utils_fmt_int(value)
@@ -1153,7 +1162,7 @@ def build_ads_snapshot(rows_today: List[Dict[str, Any]], rows_lifetime: List[Dic
     def _fmt_eur(amount: Optional[float]) -> str:
         """Format currency with Euro symbol."""
         if amount is None:
-            return "–"
+            return "-"
         return f"€{amount:,.2f}"
     
     # Build lifetime lookup by ad_id

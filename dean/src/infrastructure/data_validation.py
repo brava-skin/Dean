@@ -9,12 +9,14 @@ Includes date validation and correction utilities.
 import re
 import json
 import logging
+import os
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Any, Optional, Union, Callable
 from dataclasses import dataclass
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+STRICT_MODE = os.getenv("STRICT_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 class ValidationError(Exception):
     """Custom exception for validation errors."""
@@ -371,6 +373,65 @@ class CustomValidator(FieldValidator):
         except Exception:
             return value
 
+class UnitEnforcer:
+    """Enforce metric unit expectations (fractions vs currency) before persistence."""
+
+    FRACTION_FIELDS = {
+        "ctr",
+        "unique_ctr",
+        "atc_rate",
+        "ic_rate",
+        "purchase_rate",
+        "atc_to_ic_rate",
+        "ic_to_purchase_rate",
+        "engagement_rate",
+        "conversion_rate",
+        "avg_ctr",
+    }
+
+    NON_NEGATIVE_FIELDS = {
+        "cpc",
+        "cpm",
+        "cpa",
+        "roas",
+        "spend",
+    }
+
+    EPS = 1e-9
+
+    def enforce(self, table_name: str, data: Dict[str, Any]) -> List[str]:
+        errors: List[str] = []
+
+        for field in self.FRACTION_FIELDS:
+            if field not in data:
+                continue
+            value = data.get(field)
+            if value is None:
+                continue
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                errors.append(f"{field}: expected numeric fraction, got {value!r}")
+                continue
+            if numeric < -self.EPS or numeric > 1 + self.EPS:
+                errors.append(f"{field}: fraction {numeric:.6f} out of expected [0,1] range")
+
+        for field in self.NON_NEGATIVE_FIELDS:
+            if field not in data:
+                continue
+            value = data.get(field)
+            if value is None:
+                continue
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                errors.append(f"{field}: expected numeric value, got {value!r}")
+                continue
+            if numeric < -self.EPS:
+                errors.append(f"{field}: negative value {numeric:.6f} is not allowed")
+
+        return errors
+
 class TableValidator:
     """Validator for entire Supabase tables."""
     
@@ -430,6 +491,7 @@ class SupabaseDataValidator:
     
     def __init__(self):
         self.table_validators = self._create_table_validators()
+        self.unit_enforcer = UnitEnforcer()
     
     def _create_table_validators(self) -> Dict[str, TableValidator]:
         """Create validators for all Supabase tables."""
@@ -449,18 +511,18 @@ class SupabaseDataValidator:
                 'purchases': IntegerValidator('purchases', min_value=0),
                 'add_to_cart': IntegerValidator('add_to_cart', min_value=0),
                 'initiate_checkout': IntegerValidator('initiate_checkout', min_value=0),
-                'ctr': FloatValidator('ctr', min_value=0, max_value=100),
+                'ctr': FloatValidator('ctr', min_value=0, max_value=1),
                 'cpc': FloatValidator('cpc', min_value=0, max_value=999.99),
                 'cpm': FloatValidator('cpm', min_value=0, max_value=9999.99),
                 'roas': FloatValidator('roas', min_value=0, max_value=999.99),
                 'cpa': FloatValidator('cpa', min_value=0, max_value=999.99),
                 'dwell_time': FloatValidator('dwell_time', min_value=0, max_value=999999.99),
                 'frequency': FloatValidator('frequency', min_value=0, max_value=999.99),
-                'atc_rate': FloatValidator('atc_rate', min_value=0, max_value=9.9999),
-                'ic_rate': FloatValidator('ic_rate', min_value=0, max_value=9.9999),
-                'purchase_rate': FloatValidator('purchase_rate', min_value=0, max_value=9.9999),
-                'atc_to_ic_rate': FloatValidator('atc_to_ic_rate', min_value=0, max_value=9.9999),
-                'ic_to_purchase_rate': FloatValidator('ic_to_purchase_rate', min_value=0, max_value=9.9999),
+                'atc_rate': FloatValidator('atc_rate', min_value=0, max_value=1),
+                'ic_rate': FloatValidator('ic_rate', min_value=0, max_value=1),
+                'purchase_rate': FloatValidator('purchase_rate', min_value=0, max_value=1),
+                'atc_to_ic_rate': FloatValidator('atc_to_ic_rate', min_value=0, max_value=1),
+                'ic_to_purchase_rate': FloatValidator('ic_to_purchase_rate', min_value=0, max_value=1),
                 'performance_quality_score': IntegerValidator('performance_quality_score', min_value=0, max_value=100),
                 'stability_score': FloatValidator('stability_score', min_value=0, max_value=9.9999),
                 'momentum_score': FloatValidator('momentum_score', min_value=0, max_value=9.9999),
@@ -502,9 +564,9 @@ class SupabaseDataValidator:
                 'text_overlay': BooleanValidator('text_overlay'),
                 # music_present and voice_over removed - not applicable for static images
                 # NUMERIC(5,4) constraint: values must be between -9.9999 and 9.9999
-                'avg_ctr': FloatValidator('avg_ctr', min_value=-9.9999, max_value=9.9999),
-                'avg_cpa': FloatValidator('avg_cpa', min_value=-9.9999, max_value=9.9999),
-                'avg_roas': FloatValidator('avg_roas', min_value=-9.9999, max_value=9.9999),
+                'avg_ctr': FloatValidator('avg_ctr', min_value=0, max_value=1),
+                'avg_cpa': FloatValidator('avg_cpa', min_value=0, max_value=999999.99),
+                'avg_roas': FloatValidator('avg_roas', min_value=0, max_value=999.99),
                 'performance_rank': IntegerValidator('performance_rank', min_value=1),
                 'similarity_vector': CustomValidator('similarity_vector', 
                                                    self._validate_similarity_vector,
@@ -552,13 +614,13 @@ class SupabaseDataValidator:
                 'purchases': IntegerValidator('purchases', min_value=0),
                 'add_to_cart': IntegerValidator('add_to_cart', min_value=0),
                 'initiate_checkout': IntegerValidator('initiate_checkout', min_value=0),
-                'ctr': FloatValidator('ctr', min_value=0, max_value=100),
+                'ctr': FloatValidator('ctr', min_value=0, max_value=1),
                 'cpc': FloatValidator('cpc', min_value=0, max_value=999.99),
                 'cpm': FloatValidator('cpm', min_value=0, max_value=9999.99),
                 'roas': FloatValidator('roas', min_value=0, max_value=999.99),
                 'cpa': FloatValidator('cpa', min_value=0, max_value=999.99),
-                'engagement_rate': FloatValidator('engagement_rate', min_value=0, max_value=100),
-                'conversion_rate': FloatValidator('conversion_rate', min_value=0, max_value=100),
+                'engagement_rate': FloatValidator('engagement_rate', min_value=0, max_value=1),
+                'conversion_rate': FloatValidator('conversion_rate', min_value=0, max_value=1),
                 'conversions': IntegerValidator('conversions', min_value=0),
                 'lifecycle_id': StringValidator('lifecycle_id', max_length=100),
                 'performance_score': FloatValidator('performance_score', min_value=0, max_value=1),
@@ -824,7 +886,15 @@ class SupabaseDataValidator:
             raise ValueError(f"No validator found for table '{table_name}'")
         
         validator = self.table_validators[table_name]
-        return validator.validate(data)
+        result = validator.validate(data)
+
+        if STRICT_MODE:
+            unit_errors = self.unit_enforcer.enforce(table_name, result.sanitized_data)
+            if unit_errors:
+                result.errors.extend(unit_errors)
+                result.is_valid = False
+        
+        return result
     
     def validate_batch_data(self, table_name: str, data_list: List[Dict[str, Any]]) -> List[ValidationResult]:
         """Validate a batch of data for a specific table."""

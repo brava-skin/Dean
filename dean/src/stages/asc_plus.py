@@ -60,6 +60,7 @@ except ImportError:
 UTC = timezone.utc
 LOCAL_TZ = ZoneInfo(os.getenv("ACCOUNT_TZ", os.getenv("ACCOUNT_TIMEZONE", "Europe/Amsterdam")))
 ACCOUNT_CURRENCY = os.getenv("ACCOUNT_CURRENCY", "EUR")
+HYDRATION_SECONDS = int(os.getenv("ASC_PLUS_HYDRATION_SECONDS", "180"))
 
 
 def _roas(row: Dict[str, Any]) -> float:
@@ -422,24 +423,25 @@ def _calculate_creative_performance(metrics: Optional[Dict[str, Any]]) -> Dict[s
     purchases = safe_f(metrics.get("purchases"))
     roas = safe_f(metrics.get("roas"))
 
-    avg_ctr = safe_f((clicks / impressions) * 100) if impressions > 0 else safe_f(metrics.get("ctr"))
-    avg_cpa = safe_f(spend / purchases) if purchases > 0 else safe_f(metrics.get("cpa"))
-    avg_roas = roas if roas > 0 else (spend and safe_f(metrics.get("revenue", 0)) / spend if spend > 0 else 0.0)
+    avg_ctr = _safe_float(clicks / impressions) if impressions > 0 else _safe_float(metrics.get("ctr"))
+    avg_cpa = _safe_float(spend / purchases) if purchases > 0 else _safe_float(metrics.get("cpa"))
+    avg_roas = roas if roas > 0 else (_safe_float(metrics.get("revenue", 0)) / spend if spend > 0 else 0.0)
 
-    avg_ctr = _safe_float(avg_ctr)
-    avg_cpa = _safe_float(avg_cpa)
-    avg_roas = _safe_float(avg_roas)
-
-    return {"avg_ctr": avg_ctr, "avg_cpa": avg_cpa, "avg_roas": avg_roas}
+    return {"avg_ctr": avg_ctr, "avg_cpa": avg_cpa, "avg_roas": _safe_float(avg_roas)}
 
 
 def _calculate_performance_score(perf: Dict[str, float]) -> float:
     """Heuristic performance score between 0-1."""
-    ctr = perf.get("avg_ctr") or 0.0
+    ctr_fraction = perf.get("avg_ctr") or 0.0
+    ctr_pct = ctr_fraction * 100.0
     cpa = perf.get("avg_cpa") or 0.0
     roas = perf.get("avg_roas") or 0.0
 
-    score = 0.3 if ctr >= 1.0 else max(0.0, min(ctr / 5.0, 0.3))
+    score = 0.0
+    if ctr_pct >= 1.0:
+        score += 0.3
+    else:
+        score += max(0.0, min(ctr_pct / 5.0, 0.3))
     if roas >= 1.0:
         score += min(roas / 10.0, 0.3)
     if cpa > 0:
@@ -450,12 +452,12 @@ def _calculate_performance_score(perf: Dict[str, float]) -> float:
 
 def _calculate_fatigue_index(perf: Dict[str, float]) -> float:
     """Simple fatigue indicator (higher = more fatigued)."""
-    ctr = perf.get("avg_ctr") or 0.0
+    ctr_pct = (perf.get("avg_ctr") or 0.0) * 100.0
     cpa = perf.get("avg_cpa") or 0.0
     roas = perf.get("avg_roas") or 0.0
 
     fatigue = 0.0
-    if ctr < 1.0:
+    if ctr_pct < 1.0:
         fatigue += 0.3
     if cpa > 30:
         fatigue += 0.3
@@ -464,23 +466,24 @@ def _calculate_fatigue_index(perf: Dict[str, float]) -> float:
     return _safe_float(min(fatigue, 1.0))
 
 
-def _sync_ad_creation_records(client: MetaClient, ads: List[Dict[str, Any]], stage: str = "asc_plus") -> None:
-    """Ensure every ad has an ad_creation_times record."""
+def _sync_ad_creation_records(client: MetaClient, ads: List[Dict[str, Any]], stage: str = "asc_plus") -> Dict[str, datetime]:
+    """Ensure every ad has an ad_creation_times record and return creation timestamps."""
+    creation_map: Dict[str, datetime] = {}
     if not ads:
-        return
+        return creation_map
     try:
         from infrastructure.supabase_storage import get_validated_supabase_client, SupabaseStorage
     except ImportError:
         logger.debug("Supabase storage unavailable; skipping ad creation sync")
-        return
+        return creation_map
 
     supabase_client = get_validated_supabase_client(enable_validation=True)
     if not supabase_client:
-        return
+        return creation_map
 
     ad_ids = [str(ad.get("id")) for ad in ads if ad.get("id")]
     if not ad_ids:
-        return
+        return creation_map
 
     existing_records: Dict[str, Dict[str, Any]] = {}
     try:
@@ -491,6 +494,10 @@ def _sync_ad_creation_records(client: MetaClient, ads: List[Dict[str, Any]], sta
         existing_records = {
             str(row.get("ad_id")): row for row in data if row and row.get("ad_id")
         }
+        for ad_id, row in existing_records.items():
+            created_at = _parse_created_time(row.get("created_at_iso"))
+            if created_at:
+                creation_map[ad_id] = created_at
     except Exception as exc:
         logger.debug(f"Unable to load existing ad_creation_times records: {exc}")
         existing_records = {}
@@ -520,30 +527,41 @@ def _sync_ad_creation_records(client: MetaClient, ads: List[Dict[str, Any]], sta
             if existing.get("stage") != stage:
                 needs_sync = True
 
-        if not needs_sync:
-            continue
+        created_at = _parse_created_time(ad.get("created_time")) if needs_sync else _parse_created_time(existing.get("created_at_iso")) if existing else None
 
-        created_at = _parse_created_time(ad.get("created_time"))
-        if not created_at and existing and existing.get("created_at_iso"):
-            created_at = _parse_created_time(existing.get("created_at_iso"))
+        if needs_sync:
+            if not created_at and existing and existing.get("created_at_iso"):
+                created_at = _parse_created_time(existing.get("created_at_iso"))
 
-        if not created_at:
+            if not created_at:
+                try:
+                    details = client._graph_get_object(f"{ad_id}", params={"fields": "created_time"})
+                    if isinstance(details, dict):
+                        created_at = _parse_created_time(details.get("created_time"))
+                except Exception as exc:
+                    logger.debug(f"Failed to fetch created_time for ad {ad_id}: {exc}")
+
             try:
-                details = client._graph_get_object(f"{ad_id}", params={"fields": "created_time"})
-                if isinstance(details, dict):
-                    created_at = _parse_created_time(details.get("created_time"))
+                storage.record_ad_creation(
+                    ad_id=ad_id,
+                    lifecycle_id=lifecycle_id,
+                    stage=stage,
+                    created_at=created_at,
+                )
             except Exception as exc:
-                logger.debug(f"Failed to fetch created_time for ad {ad_id}: {exc}")
+                logger.debug(f"Failed to upsert ad creation record for {ad_id}: {exc}")
 
-        try:
-            storage.record_ad_creation(
-                ad_id=ad_id,
-                lifecycle_id=lifecycle_id,
-                stage=stage,
-                created_at=created_at,
-            )
-        except Exception as exc:
-            logger.debug(f"Failed to upsert ad creation record for {ad_id}: {exc}")
+        if ad_id not in creation_map:
+            try:
+                stored = storage.get_ad_creation_time(ad_id)
+            except Exception:
+                stored = None
+            if stored:
+                creation_map[ad_id] = stored
+            elif created_at:
+                creation_map[ad_id] = created_at
+
+    return creation_map
 
 
 def _sync_ad_lifecycle_records(
@@ -1018,22 +1036,16 @@ def _sync_performance_metrics_records(
 
     storage = SupabaseStorage(supabase_client)
     now = datetime.now(timezone.utc)
-    hour_of_day = now.hour
-    day_of_week = now.weekday()
-    is_weekend = day_of_week >= 5
 
-    upserts: List[Dict[str, Any]] = []
-
-    def _bounded(value: Optional[float], limit: float = 9.9999) -> Optional[float]:
-        if value is None:
+    def _float_or_none(value: Any) -> Optional[float]:
+        if value in (None, "", float("inf"), float("-inf")):
             return None
         try:
-            val = float(value)
+            return float(value)
         except (TypeError, ValueError):
             return None
-        if limit <= 0:
-            return val
-        return max(min(val, limit), -limit)
+
+    upserts: List[Dict[str, Any]] = []
 
     for ad_id, metrics in metrics_map.items():
         if not ad_id:
@@ -1041,65 +1053,41 @@ def _sync_performance_metrics_records(
 
         lifecycle_id = metrics.get("lifecycle_id") or f"lifecycle_{ad_id}"
         spend = safe_f(metrics.get("spend"))
-        impressions = safe_f(metrics.get("impressions"))
-        clicks = safe_f(metrics.get("clicks"))
-        purchases = safe_f(metrics.get("purchases"))
-        add_to_cart = safe_f(metrics.get("add_to_cart"))
-        initiate_checkout = safe_f(metrics.get("initiate_checkout") or metrics.get("ic"))
+        impressions = int(safe_f(metrics.get("impressions")))
+        clicks = int(safe_f(metrics.get("clicks")))
+        purchases = int(safe_f(metrics.get("purchases")))
+        add_to_cart = int(safe_f(metrics.get("add_to_cart")))
+        initiate_checkout = int(safe_f(metrics.get("initiate_checkout") or metrics.get("ic")))
         revenue = safe_f(metrics.get("revenue"))
-        ctr = metrics.get("ctr")
-        cpa = metrics.get("cpa")
-        cpa = safe_f(cpa) if cpa not in (None, "", float("inf"), float("-inf")) else None
-        roas_value = metrics.get("roas")
-        roas = safe_f(roas_value) if roas_value not in (None, "", float("inf"), float("-inf")) else None
 
-        ctr = round((clicks / impressions) * 100, 4) if impressions > 0 else None
-        cpc = round(spend / clicks, 4) if clicks > 0 else None
-        cpm = round((spend / impressions) * 1000, 4) if impressions > 0 else None
-        if spend > 0 and revenue > 0:
-            roas = round(revenue / spend, 4)
-        elif roas is None:
-            roas = None
-        if purchases > 0 and spend > 0:
-            cpa = round(spend / purchases, 4)
-        elif cpa is None:
-            cpa = None
+        ctr = _float_or_none(metrics.get("ctr"))
+        cpc = _float_or_none(metrics.get("cpc"))
+        cpm = _float_or_none(metrics.get("cpm"))
+        roas = _float_or_none(metrics.get("roas"))
+        cpa = _float_or_none(metrics.get("cpa"))
+        frequency = _float_or_none(metrics.get("frequency"))
+        dwell_time = _float_or_none(metrics.get("dwell_time"))
 
-        ctr = _bounded(ctr)
-        cpc = _bounded(cpc)
-        cpm = _bounded(cpm)
-        roas = _bounded(roas)
-        cpa = _bounded(cpa)
-        atc_rate = _bounded((add_to_cart / impressions) * 100) if impressions > 0 else None
-        ic_rate = _bounded((initiate_checkout / impressions) * 100) if impressions > 0 else None
-        purchase_rate = _bounded((purchases / impressions) * 100) if impressions > 0 else None
-        atc_to_ic_rate = _bounded((initiate_checkout / add_to_cart) * 100) if add_to_cart > 0 else None
-        ic_to_purchase_rate = _bounded((purchases / initiate_checkout) * 100) if initiate_checkout > 0 else None
+        atc_rate = _float_or_none(add_to_cart / impressions) if impressions > 0 else None
+        ic_rate = _float_or_none(initiate_checkout / impressions) if impressions > 0 else None
+        purchase_rate = _float_or_none(purchases / impressions) if impressions > 0 else None
+        atc_to_ic_rate = _float_or_none(initiate_checkout / add_to_cart) if add_to_cart > 0 else None
+        ic_to_purchase_rate = _float_or_none(purchases / initiate_checkout) if initiate_checkout > 0 else None
 
         try:
             creation_time = storage.get_ad_creation_time(ad_id)
         except Exception:
             creation_time = None
 
+        age_days = None
+        stage_duration_hours = None
         if creation_time:
-            age_days = (now - creation_time).total_seconds() / 86400
-            stage_duration_hours = (now - creation_time).total_seconds() / 3600
-        else:
-            age_days = 0.0
-            stage_duration_hours = 0.0
-
-        stage_duration_hours = min(stage_duration_hours, float(DB_NUMERIC_MAX))
-
-        perf_ctr_for_scores = ctr if ctr is not None else 0.0
-        performance_score = _calculate_performance_score(
-            {"avg_ctr": perf_ctr_for_scores, "avg_cpa": cpa or 0.0, "avg_roas": roas or 0.0}
-        )
-        fatigue_index = _calculate_fatigue_index(
-            {"avg_ctr": perf_ctr_for_scores, "avg_cpa": cpa or 0.0, "avg_roas": roas or 0.0}
-        )
-        stability_score = round(max(0.0, 1.0 - fatigue_index), 4)
-        ctr_for_momentum = perf_ctr_for_scores
-        momentum_score = round(min(ctr_for_momentum / 5.0, 1.0), 4)
+            delta = now - creation_time
+            if delta.total_seconds() >= 0:
+                age_days = delta.total_seconds() / 86400.0
+                stage_duration_hours = delta.total_seconds() / 3600.0
+        if stage_duration_hours is not None:
+            stage_duration_hours = min(stage_duration_hours, float(DB_NUMERIC_MAX))
 
         record = {
             "ad_id": ad_id,
@@ -1108,75 +1096,45 @@ def _sync_performance_metrics_records(
             "window_type": "1d",
             "date_start": date_label,
             "date_end": date_label,
-            "impressions": int(impressions),
-            "clicks": int(clicks),
-            "spend": round(spend, 4),
-            "purchases": int(purchases),
-            "add_to_cart": int(add_to_cart),
-            "initiate_checkout": int(initiate_checkout),
+            "impressions": impressions,
+            "clicks": clicks,
+            "spend": spend,
+            "purchases": purchases,
+            "add_to_cart": add_to_cart,
+            "initiate_checkout": initiate_checkout,
             "ctr": ctr,
             "cpc": cpc,
             "cpm": cpm,
             "roas": roas,
             "cpa": cpa,
-            "dwell_time": 0.0,
-            "frequency": 0.0,
+            "dwell_time": dwell_time,
+            "frequency": frequency,
             "atc_rate": atc_rate,
             "ic_rate": ic_rate,
             "purchase_rate": purchase_rate,
             "atc_to_ic_rate": atc_to_ic_rate,
             "ic_to_purchase_rate": ic_to_purchase_rate,
-            "performance_quality_score": round(performance_score * 100, 4),
-            "stability_score": stability_score,
-            "momentum_score": momentum_score,
-            "fatigue_index": fatigue_index,
-            "hour_of_day": hour_of_day,
-            "day_of_week": day_of_week,
-            "is_weekend": is_weekend,
-            "ad_age_days": round(age_days, 4),
-            "next_stage": stage,
-            "stage_duration_hours": round(stage_duration_hours, 2),
-            "previous_stage": "created",
-            "stage_performance": {
-                "spend": spend,
-                "impressions": impressions,
-                "clicks": clicks,
-                "purchases": purchases,
-                "roas": roas,
-                "ctr": ctr,
-                "cpa": cpa,
-            },
-            "transition_reason": "ongoing_learning",
-            "created_at": now.isoformat(),
-            "updated_at": now.isoformat(),
+            "performance_quality_score": None,
+            "fatigue_index": None,
+            "stability_score": None,
+            "momentum_score": None,
+            "age_days": age_days,
+            "stage_duration_hours": stage_duration_hours,
+            "revenue": revenue,
         }
 
-        record = validate_all_timestamps(record)
         upserts.append(record)
 
     if not upserts:
         return
 
-    def _backfill_metric_nulls(client) -> None:
-        try:
-            client.table("performance_metrics").update({"ctr": None}).eq("ctr", 0).eq("impressions", 0).execute()
-        except Exception:
-            logger.debug("Backfill ctr null update failed", exc_info=True)
-        try:
-            client.table("performance_metrics").update({"cpc": None}).eq("cpc", 0).eq("clicks", 0).execute()
-        except Exception:
-            logger.debug("Backfill cpc null update failed", exc_info=True)
-        try:
-            client.table("performance_metrics").update({"cpm": None}).eq("cpm", 0).eq("impressions", 0).execute()
-        except Exception:
-            logger.debug("Backfill cpm null update failed", exc_info=True)
-
     try:
         supabase_client.table("performance_metrics").upsert(
             upserts,
-            on_conflict="ad_id,window_type,date_start",
+            on_conflict="ad_id,stage,window_type,date_start",
         ).execute()
-        _backfill_metric_nulls(supabase_client)
+    except ValidationError as exc:
+        logger.error("Performance metrics upsert blocked: %s", exc)
     except Exception as exc:
         logger.debug(f"Failed to upsert performance metrics records: {exc}")
 
@@ -1230,7 +1188,7 @@ def _sync_historical_data_records(
 
         try:
             if impressions > 0:
-                derived_ctr = ctr if ctr else (clicks / impressions * 100)
+                derived_ctr = ctr if ctr is not None else (clicks / impressions)
                 storage.store_historical_data(ad_id, lifecycle_id, stage, "ctr", derived_ctr)
         except Exception as exc:
             logger.debug(f"Failed to store CTR historical data for {ad_id}: {exc}")
@@ -1292,7 +1250,7 @@ def _sync_creative_performance_records(
         initiate_checkout = safe_f(metrics.get("initiate_checkout") or metrics.get("ic"))
         ctr = _safe_float(metrics.get("ctr"))
         if impressions > 0 and clicks > 0:
-            ctr = _safe_float((clicks / impressions) * 100)
+            ctr = _safe_float(clicks / impressions)
         elif impressions <= 0:
             ctr = None
 
@@ -1300,7 +1258,7 @@ def _sync_creative_performance_records(
             _safe_float(spend / clicks) if clicks > 0 else None
         )
         cpm = _safe_float(metrics.get("cpm")) if metrics.get("cpm") is not None else (
-            _safe_float(spend / impressions * 1000) if impressions > 0 else None
+            _safe_float(spend * 1000.0 / impressions) if impressions > 0 else None
         )
         roas = _safe_float(metrics.get("roas")) if metrics.get("roas") is not None else None
         if spend > 0 and metrics.get("revenue"):
@@ -1309,14 +1267,10 @@ def _sync_creative_performance_records(
             _safe_float(spend / purchases) if purchases > 0 else None
         )
 
-        engagement_rate = _safe_float((clicks / impressions) * 100) if impressions > 0 else None
-        conversion_rate = _safe_float((purchases / clicks) * 100) if clicks > 0 else None
+        engagement_rate = _safe_float(clicks / impressions) if impressions > 0 else None
+        conversion_rate = _safe_float(purchases / clicks) if clicks > 0 else None
         conversions = int(purchases)
         lifecycle_id = f"lifecycle_{ad_id}"
-
-        performance_score = _calculate_performance_score(
-            {"avg_ctr": ctr or 0.0, "avg_cpa": cpa or 0.0, "avg_roas": roas or 0.0}
-        )
 
         record = {
             "creative_id": creative_id,
@@ -1339,7 +1293,7 @@ def _sync_creative_performance_records(
             "conversion_rate": conversion_rate,
             "conversions": conversions if conversions >= 0 else 0,
             "lifecycle_id": lifecycle_id,
-            "performance_score": performance_score,
+            "performance_score": None,
         }
 
         upsert_records.append(record)
@@ -1360,7 +1314,8 @@ def _guardrail_kill(metrics: Dict[str, Any]) -> Tuple[bool, str]:
     impressions = safe_f(metrics.get("impressions"))
     clicks = safe_f(metrics.get("clicks"))
     spend = safe_f(metrics.get("spend"))
-    ctr = safe_f(metrics.get("ctr"))  # percentage
+    ctr_fraction = safe_f(metrics.get("ctr"))
+    ctr_pct = ctr_fraction * 100.0
     atc = safe_f(metrics.get("add_to_cart"))
     purchases = safe_f(metrics.get("purchases"))
     roas = safe_f(metrics.get("roas"))
@@ -1376,15 +1331,15 @@ def _guardrail_kill(metrics: Dict[str, Any]) -> Tuple[bool, str]:
 
     reasons: List[str] = []
 
-    if spend >= 12 and purchases == 0 and ctr < 0.6:
-        reasons.append(f"Spend €{spend:.2f} with CTR {ctr:.2f}% and no conversions")
-    if impressions >= 2500 and ctr < 0.45 and clicks < 20:
-        reasons.append(f"CTR {ctr:.2f}% after {int(impressions)} impressions")
+    if spend >= 12 and purchases == 0 and ctr_pct < 0.6:
+        reasons.append(f"Spend €{spend:.2f} with CTR {ctr_pct:.2f}% and no conversions")
+    if impressions >= 2500 and ctr_pct < 0.45 and clicks < 20:
+        reasons.append(f"CTR {ctr_pct:.2f}% after {int(impressions)} impressions")
     if spend >= 8 and roas < 0.5 and purchases == 0:
         reasons.append(f"ROAS {roas:.2f} after spend €{spend:.2f}")
     if spend >= 6 and cpm > 90:
         reasons.append(f"CPM €{cpm:.2f} after spend €{spend:.2f}")
-    if spend >= 5 and atc == 0 and purchases == 0 and ctr < 0.7:
+    if spend >= 5 and atc == 0 and purchases == 0 and ctr_pct < 0.7:
         reasons.append("No intent events despite initial spend")
 
     if reasons:
@@ -1393,15 +1348,16 @@ def _guardrail_kill(metrics: Dict[str, Any]) -> Tuple[bool, str]:
 
 
 def _guardrail_promote(metrics: Dict[str, Any]) -> Tuple[bool, str]:
-    ctr = safe_f(metrics.get("ctr"))
+    ctr_fraction = safe_f(metrics.get("ctr"))
+    ctr_pct = ctr_fraction * 100.0
     cpc = safe_f(metrics.get("cpc"))
     purchases = safe_f(metrics.get("purchases"))
     roas = safe_f(metrics.get("roas"))
 
     if purchases >= 1 and roas >= 1.2:
         return True, f"ROAS {roas:.2f} with {int(purchases)} purchases"
-    if ctr >= 2.0 and 0 < cpc < 1.20:
-        return True, f"High CTR {ctr:.2f}% with CPC €{cpc:.2f}"
+    if ctr_pct >= 2.0 and 0 < cpc < 1.20:
+        return True, f"High CTR {ctr_pct:.2f}% with CPC €{cpc:.2f}"
     return False, ""
 
 
@@ -1424,7 +1380,13 @@ def _select_ads_for_cap(
     return candidates[:limit]
 
 
-def _build_ad_metrics(row: Dict[str, Any], stage: str, date_label: str) -> Dict[str, Any]:
+def _build_ad_metrics(
+    row: Dict[str, Any],
+    stage: str,
+    date_label: str,
+    creation_time: Optional[datetime] = None,
+    now_ts: Optional[datetime] = None,
+) -> Dict[str, Any]:
     ad_id = row.get("ad_id")
     spend_val = safe_f(row.get("spend"))
     impressions_val = safe_f(row.get("impressions"))
@@ -1450,19 +1412,59 @@ def _build_ad_metrics(row: Dict[str, Any], stage: str, date_label: str) -> Dict[
             revenue += safe_f(action_value.get("value"))
 
     purchase_roas_list = row.get("purchase_roas") or []
+    roas: Optional[float]
     if purchase_roas_list:
         roas = safe_f(purchase_roas_list[0].get("value"))
     elif spend_val > 0:
-        roas = revenue / spend_val
+        roas = revenue / spend_val if revenue > 0 else 0.0
     else:
-        roas = 0.0
+        roas = None
+    if roas is not None and spend_val <= 0:
+        roas = None
 
-    ctr = (clicks_val / impressions_val * 100) if impressions_val > 0 else 0.0
-    cpc = (spend_val / clicks_val) if clicks_val > 0 else 0.0
-    cpm = (spend_val / impressions_val * 1000) if impressions_val > 0 else 0.0
+    ctr = (clicks_val / impressions_val) if impressions_val > 0 else None
+    cpc = (spend_val / clicks_val) if clicks_val > 0 else None
+    cpm = (spend_val * 1000.0 / impressions_val) if impressions_val > 0 else None
     cpa = (spend_val / purchases) if purchases > 0 else None
 
-    return {
+    reach_val = safe_f(row.get("reach")) if row.get("reach") is not None else None
+    if reach_val and reach_val > 0:
+        frequency = impressions_val / reach_val
+    else:
+        frequency = safe_f(row.get("frequency")) if row.get("frequency") is not None else None
+        if frequency == 0:
+            frequency = None
+
+    now_ts = now_ts or datetime.now(timezone.utc)
+    ad_creation = creation_time or _parse_created_time(row.get("created_time"))
+    age_seconds: Optional[float] = None
+    age_days: Optional[float] = None
+    hydrated = True
+    if ad_creation:
+        delta = now_ts - ad_creation
+        if delta.total_seconds() >= 0:
+            age_seconds = delta.total_seconds()
+            age_days = age_seconds / 86400.0
+            hydrated = age_seconds >= HYDRATION_SECONDS
+        else:
+            hydrated = False
+    else:
+        raw_age = row.get("ad_age_days")
+        try:
+            age_days = float(raw_age) if raw_age is not None else None
+        except (TypeError, ValueError):
+            age_days = None
+        if age_days is not None:
+            age_seconds = age_days * 86400.0
+            hydrated = age_seconds >= HYDRATION_SECONDS
+
+    dwell_time = row.get("dwell_time")
+    try:
+        dwell_time = float(dwell_time) if dwell_time not in (None, "") else None
+    except (TypeError, ValueError):
+        dwell_time = None
+
+    metrics = {
         "ad_id": ad_id,
         "lifecycle_id": f"lifecycle_{ad_id}",
         "stage": stage,
@@ -1481,6 +1483,8 @@ def _build_ad_metrics(row: Dict[str, Any], stage: str, date_label: str) -> Dict[
         "roas": roas,
         "cpa": cpa,
         "revenue": revenue,
+        "frequency": frequency,
+        "dwell_time": dwell_time,
         "date_start": date_label,
         "date_end": date_label,
         "campaign_name": row.get("campaign_name", ""),
@@ -1489,7 +1493,12 @@ def _build_ad_metrics(row: Dict[str, Any], stage: str, date_label: str) -> Dict[
         "adset_id": row.get("adset_id"),
         "has_recent_activity": bool(spend_val or impressions_val or clicks_val),
         "metadata": {"source": "meta_insights"},
+        "hydrated": hydrated,
+        "ad_age_days": age_days,
+        "age_seconds": age_seconds,
     }
+
+    return metrics
 
 
 def _summarize_metrics(metrics_map: Dict[str, Dict[str, Any]]) -> Dict[str, float]:
@@ -1501,6 +1510,8 @@ def _summarize_metrics(metrics_map: Dict[str, Dict[str, Any]]) -> Dict[str, floa
         "purchases": 0.0,
     }
     for metrics in metrics_map.values():
+        if not metrics.get("hydrated", True):
+            continue
         totals["spend"] += safe_f(metrics.get("spend"))
         totals["impressions"] += safe_f(metrics.get("impressions"))
         totals["clicks"] += safe_f(metrics.get("clicks"))
@@ -3597,15 +3608,25 @@ def run_asc_plus_tick(
     result["campaign_id"] = campaign_id
     result["adset_id"] = adset_id
 
+    ads_list = client.list_ads_in_adset(adset_id)
+
     # Step 1: fetch insights for today + trailing window
     insight_rows = client.get_recent_ad_insights(adset_id=adset_id, campaign_id=campaign_id)
     account_today = timekit.today_ymd_account()
     metrics_map: Dict[str, Dict[str, Any]] = {}
+    now_utc = datetime.now(timezone.utc)
+    creation_times = _sync_ad_creation_records(client, ads_list, stage="asc_plus")
     for row in insight_rows:
         ad_id = row.get("ad_id")
         if not ad_id:
             continue
-        metrics_map[ad_id] = _build_ad_metrics(row, "asc_plus", account_today)
+        metrics_map[ad_id] = _build_ad_metrics(
+            row,
+            "asc_plus",
+            account_today,
+            creation_time=creation_times.get(str(ad_id)) if creation_times else None,
+            now_ts=now_utc,
+        )
 
     totals = _summarize_metrics(metrics_map)
 
@@ -3616,7 +3637,6 @@ def run_asc_plus_tick(
         active_count = 0
     result["active_count"] = active_count
 
-    ads_list = client.list_ads_in_adset(adset_id)
     _sync_ad_creation_records(client, ads_list)
     _sync_ad_lifecycle_records(
         client,
@@ -3659,6 +3679,17 @@ def run_asc_plus_tick(
         if str(ad.get("effective_status") or ad.get("status", "")).upper() in allowed_statuses
     ]
 
+    hydrated_active_ads = []
+    for ad in active_ads:
+        ad_id = str(ad.get("id") or "")
+        if not ad_id:
+            continue
+        metrics = metrics_map.get(ad_id)
+        if metrics and metrics.get("hydrated", True):
+            hydrated_active_ads.append(ad)
+    hydrated_active_count = len(hydrated_active_ads)
+    result["hydrated_active_count"] = hydrated_active_count
+
     # Step 3: apply guardrail kill/promote rules
     killed_ads: List[Tuple[str, str]] = []
     promoted_ads: List[Tuple[str, str, Optional[str]]] = []
@@ -3667,13 +3698,21 @@ def run_asc_plus_tick(
         ad_id = ad.get("id")
         if not ad_id:
             continue
-        metrics = metrics_map.get(ad_id) or _build_ad_metrics({"ad_id": ad_id, "spend": 0, "impressions": 0, "clicks": 0}, "asc_plus", account_today)
+        metrics = metrics_map.get(ad_id) or _build_ad_metrics(
+            {"ad_id": ad_id, "spend": 0, "impressions": 0, "clicks": 0},
+            "asc_plus",
+            account_today,
+            creation_time=creation_times.get(str(ad_id)) if creation_times else None,
+            now_ts=now_utc,
+        )
         kill, kill_reason = _guardrail_kill(metrics)
         if kill:
             if _pause_ad(client, ad_id):
                 killed_ads.append((ad_id, kill_reason))
                 killed_ids.add(ad_id)
                 active_count = max(0, active_count - 1)
+                if metrics.get("hydrated", True):
+                    hydrated_active_count = max(0, hydrated_active_count - 1)
                 _record_lifecycle_event(ad_id, "PAUSED", kill_reason)
             continue
 
@@ -3683,10 +3722,12 @@ def run_asc_plus_tick(
     except Exception:
         pass
 
+    planning_active_count = hydrated_active_count
+
     # Step 4: enforce max active ceiling by trimming lowest performers
-    excess = max(0, active_count - max_active)
+    excess = max(0, planning_active_count - max_active)
     if excess > 0:
-        cap_candidates = _select_ads_for_cap(active_ads, metrics_map, list(killed_ids), excess * 2)
+        cap_candidates = _select_ads_for_cap(hydrated_active_ads, metrics_map, list(killed_ids), excess * 2)
         trimmed: List[Tuple[str, str]] = []
         for _, candidate_ad_id, candidate_metrics in cap_candidates:
             if len(trimmed) >= excess:
@@ -3698,12 +3739,20 @@ def run_asc_plus_tick(
                 trimmed.append((candidate_ad_id, reason))
                 killed_ids.add(candidate_ad_id)
                 active_count = max(0, active_count - 1)
+                if candidate_metrics.get("hydrated", True):
+                    planning_active_count = max(0, planning_active_count - 1)
+                    hydrated_active_count = max(0, hydrated_active_count - 1)
                 _record_lifecycle_event(candidate_ad_id, "PAUSED", reason)
         if trimmed:
             killed_ads.extend(trimmed)
+            trimmed_ids = {ad_id for ad_id, _ in trimmed}
+            hydrated_active_ads = [
+                ad for ad in hydrated_active_ads if str(ad.get("id")) not in trimmed_ids
+            ]
+            hydrated_active_count = len(hydrated_active_ads)
 
     effective_target = min(target_count, max_active)
-    deficit = max(0, effective_target - active_count)
+    deficit = max(0, effective_target - planning_active_count)
     created_records = _generate_creatives_for_deficit(deficit, client, settings, campaign_id, adset_id, ml_system, active_count)
     if created_records:
         try:
@@ -3714,11 +3763,18 @@ def run_asc_plus_tick(
             new_ad_id = record.get("ad_id")
             if not new_ad_id:
                 continue
-            metrics_map[new_ad_id] = _build_ad_metrics({"ad_id": new_ad_id, "spend": 0, "impressions": 0, "clicks": 0}, "asc_plus", account_today)
+            metrics_map[new_ad_id] = _build_ad_metrics(
+                {"ad_id": new_ad_id, "spend": 0, "impressions": 0, "clicks": 0},
+                "asc_plus",
+                account_today,
+                creation_time=creation_times.get(str(new_ad_id)) if creation_times else None,
+                now_ts=now_utc,
+            )
     else:
         created_records = []
 
     result["active_count"] = active_count
+    result["caps_enforced"] = bool(result["active_count"] == result["target_count"])
     result["kills"] = killed_ads
     result["promotions"] = promoted_ads
     result["created_ads"] = [record["ad_id"] for record in created_records if record.get("ad_id")]
@@ -3753,6 +3809,7 @@ def run_asc_plus_tick(
     result["health"] = health_status
     result["health_message"] = health_message
 
+    result["hydrated_active_count"] = hydrated_active_count
     health_summary = _emit_health_notification(
         health_status,
         health_message,
