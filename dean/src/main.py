@@ -980,7 +980,7 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                     )
                     logger.error(error_message)
                     notify(f"⚠️ {error_message}")
-                    continue
+                    return
 
                 if result:
                     logger.info(
