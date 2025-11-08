@@ -11,15 +11,16 @@ thresholds:
   ctr:
     asc_plus_floor: 0.008      # Minimum CTR to keep creative alive
   cpa:  # EUR
-    asc_plus_max: 40          # Max CPA before kill
+    asc_plus_max: null
   roas:
-    asc_plus_min: 1.0         # Min ROAS to keep creative
+    asc_plus_min: null
 
 # ── Minimum Requirements ──────────────────────────────
 minimums:
   impressions: 1500
   clicks: 15
   spend_eur: 35
+  runtime_hours: 24
 
 # ── ASC+ Campaign Rules ───────────────────────────────
 # Simple rules for ASC+ campaign - always 10 creatives live (Andromeda compliance)
@@ -30,53 +31,38 @@ asc_plus:
     min_clicks: 15
     min_delivery_hours: 24
     min_link_clicks: 15
-  
+
   keep:
     - {type: "ctr_gte", ctr_gte: 0.015}
     - {type: "ctr_cpm_combo", ctr_gte: 0.012, cpm_lte: 55}
-  
+
   locks:
     - {type: "ctr_cpm_lock", ctr_gte: 0.018, cpm_lte: 55, evaluation_hours: 48, lock_hours: 72}
-  
+
   kill:
     - {type: "ctr_cpm_spend_combo", spend_gte: 45, ctr_lt: 0.01, cpm_gt: 65}
     - {type: "ctr_spend_floor", spend_gte: 60, ctr_lt: 0.007}
     - {type: "cpm_spend_ctr_combo", spend_gte: 60, cpm_gt: 120, ctr_lt: 0.012}
-  
-  # Engine configuration
+
   engine:
     consecutive_ticks_required: 2
-    
+
     fairness:
       min_spend_before_kill_eur: 35
       min_runtime_hours: 24
-    
+
     learning:
       max_learning_budget_eur: 60
-    
+
     tripwires:
-      lifetime_spend_no_purchase_eur: 60
-    
-    bayes:
-      prior_a: 1.5
-      prior_b: 200.0
-      sample_count: 16
-      kill_prob: 0.85
-    
-    adaptive_ctr:
-      floor_min: 0.008
-      floor_scale: 0.80
-      min_impressions: 200
-    
-    fatigue:
-      ewma_alpha: 0.40
-      drop_pct: 0.25
-    
+      lifetime_spend_no_purchase_eur: 0
+
     queue:
       max_launches_per_tick: 10
-      maintain_creative_count: 10  # Always keep 10 creatives alive (Andromeda requirement)
-    
-    attribution_windows: ["7d_click", "1d_view"]
+      maintain_creative_count: 10
+      max_creative_turnover_per_24h: 0.3
+
+  attribution_windows: ["7d_click", "1d_view"]
 
 # ── Global Settings ───────────────────────────────────
 stability:

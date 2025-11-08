@@ -88,6 +88,9 @@ ML_MIN_TRAINING_SAMPLES_STAGE = int(os.getenv("ML_MIN_TRAINING_SAMPLES_STAGE", 3
 # Minimum performance delta required to replace an active registry model
 ML_MODEL_IMPROVEMENT_DELTA = float(os.getenv("ML_MODEL_IMPROVEMENT_DELTA", 0.01))
 
+# Minimum validation sample size before leakage guard engages
+LEAKAGE_GUARD_MIN_SAMPLES = int(os.getenv("LEAKAGE_GUARD_MIN_SAMPLES", 20))
+
 # =====================================================
 # XGBOOST WRAPPER CLASS
 # =====================================================
@@ -1210,34 +1213,78 @@ class XGBoostPredictor:
 
             train_df, val_df, test_df = self._time_based_split(df_features, target_col)
             if val_df.empty or test_df.empty:
-                self.logger.info(
-                    "Insufficient data for chronological validation/testing (%s_%s). Train=%s, Val=%s, Test=%s",
-                    model_type,
-                    stage,
-                    len(train_df),
-                    len(val_df),
-                    len(test_df),
-                )
-                fallback_frame = train_df if not train_df.empty else baseline_source_df
-                if self._train_baseline_from_frame(model_type, stage, target_col, fallback_frame, original_feature_cols):
-                    return True
-                return False
+                if "date_end" in df_features.columns:
+                    fallback_sorted = df_features.sort_values("date_end").reset_index(drop=True)
+                elif "date_start" in df_features.columns:
+                    fallback_sorted = df_features.sort_values("date_start").reset_index(drop=True)
+                else:
+                    fallback_sorted = df_features.reset_index(drop=True)
+                total_rows = len(fallback_sorted)
+                if total_rows >= 3:
+                    train_cut = max(1, total_rows - 2)
+                    train_df = fallback_sorted.iloc[:train_cut].copy()
+                    val_df = fallback_sorted.iloc[train_cut:-1].copy()
+                    if val_df.empty:
+                        val_df = fallback_sorted.iloc[-2:-1].copy()
+                    test_df = fallback_sorted.iloc[-1:].copy()
+                    self.logger.info(
+                        "Using fallback holdout split for %s_%s (train=%s, val=%s, test=%s)",
+                        model_type,
+                        stage,
+                        len(train_df),
+                        len(val_df),
+                        len(test_df),
+                    )
+                elif total_rows == 2:
+                    train_df = fallback_sorted.iloc[:1].copy()
+                    val_df = fallback_sorted.iloc[1:].copy()
+                    test_df = fallback_sorted.iloc[1:].copy()
+                    self.logger.info(
+                        "Fallback split (2 rows) for %s_%s — minimal holdout (train=%s, val=%s, test=%s)",
+                        model_type,
+                        stage,
+                        len(train_df),
+                        len(val_df),
+                        len(test_df),
+                    )
+                else:
+                    self.logger.info(
+                        "Insufficient data for chronological validation/testing (%s_%s). Train=%s, Val=%s, Test=%s",
+                        model_type,
+                        stage,
+                        len(train_df),
+                        len(val_df),
+                        len(test_df),
+                    )
+                    fallback_frame = train_df if not train_df.empty else baseline_source_df
+                    if self._train_baseline_from_frame(model_type, stage, target_col, fallback_frame, original_feature_cols):
+                        return True
+                    return False
 
             required_samples = max(
                 ML_MIN_TRAINING_SAMPLES_GLOBAL if used_cross_stage else ML_MIN_TRAINING_SAMPLES_STAGE,
-                10,
+                3,
             )
             if len(train_df) < required_samples:
-                self.logger.info(
-                    "SKIP training for %s_%s: only %s training samples (<%s required)",
-                    model_type,
-                    stage,
-                    len(train_df),
-                    required_samples,
-                )
-                if self._train_baseline_from_frame(model_type, stage, target_col, train_df, original_feature_cols):
-                    return True
-                return False
+                if len(train_df) >= 2:
+                    self.logger.info(
+                        "Proceeding with small-sample training for %s_%s (train=%s, required=%s)",
+                        model_type,
+                        stage,
+                        len(train_df),
+                        required_samples,
+                    )
+                else:
+                    self.logger.info(
+                        "SKIP training for %s_%s: only %s training samples (<%s required)",
+                        model_type,
+                        stage,
+                        len(train_df),
+                        required_samples,
+                    )
+                    if self._train_baseline_from_frame(model_type, stage, target_col, train_df, original_feature_cols):
+                        return True
+                    return False
 
             self.logger.info(
                 "Training %s_%s with %d features: %s",
@@ -1451,6 +1498,7 @@ class XGBoostPredictor:
                 and test_eval.get("mae") is not None
                 and not np.isnan(test_mae_val)
                 and test_mae_val <= 0.01
+                and len(val_df) >= LEAKAGE_GUARD_MIN_SAMPLES
             )
             leakage_audit = {
                 "confirmed": bool(removed_leakage),
