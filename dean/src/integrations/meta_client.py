@@ -1100,28 +1100,41 @@ class MetaClient:
             return self._instagram_actor_cache[page_id]
 
         fields = "connected_instagram_account,instagram_business_account"
+        ig_actor_id: Optional[str] = None
+
         try:
             data = self._graph_get_object(page_id, params={"fields": fields})
+            if isinstance(data, dict):
+                connected = data.get("connected_instagram_account")
+                if isinstance(connected, dict):
+                    ig_actor_id = connected.get("id") or connected.get("instagram_actor_id")
+                if not ig_actor_id:
+                    business_account = data.get("instagram_business_account")
+                    if isinstance(business_account, dict):
+                        ig_actor_id = business_account.get("id")
+
+            # Fallback: query connected Instagram accounts collection if still missing
+            if not ig_actor_id:
+                search_fields = "instagram_accounts{instagram_business_account}"  # nested edge for versions 16+
+                try:
+                    connection = self._graph_get_object(f"{page_id}/accounts", params={"fields": search_fields})
+                    if isinstance(connection, dict):
+                        for acct in connection.get("data", []) or []:
+                            business = acct.get("instagram_business_account") or {}
+                            candidate = business.get("id")
+                            if candidate:
+                                ig_actor_id = candidate
+                                break
+                except Exception as search_exc:
+                    logger.debug("Secondary instagram account lookup failed for page %s: %s", page_id, search_exc)
         except Exception as exc:
             logger.warning("Failed to look up Instagram actor for page %s: %s", page_id, exc)
             self._instagram_actor_cache[page_id] = None
             return None
 
-        ig_actor_id: Optional[str] = None
-        if isinstance(data, dict):
-            connected = data.get("connected_instagram_account")
-            if isinstance(connected, dict):
-                ig_actor_id = connected.get("id") or connected.get("instagram_actor_id")
-
-            if not ig_actor_id:
-                business_account = data.get("instagram_business_account")
-                if isinstance(business_account, dict):
-                    ig_actor_id = business_account.get("id")
-
         if not ig_actor_id:
             logger.info(
-                "No Instagram actor linked to page %s. "
-                "Set IG_ACTOR_ID or connect the page to an Instagram business account.",
+                "No Instagram actor linked to page %s. Set IG_ACTOR_ID or connect the page to an Instagram business account.",
                 page_id,
             )
 
