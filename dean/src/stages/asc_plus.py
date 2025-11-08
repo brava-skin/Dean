@@ -1189,18 +1189,6 @@ def _guardrail_kill(metrics: Dict[str, Any]) -> Tuple[bool, str]:
     derived_age_days = max(ad_age_days, (stage_hours / 24.0) if stage_hours else 0.0)
 
     if derived_age_days < MIN_AGE_DAYS_FOR_KILL:
-        emergency_reasons: List[str] = []
-        if spend >= 30 and purchases == 0 and ctr < 0.3:
-            emergency_reasons.append(f"Emergency kill: Spend €{spend:.2f} with CTR {ctr:.2f}% and no conversions (<3d)")
-        if spend >= 20 and atc == 0 and clicks <= 1 and ctr < 0.2:
-            emergency_reasons.append("Emergency kill: No engagement after significant spend (<3d)")
-        if spend >= 15 and cpm > 150:
-            emergency_reasons.append(f"Emergency kill: CPM €{cpm:.2f} after spend €{spend:.2f} (<3d)")
-        if spend >= 20 and roas <= 0:
-            emergency_reasons.append(f"Emergency kill: ROAS {roas:.2f} after spend €{spend:.2f} (<3d)")
-
-        if emergency_reasons:
-            return True, emergency_reasons[0]
         return False, ""
 
     reasons: List[str] = []
