@@ -116,6 +116,26 @@ def _fraction_or_none(value: Any, *, allow_percent: bool = True) -> Optional[flo
     return max(0.0, min(numeric, 1.0))
 
 
+def _float_or_none(value: Any) -> Optional[float]:
+    """Convert value to float unless it's empty/invalid, mirroring Supabase sanitize logic."""
+    if value in (None, "", float("inf"), float("-inf")):
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if cleaned.endswith("%"):
+            cleaned = cleaned[:-1]
+        if cleaned == "":
+            return None
+        value = cleaned
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(numeric) or math.isinf(numeric):
+        return None
+    return numeric
+
+
 def _cpa(row: Dict[str, Any]) -> float:
     spend = safe_f(row.get("spend"))
     purch, _ = _purchase_and_atc_counts(row)
@@ -1064,24 +1084,6 @@ def _sync_performance_metrics_records(
 
     storage = SupabaseStorage(supabase_client)
     now = datetime.now(timezone.utc)
-
-    def _float_or_none(value: Any) -> Optional[float]:
-        if value in (None, "", float("inf"), float("-inf")):
-            return None
-        if isinstance(value, str):
-            cleaned = value.strip()
-            if cleaned.endswith("%"):
-                cleaned = cleaned[:-1]
-            if cleaned == "":
-                return None
-            value = cleaned
-        try:
-            numeric = float(value)
-        except (TypeError, ValueError):
-            return None
-        if math.isnan(numeric) or math.isinf(numeric):
-            return None
-        return numeric
 
     upserts: List[Dict[str, Any]] = []
 
