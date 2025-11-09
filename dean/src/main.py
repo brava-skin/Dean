@@ -859,6 +859,24 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         # Debug logging for performance calculations
         logger.debug(f"Ad {ad_id} - CTR: {safe_float(ad_data.get('ctr', 0)):.2f}%, Quality: {quality_score}, Stability: {stability_score:.2f}, Momentum: {momentum_score:.2f}, Fatigue: {fatigue_index:.2f}")
         
+        ctr_val = ad_data.get('ctr')
+        cpc_val = ad_data.get('cpc')
+        cpm_val = ad_data.get('cpm')
+        roas_val = ad_data.get('roas')
+        cpa_val = ad_data.get('cpa')
+        dwell_time_val = ad_data.get('dwell_time')
+        frequency_val = ad_data.get('frequency')
+        atc_rate_val = ad_data.get('atc_rate')
+        ic_rate_val = ad_data.get('ic_rate')
+        purchase_rate_val = ad_data.get('purchase_rate')
+        atc_to_ic_rate_val = ad_data.get('atc_to_ic_rate')
+        ic_to_purchase_rate_val = ad_data.get('ic_to_purchase_rate')
+
+        def clamp_fraction(value: Optional[float]) -> Optional[float]:
+            if value is None:
+                return None
+            return max(0.0, min(1.0, safe_float(value, 1.0)))
+
         performance_data = {
             'ad_id': ad_id,
             'lifecycle_id': lifecycle_id,
@@ -872,18 +890,18 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             'purchases': int(ad_data.get('purchases', 0)),
             'add_to_cart': int(ad_data.get('atc', 0)),
             'initiate_checkout': int(ad_data.get('ic', 0)),
-            'ctr': safe_float(ad_data.get('ctr', 0), DB_NUMERIC_MAX),
-            'cpc': safe_float(ad_data.get('cpc', 0), DB_NUMERIC_MAX),
-            'cpm': safe_float(ad_data.get('cpm', 0), DB_NUMERIC_MAX),
-            'roas': safe_float(ad_data.get('roas', 0), DB_NUMERIC_MAX),
-            'cpa': safe_float(ad_data.get('cpa', 0), DB_NUMERIC_MAX) if ad_data.get('cpa') is not None else None,
-            'dwell_time': safe_float(ad_data.get('dwell_time', 0), DB_NUMERIC_MAX),
-            'frequency': safe_float(ad_data.get('frequency', 0), DB_NUMERIC_MAX),
-            'atc_rate': safe_float(ad_data.get('atc_rate', 0), DB_NUMERIC_MAX),
-            'ic_rate': safe_float(ad_data.get('ic_rate', 0), DB_NUMERIC_MAX),
-            'purchase_rate': safe_float(ad_data.get('purchase_rate', 0), DB_NUMERIC_MAX),
-            'atc_to_ic_rate': safe_float(ad_data.get('atc_to_ic_rate', 0), DB_NUMERIC_MAX),
-            'ic_to_purchase_rate': safe_float(ad_data.get('ic_to_purchase_rate', 0), DB_NUMERIC_MAX),
+            'ctr': clamp_fraction(ctr_val),
+            'cpc': safe_float(cpc_val, DB_CPC_MAX) if cpc_val is not None else None,
+            'cpm': safe_float(cpm_val, DB_CPM_MAX) if cpm_val is not None else None,
+            'roas': safe_float(roas_val, DB_ROAS_MAX) if roas_val is not None else None,
+            'cpa': safe_float(cpa_val, DB_CPA_MAX) if cpa_val is not None else None,
+            'dwell_time': safe_float(dwell_time_val, DB_DWELL_TIME_MAX) if dwell_time_val is not None else None,
+            'frequency': safe_float(frequency_val, DB_FREQUENCY_MAX) if frequency_val is not None else None,
+            'atc_rate': clamp_fraction(atc_rate_val),
+            'ic_rate': clamp_fraction(ic_rate_val),
+            'purchase_rate': clamp_fraction(purchase_rate_val),
+            'atc_to_ic_rate': clamp_fraction(atc_to_ic_rate_val),
+            'ic_to_purchase_rate': clamp_fraction(ic_to_purchase_rate_val),
             'performance_quality_score': quality_score,
             'stability_score': stability_score,
             'momentum_score': momentum_score,
