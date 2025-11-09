@@ -2018,7 +2018,14 @@ class XGBoostPredictor:
                     ])
                 
                 # FIX: Ensure we have the exact number of features the scaler expects
-                if scaler is not None:
+                baseline_conf = self.feature_importance.get(f"{model_key}_confidence", {})
+
+                if scaler is BASELINE_SCALER_SENTINEL:
+                    if model_key not in self.missing_scaler_logged:
+                        self.logger.debug("Baseline model %s has no scaler; using raw features.", model_key)
+                        self.missing_scaler_logged.add(model_key)
+                    feature_vector_scaled = [feature_vector]
+                elif scaler is not None:
                     # Handle both old and new scikit-learn versions
                     scaler_n_features = getattr(scaler, 'n_features_in_', None)
                     if scaler_n_features is None:
@@ -2071,9 +2078,19 @@ class XGBoostPredictor:
                         self.logger.error(f"Scaler transform failed: {e}, using unscaled features")
                         feature_vector_scaled = [feature_vector]
                 elif scaler is None:
-                    # Scaler not loaded - use unscaled features but warn
-                    self.logger.warning(f"⚠️ No scaler available for {model_key}, using unscaled features (may affect prediction quality)")
-                    feature_vector_scaled = [feature_vector]
+                    if baseline_conf.get('baseline'):
+                        if model_key not in self.missing_scaler_logged:
+                            self.logger.debug("Metadata marks %s as baseline; skipping scaler.", model_key)
+                            self.missing_scaler_logged.add(model_key)
+                        feature_vector_scaled = [feature_vector]
+                    else:
+                        if model_key not in self.missing_scaler_logged:
+                            self.logger.warning(
+                                "⚠️ No scaler available for %s, using unscaled features (may affect prediction quality)",
+                                model_key,
+                            )
+                            self.missing_scaler_logged.add(model_key)
+                        feature_vector_scaled = [feature_vector]
                 else:
                     # No scaler available, use features as-is
                     feature_vector_scaled = [feature_vector]
