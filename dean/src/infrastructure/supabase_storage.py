@@ -422,6 +422,41 @@ def create_supabase_storage(supabase_client: Any) -> SupabaseStorage:
 # VALIDATED SUPABASE CLIENT
 # =====================================================
 
+FRACTION_FIELDS = {
+    "ctr",
+    "unique_ctr",
+    "atc_rate",
+    "ic_rate",
+    "purchase_rate",
+    "atc_to_ic_rate",
+    "ic_to_purchase_rate",
+    "engagement_rate",
+    "conversion_rate",
+    "avg_ctr",
+}
+
+
+def _normalize_fraction_fields(data: Optional[Dict[str, Any]]) -> None:
+    if not isinstance(data, dict):
+        return
+
+    for field in FRACTION_FIELDS:
+        if field not in data or data[field] is None:
+            continue
+        try:
+            value = float(data[field])
+        except (TypeError, ValueError):
+            continue
+
+        if value < 0:
+            data[field] = 0.0
+        elif value > 1:
+            if value <= 100:
+                data[field] = min(1.0, round(value / 100.0, 6))
+            else:
+                data[field] = 1.0
+
+
 class ValidatedSupabaseClient:
     """
     Wrapper around Supabase client that automatically validates data before operations.
@@ -515,6 +550,7 @@ class ValidatedSupabaseClient:
     
     def _insert_single_validated(self, table: str, data: Dict[str, Any]) -> Any:
         """Insert single validated record."""
+        _normalize_fraction_fields(data)
         try:
             sanitized_data = validate_and_sanitize_data(table, data)
             logger.debug(f"✅ Data validated for {table} insert")
@@ -532,6 +568,7 @@ class ValidatedSupabaseClient:
         failed_records = []
         
         for i, data in enumerate(data_list):
+            _normalize_fraction_fields(data)
             try:
                 sanitized_data = validate_and_sanitize_data(table, data)
                 validated_records.append(sanitized_data)
@@ -557,6 +594,7 @@ class ValidatedSupabaseClient:
     
     def _upsert_single_validated(self, table: str, data: Dict[str, Any], on_conflict: str = None) -> Any:
         """Upsert single validated record."""
+        _normalize_fraction_fields(data)
         try:
             sanitized_data = validate_and_sanitize_data(table, data)
             logger.debug(f"✅ Data validated for {table} upsert")
@@ -580,6 +618,7 @@ class ValidatedSupabaseClient:
         failed_records = []
         
         for i, data in enumerate(data_list):
+            _normalize_fraction_fields(data)
             try:
                 sanitized_data = validate_and_sanitize_data(table, data)
                 validated_records.append(sanitized_data)

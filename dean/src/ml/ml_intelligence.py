@@ -2485,6 +2485,13 @@ class XGBoostPredictor:
                     self.logger.debug("Failed to hash feature columns for %s_%s: %s", model_type, stage, hash_error)
                     feature_version = None
 
+            parameters_summary = ", ".join(
+                f"{k}={sanitize_float(v) if isinstance(v, (int, float)) else v}"
+                for k, v in sorted(self.config.xgb_params.items())
+            )
+            if len(parameters_summary) > 1000:
+                parameters_summary = parameters_summary[:997] + "..."
+
             metadata_payload = {
                 'feature_columns': feature_cols,
                 'feature_version': feature_version,
@@ -2499,21 +2506,14 @@ class XGBoostPredictor:
                 'hyperparameters': self.config.xgb_params,
                 'scaler_data': scaler_data_binary.hex() if scaler_data_binary else None,
                 'model_name': model_name,
+                'parameters_summary': parameters_summary,
             }
             if metadata_extra:
                 metadata_payload.update(metadata_extra)
 
-            parameters_summary = ", ".join(
-                f"{k}={sanitize_float(v) if isinstance(v, (int, float)) else v}"
-                for k, v in sorted(self.config.xgb_params.items())
-            )
-            if len(parameters_summary) > 1000:
-                parameters_summary = parameters_summary[:997] + "..."
-
             artifact_path = f"supabase://ml_models/{model_type}/{stage}/v{model_version}/{training_data_hash}.hex"
 
             metadata_payload['artifact_path'] = artifact_path
-            metadata_payload['parameters_summary'] = parameters_summary
 
             try:
                 metadata_json = json.loads(json.dumps(metadata_payload, default=sanitize_float))
@@ -2527,7 +2527,7 @@ class XGBoostPredictor:
                 'version': model_version,
                 'model_name': model_name,
                 'model_data': compressed_model.hex(),
-                'parameters_summary': parameters_summary,
+                'parameters_summary': metadata_payload['parameters_summary'],
                 'accuracy': accuracy,
                 'precision': precision,
                 'recall': recall,
