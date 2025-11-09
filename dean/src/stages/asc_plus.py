@@ -1278,11 +1278,11 @@ def _sync_creative_performance_records(
         elif impressions <= 0:
             ctr = None
 
-        cpc = _safe_float(metrics.get("cpc")) if metrics.get("cpc") is not None else (
-            _safe_float(spend / clicks) if clicks > 0 else None
+        cpc = _safe_float(metrics.get("cpc"), precision=2) if metrics.get("cpc") is not None else (
+            _safe_float(spend / clicks, precision=2) if clicks > 0 else None
         )
-        cpm = _safe_float(metrics.get("cpm")) if metrics.get("cpm") is not None else (
-            _safe_float(spend * 1000.0 / impressions) if impressions > 0 else None
+        cpm = _safe_float(metrics.get("cpm"), precision=2) if metrics.get("cpm") is not None else (
+            _safe_float(spend * 1000.0 / impressions, precision=2) if impressions > 0 else None
         )
         roas = _safe_float(metrics.get("roas")) if metrics.get("roas") is not None else None
         if spend > 0 and metrics.get("revenue"):
@@ -1478,8 +1478,17 @@ def _build_ad_metrics(
         roas = None
 
     ctr = (clicks_val / impressions_val) if impressions_val > 0 else None
-    cpc = (spend_val / clicks_val) if clicks_val > 0 else None
-    cpm = (spend_val * 1000.0 / impressions_val) if impressions_val > 0 else None
+
+    raw_cpc = _float_or_none(row.get("cpc"))
+    if raw_cpc is None and clicks_val > 0:
+        raw_cpc = spend_val / clicks_val if clicks_val > 0 else None
+    cpc = round(raw_cpc, 2) if raw_cpc is not None else None
+
+    raw_cpm = _float_or_none(row.get("cpm"))
+    if raw_cpm is None and impressions_val > 0:
+        raw_cpm = spend_val * 1000.0 / impressions_val
+    cpm = round(raw_cpm, 2) if raw_cpm is not None else None
+
     cpa = (spend_val / purchases) if purchases > 0 else None
 
     reach_val = safe_f(row.get("reach")) if row.get("reach") is not None else None
