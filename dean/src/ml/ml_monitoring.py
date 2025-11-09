@@ -589,7 +589,7 @@ class MLDashboard:
         ])
         
         # Add health status
-        accuracy_for_status = metrics.avg_model_accuracy or 0.0
+        accuracy_for_status = metrics.avg_model_accuracy
         error_rate = metrics.error_rate or 0.0
         has_predictions = bool(inference_details.get('confidence_samples')) or metrics.predictions_made_24h > 0
         training_details = metrics.training_metrics or {}
