@@ -1127,6 +1127,50 @@ class MetaClient:
                                 break
                 except Exception as search_exc:
                     logger.debug("Secondary instagram account lookup failed for page %s: %s", page_id, search_exc)
+            # Fallback: inspect business assets associated with the token to locate a matching IG business account
+            if not ig_actor_id:
+                try:
+                    business_fields = (
+                        "instagram_business_accounts{id,name},owned_pages{id},client_pages{id},pages{id}"
+                    )
+                    businesses = self._graph_get_object("me/businesses", params={"fields": business_fields})
+                    if isinstance(businesses, dict):
+                        data_list = businesses.get("data", []) or []
+                        best_candidate: Optional[str] = None
+                        sole_candidate: Optional[str] = None
+                        instagram_ids_seen: set[str] = set()
+                        for biz in data_list:
+                            # Track IG accounts on this business
+                            ig_accounts = ((biz.get("instagram_business_accounts") or {}).get("data")) or []
+                            ig_ids = [acct.get("id") for acct in ig_accounts if acct.get("id")]
+                            if not ig_ids:
+                                continue
+                            instagram_ids_seen.update(ig_ids)
+                            # Collect all page IDs the business controls (owned, client, pages)
+                            related_pages = set()
+                            for edge_key in ("owned_pages", "client_pages", "pages"):
+                                edge = biz.get(edge_key) or {}
+                                for page_entry in edge.get("data", []) or []:
+                                    pid = page_entry.get("id")
+                                    if pid:
+                                        related_pages.add(str(pid))
+                            if str(page_id) in related_pages:
+                                best_candidate = ig_ids[0]
+                                break
+                            if len(ig_ids) == 1 and not sole_candidate:
+                                sole_candidate = ig_ids[0]
+                        if not best_candidate and len(instagram_ids_seen) == 1:
+                            best_candidate = next(iter(instagram_ids_seen))
+                        if not best_candidate:
+                            best_candidate = sole_candidate
+                        if best_candidate:
+                            ig_actor_id = best_candidate
+                except Exception as business_exc:
+                    logger.debug(
+                        "Business-level instagram actor lookup failed for page %s: %s",
+                        page_id,
+                        business_exc,
+                    )
         except Exception as exc:
             logger.warning("Failed to look up Instagram actor for page %s: %s", page_id, exc)
             self._instagram_actor_cache[page_id] = None
