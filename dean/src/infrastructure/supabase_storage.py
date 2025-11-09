@@ -9,19 +9,103 @@ from typing import Any, Dict, List, Optional, Union
 import logging
 import random
 import os
+import re
 from supabase import create_client, Client
 
 from .data_validation import (
-    validate_supabase_data, 
-    validate_and_sanitize_data, 
+    validate_supabase_data,
+    validate_and_sanitize_data,
     ValidationError,
-    ValidationResult
+    ValidationResult,
 )
 
 # Import date validation from data_validation
 from .data_validation import date_validator, validate_all_timestamps
 
 logger = logging.getLogger(__name__)
+
+# =====================================================
+# ERROR LOGGING HELPERS
+# =====================================================
+
+def _sample_payload(payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return None
+
+    keys_of_interest = [
+        "id",
+        "ad_id",
+        "creative_id",
+        "lifecycle_id",
+        "stage",
+        "window_type",
+        "date_start",
+        "date_end",
+        "model_type",
+        "model_name",
+    ]
+
+    sample: Dict[str, Any] = {}
+    for key in keys_of_interest:
+        if key in payload:
+            sample[key] = payload[key]
+
+    for metric_key in ("ctr", "cpc", "cpm", "roas"):
+        if metric_key in payload:
+            sample[metric_key] = payload[metric_key]
+
+    return sample or None
+
+
+def _log_supabase_error(operation: str, table: str, error: Any, payload: Optional[Dict[str, Any]] = None) -> None:
+    code: Optional[str] = None
+    details: Optional[str] = None
+
+    if isinstance(error, dict):
+        code = error.get("code")
+        details = error.get("details") or error.get("hint")
+    elif hasattr(error, "args"):
+        for arg in error.args:
+            if isinstance(arg, dict):
+                code = code or arg.get("code")
+                details = details or arg.get("details") or arg.get("hint")
+
+    message = str(error)
+    suggestions: List[str] = []
+
+    column_match = re.search(r"Could not find the '([^']+)' column", message)
+    if column_match:
+        missing_column = column_match.group(1)
+        suggestions.append(
+            f"Supabase schema cache is missing column '{missing_column}' on {table}. Apply the latest migrations or run `supabase db refresh schema`/`supabase db reset --linked`."
+        )
+
+    if "Field 'ctr' must be at most 1" in message:
+        ctr_value = None
+        if payload and isinstance(payload, dict):
+            ctr_value = payload.get("ctr")
+        if ctr_value is not None:
+            suggestions.append(f"CTR must be a fraction <= 1. Offending value: {ctr_value}")
+        suggestions.append("Ensure metrics store CTR as clicks/impressions (fraction).")
+
+    if code == "PGRST204" and not suggestions:
+        suggestions.append(
+            "Supabase schema cache may be stale. Trigger a schema refresh or remove unused fields from the insert payload."
+        )
+
+    sample = _sample_payload(payload)
+
+    logger.error(
+        "SUPABASE ERROR [%s.%s] code=%s message=%s details=%s suggestions=%s sample=%s",
+        table,
+        operation,
+        code or "unknown",
+        message,
+        details or "n/a",
+        "; ".join(suggestions) or "n/a",
+        sample,
+    )
+
 
 # =====================================================
 # HELPER FUNCTIONS
@@ -436,10 +520,10 @@ class ValidatedSupabaseClient:
             logger.debug(f"✅ Data validated for {table} insert")
             return self.client.table(table).insert(sanitized_data).execute()
         except ValidationError as e:
-            logger.error(f"❌ Validation failed for {table} insert: {e}")
+            _log_supabase_error("validation", table, e, data)
             raise e
         except Exception as e:
-            logger.error(f"❌ Insert failed for {table}: {e}")
+            _log_supabase_error("insert", table, e, data)
             raise e
     
     def _insert_batch_validated(self, table: str, data_list: List[Dict[str, Any]]) -> Any:
@@ -462,7 +546,12 @@ class ValidatedSupabaseClient:
         
         if validated_records:
             logger.info(f"✅ Inserting {len(validated_records)} validated records into {table}")
-            return self.client.table(table).insert(validated_records).execute()
+            try:
+                return self.client.table(table).insert(validated_records).execute()
+            except Exception as e:
+                sample = validated_records[0] if validated_records else None
+                _log_supabase_error("insert_batch", table, e, sample)
+                raise e
         else:
             return None
     
@@ -479,10 +568,10 @@ class ValidatedSupabaseClient:
             
             return query.execute()
         except ValidationError as e:
-            logger.error(f"❌ Validation failed for {table} upsert: {e}")
+            _log_supabase_error("validation", table, e, data)
             raise e
         except Exception as e:
-            logger.error(f"❌ Upsert failed for {table}: {e}")
+            _log_supabase_error("upsert", table, e, data)
             raise e
     
     def _upsert_batch_validated(self, table: str, data_list: List[Dict[str, Any]], on_conflict: str = None) -> Any:
@@ -505,13 +594,18 @@ class ValidatedSupabaseClient:
         
         if validated_records:
             logger.info(f"✅ Upserting {len(validated_records)} validated records into {table}")
-            
-            if on_conflict:
-                query = self.client.table(table).upsert(validated_records, on_conflict=on_conflict)
-            else:
-                query = self.client.table(table).upsert(validated_records)
-            
-            return query.execute()
+
+            try:
+                if on_conflict:
+                    query = self.client.table(table).upsert(validated_records, on_conflict=on_conflict)
+                else:
+                    query = self.client.table(table).upsert(validated_records)
+
+                return query.execute()
+            except Exception as e:
+                sample = validated_records[0] if validated_records else None
+                _log_supabase_error("upsert_batch", table, e, sample)
+                raise e
         else:
             return None
     

@@ -532,20 +532,12 @@ class SupabaseMLClient:
                     return None
                 except Exception as exc:
                     if not self._is_retryable_error(exc):
-                        code = self._extract_error_code(exc)
-                        self.logger.error(
-                            "Prediction insert for ad %s failed with non-retryable error%s: %s",
-                            ad_id,
-                            f" ({code})" if code else "",
-                            exc,
-                        )
+                        self.log_supabase_failure('ml_predictions', 'insert', exc, data)
                         return None
 
                     attempt += 1
                     if attempt >= max_attempts:
-                        self.logger.error(
-                            f"Failed to save prediction for ad {ad_id} after {max_attempts} attempts: {exc}"
-                        )
+                        self.log_supabase_failure('ml_predictions', 'insert', exc, data)
                         return None
 
                     backoff = min(2 ** attempt, 5)
@@ -643,6 +635,79 @@ class SupabaseMLClient:
         except Exception as e:
             self.logger.error(f"Error saving learning event: {e}")
             return None
+
+    def log_supabase_failure(
+        self,
+        table: str,
+        operation: str,
+        error: Any,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        code: Optional[str] = None
+        detail: Optional[str] = None
+
+        if isinstance(error, dict):
+            code = error.get("code")
+            detail = error.get("details") or error.get("hint")
+        elif hasattr(error, "args"):
+            for arg in error.args:
+                if isinstance(arg, dict):
+                    code = code or arg.get("code")
+                    detail = detail or arg.get("details") or arg.get("hint")
+
+        message = str(error)
+        suggestions: List[str] = []
+
+        column_match = re.search(r"Could not find the '([^']+)' column", message)
+        if column_match:
+            missing_column = column_match.group(1)
+            suggestions.append(
+                f"Supabase schema cache does not expose column '{missing_column}' on {table}. Apply the latest migrations or refresh the cache."
+            )
+
+        if code == "PGRST204" and not suggestions:
+            suggestions.append(
+                "Supabase returned schema cache miss (PGRST204). Reload the schema or adjust the payload to omit unused columns."
+            )
+
+        sample = self._sample_payload(payload)
+
+        self.logger.error(
+            "Supabase failure for %s.%s code=%s message=%s detail=%s suggestions=%s sample=%s",
+            table,
+            operation,
+            code or "unknown",
+            message,
+            detail or "n/a",
+            "; ".join(suggestions) or "n/a",
+            sample,
+        )
+
+    def _sample_payload(self, payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return None
+
+        keys = [
+            "id",
+            "ad_id",
+            "model_type",
+            "model_name",
+            "stage",
+            "date_start",
+            "date_end",
+            "prediction_type",
+        ]
+
+        sample: Dict[str, Any] = {}
+        for key in keys:
+            if key in payload:
+                sample[key] = payload[key]
+
+        for metric_key in ("ctr", "cpc", "cpm", "roas", "confidence_score"):
+            if metric_key in payload:
+                sample[metric_key] = payload[metric_key]
+
+        return sample or None
 
 class FeatureEngineer:
     """Advanced feature engineering for ML models."""
@@ -2524,12 +2589,14 @@ class XGBoostPredictor:
                     return False
                 except Exception as insert_error:
                     self.logger.error(f"Insert failed for {model_type}_{stage}: {insert_error}")
+                    self.supabase.log_supabase_failure('ml_models', 'insert', insert_error, data)
                     return False  # Return False to indicate save failure
                         
             except Exception as db_error:
                 # If database save fails, log and return False to indicate failure
                 self.logger.error(f"Database save failed for {model_type}_{stage}: {db_error}")
                 self.logger.error(f"Model {model_type}_{stage} trained successfully but FAILED to save to database")
+                self.supabase.log_supabase_failure('ml_models', 'insert', db_error, data)
                 return False  # Return False to indicate save failure
                 
         except Exception as e:
