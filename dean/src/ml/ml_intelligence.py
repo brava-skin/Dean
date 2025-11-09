@@ -511,12 +511,12 @@ class SupabaseMLClient:
             attempt = 0
             while attempt < max_attempts:
                 try:
-            if validated_client and hasattr(validated_client, 'insert'):
-                response = validated_client.insert('ml_predictions', data)
-            else:
-                response = self.client.table('ml_predictions').insert(data).execute()
-            
-            if response and (not hasattr(response, 'data') or response.data):
+                    if validated_client and hasattr(validated_client, 'insert'):
+                        response = validated_client.insert('ml_predictions', data)
+                    else:
+                        response = self.client.table('ml_predictions').insert(data).execute()
+
+                    if response and (not hasattr(response, 'data') or response.data):
                         self.logger.info(
                             "Saved prediction %s for ad %s (attempt %s) with confidence %.3f",
                             prediction_id,
@@ -524,7 +524,7 @@ class SupabaseMLClient:
                             attempt + 1,
                             confidence_score,
                         )
-                return prediction_id
+                        return prediction_id
 
                     raise RuntimeError("Insert returned no data")
                 except ValidationError as ve:
@@ -533,7 +533,7 @@ class SupabaseMLClient:
                 except Exception as exc:
                     if not self._is_retryable_error(exc):
                         self.log_supabase_failure('ml_predictions', 'insert', exc, data)
-                return None
+                        return None
 
                     attempt += 1
                     if attempt >= max_attempts:
