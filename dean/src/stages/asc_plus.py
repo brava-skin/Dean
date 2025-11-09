@@ -3807,7 +3807,9 @@ def run_asc_plus_tick(
             hydrated_active_count = len(hydrated_active_ads)
 
     effective_target = min(target_count, max_active)
-    deficit = max(0, effective_target - planning_active_count)
+    available_slots = max(0, max_active - min(active_count, max_active))
+    desired_slots = max(0, effective_target - planning_active_count)
+    deficit = min(desired_slots, available_slots)
     created_records = _generate_creatives_for_deficit(deficit, client, settings, campaign_id, adset_id, ml_system, active_count)
     if created_records:
         try:
