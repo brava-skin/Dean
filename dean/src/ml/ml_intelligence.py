@@ -2571,27 +2571,26 @@ class XGBoostPredictor:
                 # First try to update existing model, then insert if not found
                 validated_client = self._get_validated_client()
                 _ml_log(logging.DEBUG, "Validated client available: %s", bool(validated_client))
-                
-                    try:
-                        if validated_client and hasattr(validated_client, 'insert'):
+
+                try:
+                    if validated_client and hasattr(validated_client, 'insert'):
                         _ml_log(logging.DEBUG, "Attempting validated insert for %s_%s (version %s)", model_type, stage, model_version)
-                            response = validated_client.insert('ml_models', data)
-                            _ml_log(logging.DEBUG, "Insert response: %s", getattr(response, 'data', response))
-                        else:
+                        response = validated_client.insert('ml_models', data)
+                        _ml_log(logging.DEBUG, "Insert response: %s", getattr(response, 'data', response))
+                    else:
                         _ml_log(logging.DEBUG, "Attempting regular insert for %s_%s (version %s)", model_type, stage, model_version)
-                            response = self.supabase.client.table('ml_models').insert(data).execute()
+                        response = self.supabase.client.table('ml_models').insert(data).execute()
 
                     if response and (not hasattr(response, 'data') or response.data):
                         _ml_log(logging.INFO, "Model %s_%s inserted as %s", model_type, stage, model_name)
-                                return True
+                        return True
 
-                                self.logger.error(f"Insert failed - no data returned for {model_type}_{stage}")
-                                return False
-                    except Exception as insert_error:
+                    self.logger.error(f"Insert failed - no data returned for {model_type}_{stage}")
+                    return False
+                except Exception as insert_error:
                     self.logger.error(f"Insert failed for {model_type}_{stage}: {insert_error}")
                     self.supabase.log_supabase_failure('ml_models', 'insert', insert_error, data)
-                        return False  # Return False to indicate save failure
-                        
+                    return False  # Return False to indicate save failure
             except Exception as db_error:
                 # If database save fails, log and return False to indicate failure
                 self.logger.error(f"Database save failed for {model_type}_{stage}: {db_error}")
