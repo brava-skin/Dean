@@ -1444,8 +1444,22 @@ def _build_ad_metrics(
 ) -> Dict[str, Any]:
     ad_id = row.get("ad_id")
     spend_val = safe_f(row.get("spend"))
-    impressions_val = safe_f(row.get("impressions"))
-    clicks_val = safe_f(row.get("clicks"))
+
+    def _first_non_null(*values: Any) -> Any:
+        for value in values:
+            if value not in (None, ""):
+                return value
+        return None
+
+    impressions_source = _first_non_null(row.get("impressions"))
+    impressions_val = safe_f(impressions_source)
+
+    clicks_source = _first_non_null(
+        row.get("inline_link_clicks"),
+        row.get("link_clicks"),
+        row.get("clicks"),
+    )
+    clicks_val = safe_f(clicks_source)
 
     actions = row.get("actions") or []
     add_to_cart = 0
@@ -1477,9 +1491,14 @@ def _build_ad_metrics(
     if roas is not None and spend_val <= 0:
         roas = None
 
-    ctr = (clicks_val / impressions_val) if impressions_val > 0 else None
+    ctr_row = _fraction_or_none(row.get("inline_link_click_ctr")) or _fraction_or_none(
+        row.get("ctr")
+    )
+    ctr = ctr_row if ctr_row is not None else ((clicks_val / impressions_val) if impressions_val > 0 else None)
 
     raw_cpc = _float_or_none(row.get("cpc"))
+    if raw_cpc is None:
+        raw_cpc = _float_or_none(row.get("cost_per_inline_link_click"))
     if raw_cpc is None and clicks_val > 0:
         raw_cpc = spend_val / clicks_val if clicks_val > 0 else None
     cpc = round(raw_cpc, 2) if raw_cpc is not None else None
@@ -1492,11 +1511,11 @@ def _build_ad_metrics(
     cpa = (spend_val / purchases) if purchases > 0 else None
 
     reach_val = safe_f(row.get("reach")) if row.get("reach") is not None else None
-    if reach_val and reach_val > 0:
-        frequency = impressions_val / reach_val
-    else:
-        frequency = safe_f(row.get("frequency")) if row.get("frequency") is not None else None
-        if frequency == 0:
+    frequency = _float_or_none(row.get("frequency"))
+    if frequency is None:
+        if reach_val and reach_val > 0:
+            frequency = impressions_val / reach_val
+        else:
             frequency = None
 
     now_ts = now_ts or datetime.now(timezone.utc)
