@@ -507,16 +507,16 @@ class SupabaseMLClient:
             
             # Get validated client for automatic validation
             validated_client = self._get_validated_client()
-
+            
             attempt = 0
             while attempt < max_attempts:
                 try:
-                    if validated_client and hasattr(validated_client, 'insert'):
-                        response = validated_client.insert('ml_predictions', data)
-                    else:
-                        response = self.client.table('ml_predictions').insert(data).execute()
-
-                    if response and (not hasattr(response, 'data') or response.data):
+            if validated_client and hasattr(validated_client, 'insert'):
+                response = validated_client.insert('ml_predictions', data)
+            else:
+                response = self.client.table('ml_predictions').insert(data).execute()
+            
+            if response and (not hasattr(response, 'data') or response.data):
                         self.logger.info(
                             "Saved prediction %s for ad %s (attempt %s) with confidence %.3f",
                             prediction_id,
@@ -524,7 +524,7 @@ class SupabaseMLClient:
                             attempt + 1,
                             confidence_score,
                         )
-                        return prediction_id
+                return prediction_id
 
                     raise RuntimeError("Insert returned no data")
                 except ValidationError as ve:
@@ -533,7 +533,7 @@ class SupabaseMLClient:
                 except Exception as exc:
                     if not self._is_retryable_error(exc):
                         self.log_supabase_failure('ml_predictions', 'insert', exc, data)
-                        return None
+                return None
 
                     attempt += 1
                     if attempt >= max_attempts:
@@ -1008,7 +1008,7 @@ class XGBoostPredictor:
             # Ensure DataFrame has string column names
             df_features.columns = [str(col) for col in df_features.columns]
             feature_cols = [str(col) for col in feature_cols]
-
+            
             return df_features, feature_cols
         
         except Exception as e:
@@ -1321,7 +1321,7 @@ class XGBoostPredictor:
                 if self._train_baseline_from_frame(model_type, stage, target_col, baseline_source_df, original_feature_cols):
                     return True
                 return False
-
+            
             df_features = df_features.dropna(subset=[target_col]).replace([np.inf, -np.inf], np.nan)
             df_features = df_features.dropna(subset=feature_cols + [target_col])
 
@@ -1374,7 +1374,7 @@ class XGBoostPredictor:
                     if self._train_baseline_from_frame(model_type, stage, target_col, fallback_frame, original_feature_cols):
                         return True
                     return False
-
+                
             required_samples = max(
                 ML_MIN_TRAINING_SAMPLES_GLOBAL if used_cross_stage else ML_MIN_TRAINING_SAMPLES_STAGE,
                 3,
@@ -1383,11 +1383,11 @@ class XGBoostPredictor:
                 if len(train_df) >= 2:
                     self.logger.info(
                         "Proceeding with small-sample training for %s_%s (train=%s, required=%s)",
-                        model_type,
-                        stage,
+                    model_type,
+                    stage,
                         len(train_df),
-                        required_samples,
-                    )
+                    required_samples,
+                )
                 else:
                     self.logger.info(
                         "SKIP training for %s_%s: only %s training samples (<%s required)",
@@ -1419,7 +1419,7 @@ class XGBoostPredictor:
             if len(feature_cols) > self.config.max_features:
                 try:
                     from sklearn.feature_selection import SelectKBest, mutual_info_regression
-
+                    
                     selector = SelectKBest(
                         mutual_info_regression,
                         k=min(self.config.max_features, len(feature_cols)),
@@ -1439,11 +1439,11 @@ class XGBoostPredictor:
                 except Exception as e:
                     self.logger.warning(f"Feature selection failed: {e}; using all features")
                     feature_selector = None
-
+            
             model_key = f"{model_type}_{stage}"
             if feature_selector is not None:
                 self.feature_selectors[model_key] = feature_selector
-
+            
             scaler = RobustScaler()
             X_train_scaled = scaler.fit_transform(X_train)
             X_val_scaled = scaler.transform(X_val)
@@ -1861,7 +1861,7 @@ class XGBoostPredictor:
                 except Exception as post_error:
                     self.logger.warning(f"⚠️ Post-training tasks failed for baseline {model_type}_{stage}: {post_error}")
                 return True
-
+            
             self.logger.error("❌ Failed to save baseline model for %s", model_key)
             return False
         
@@ -1911,7 +1911,7 @@ class XGBoostPredictor:
             stage,
         )
         return self._train_baseline_model(model_type, stage, target_col, X, y, available_cols)
-
+    
     def predict(self, model_type: str, stage: str, ad_id: str, 
                 features: Dict[str, float]) -> Optional[PredictionResult]:
         """Make prediction using trained model with caching."""
@@ -2491,7 +2491,7 @@ class XGBoostPredictor:
             )
             if len(parameters_summary) > 1000:
                 parameters_summary = parameters_summary[:997] + "..."
-
+            
             metadata_payload = {
                 'feature_columns': feature_cols,
                 'feature_version': feature_version,
@@ -2572,25 +2572,25 @@ class XGBoostPredictor:
                 validated_client = self._get_validated_client()
                 _ml_log(logging.DEBUG, "Validated client available: %s", bool(validated_client))
                 
-                try:
-                    if validated_client and hasattr(validated_client, 'insert'):
+                    try:
+                        if validated_client and hasattr(validated_client, 'insert'):
                         _ml_log(logging.DEBUG, "Attempting validated insert for %s_%s (version %s)", model_type, stage, model_version)
-                        response = validated_client.insert('ml_models', data)
-                        _ml_log(logging.DEBUG, "Insert response: %s", getattr(response, 'data', response))
-                    else:
+                            response = validated_client.insert('ml_models', data)
+                            _ml_log(logging.DEBUG, "Insert response: %s", getattr(response, 'data', response))
+                        else:
                         _ml_log(logging.DEBUG, "Attempting regular insert for %s_%s (version %s)", model_type, stage, model_version)
-                        response = self.supabase.client.table('ml_models').insert(data).execute()
+                            response = self.supabase.client.table('ml_models').insert(data).execute()
 
                     if response and (not hasattr(response, 'data') or response.data):
                         _ml_log(logging.INFO, "Model %s_%s inserted as %s", model_type, stage, model_name)
-                        return True
+                                return True
 
-                    self.logger.error(f"Insert failed - no data returned for {model_type}_{stage}")
-                    return False
-                except Exception as insert_error:
+                                self.logger.error(f"Insert failed - no data returned for {model_type}_{stage}")
+                                return False
+                    except Exception as insert_error:
                     self.logger.error(f"Insert failed for {model_type}_{stage}: {insert_error}")
                     self.supabase.log_supabase_failure('ml_models', 'insert', insert_error, data)
-                    return False  # Return False to indicate save failure
+                        return False  # Return False to indicate save failure
                         
             except Exception as db_error:
                 # If database save fails, log and return False to indicate failure
