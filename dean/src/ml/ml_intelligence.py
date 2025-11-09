@@ -229,6 +229,39 @@ class SupabaseMLClient:
         except (ValueError, TypeError):
             return 0.0
     
+    def _extract_error_code(self, error: Any) -> Optional[str]:
+        """Attempt to pull a structured error code from Supabase/PostgREST errors."""
+        if isinstance(error, dict):
+            return error.get('code')
+
+        if hasattr(error, 'args'):
+            for arg in error.args:
+                if isinstance(arg, dict) and 'code' in arg:
+                    return arg.get('code')
+
+        message = str(error)
+        match = re.search(r"(['\"]code['\"]:\s*['\"])([A-Z0-9]+)(['\"])", message)
+        if match:
+            return match.group(2)
+
+        generic_match = re.search(r"PGRST\d+", message)
+        if generic_match:
+            return generic_match.group(0)
+
+        return None
+
+    def _is_retryable_error(self, error: Any) -> bool:
+        """Determine whether an error should trigger another retry."""
+        code = self._extract_error_code(error)
+        if not code:
+            return True
+
+        non_retryable = {
+            'PGRST204',  # schema cache missing column / column not found
+            '42P10',     # invalid ON CONFLICT target (constraint missing)
+        }
+        return code not in non_retryable
+    
     def get_performance_data(self, 
                            ad_ids: Optional[List[str]] = None,
                            stages: Optional[List[str]] = None,
@@ -467,7 +500,6 @@ class SupabaseMLClient:
                 'expires_at': expires_at.isoformat(),
                 'model_name': model_name,
                 'model_version': model_version or prediction.model_version,
-                'feature_version': feature_version,
             }
             
             # Validate all timestamps in prediction data
