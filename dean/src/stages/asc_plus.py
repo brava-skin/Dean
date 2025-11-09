@@ -89,6 +89,33 @@ def _purchase_and_atc_counts(row: Dict[str, Any]) -> Tuple[int, int]:
     return purch, atc
 
 
+def _fraction_or_none(value: Any, *, allow_percent: bool = True) -> Optional[float]:
+    """Convert Meta metric to a fraction within [0, 1], tolerating percentage inputs."""
+    if value in (None, "", float("inf"), float("-inf")):
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if cleaned.endswith("%"):
+            cleaned = cleaned[:-1]
+        if cleaned == "":
+            return None
+        value = cleaned
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(numeric) or math.isinf(numeric):
+        return None
+    if numeric < 0:
+        return 0.0
+    if numeric > 1.0:
+        if allow_percent and numeric <= 100.0:
+            numeric /= 100.0
+        else:
+            return min(numeric, 1.0)
+    return max(0.0, min(numeric, 1.0))
+
+
 def _cpa(row: Dict[str, Any]) -> float:
     spend = safe_f(row.get("spend"))
     purch, _ = _purchase_and_atc_counts(row)
@@ -1055,19 +1082,6 @@ def _sync_performance_metrics_records(
         if math.isnan(numeric) or math.isinf(numeric):
             return None
         return numeric
-
-    def _fraction_or_none(value: Any, *, allow_percent: bool = True) -> Optional[float]:
-        numeric = _float_or_none(value)
-        if numeric is None:
-            return None
-        if numeric < 0:
-            return 0.0
-        if numeric > 1.0:
-            if allow_percent and numeric <= 100.0:
-                numeric /= 100.0
-            else:
-                return min(numeric, 1.0)
-        return max(0.0, min(numeric, 1.0))
 
     upserts: List[Dict[str, Any]] = []
 
