@@ -21,7 +21,7 @@ import hashlib
 import re
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, Set
 import warnings
 from infrastructure.data_validation import date_validator, validate_all_timestamps, ValidationError
 
@@ -76,6 +76,7 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 
 logger = logging.getLogger(__name__)
 
+BASELINE_SCALER_SENTINEL = object()
 
 def _ml_log(level: int, message: str, *args: Any) -> None:
     logger.log(level, f"[ML] {message}", *args)
@@ -449,7 +450,7 @@ class SupabaseMLClient:
             from datetime import datetime, timedelta
             
             prediction_id = str(uuid.uuid4())
-            now = datetime.now()
+            now = now_utc()
             
             prediction_value = self._safe_float(prediction.predicted_value, 999999999.99)
             confidence_score = max(0.0, min(1.0, self._safe_float(prediction.confidence_score, 1.0)))
@@ -914,9 +915,10 @@ class XGBoostPredictor:
         
         # Model storage
         self.models: Dict[str, any] = {}
-        self.scalers: Dict[str, StandardScaler] = {}
+        self.scalers: Dict[str, Any] = {}
         self.feature_selectors: Dict[str, any] = {}
         self.feature_importance: Dict[str, Dict[str, float]] = {}
+        self.missing_scaler_logged: Set[str] = set()
         
         # Optimization components
         if OPTIMIZATIONS_AVAILABLE:
@@ -1826,7 +1828,7 @@ class XGBoostPredictor:
             
             # Store model artifacts
             self.models[model_key] = baseline_model
-            self.scalers[model_key] = None
+            self.scalers[model_key] = BASELINE_SCALER_SENTINEL
             if hasattr(self, "feature_selectors") and self.feature_selectors is not None:
                 self.feature_selectors.pop(model_key, None)
             
@@ -2492,6 +2494,7 @@ class XGBoostPredictor:
             if len(parameters_summary) > 1000:
                 parameters_summary = parameters_summary[:997] + "..."
             
+            confidence_summary = dict(self.feature_importance.get(f"{model_key}_confidence", {}))
             metadata_payload = {
                 'feature_columns': feature_cols,
                 'feature_version': feature_version,
@@ -2507,6 +2510,8 @@ class XGBoostPredictor:
                 'scaler_data': scaler_data_binary.hex() if scaler_data_binary else None,
                 'model_name': model_name,
                 'parameters_summary': parameters_summary,
+                'confidence_summary': confidence_summary,
+                'baseline': bool(confidence_summary.get('baseline')), 
             }
             if metadata_extra:
                 metadata_payload.update(metadata_extra)
@@ -2976,14 +2981,22 @@ class XGBoostPredictor:
                 self.models[model_key] = model
                 
                 # Try to store feature count in metadata for later use
-                model_metadata = model_data.get('model_metadata', {})
-                if isinstance(model_metadata, str):
-                    import json
+                is_baseline_model = False
+                raw_metadata = model_data.get('metadata') or model_data.get('model_metadata') or {}
+                if isinstance(raw_metadata, str):
                     try:
-                        model_metadata = json.loads(model_metadata)
-                    except:
-                        model_metadata = {}
-                
+                        raw_metadata = json.loads(raw_metadata)
+                    except Exception:
+                        raw_metadata = {}
+                elif not isinstance(raw_metadata, dict):
+                    raw_metadata = {}
+                model_metadata = raw_metadata
+
+                confidence_summary = model_metadata.get('confidence_summary', {})
+                if isinstance(confidence_summary, dict) and confidence_summary:
+                    self.feature_importance[f"{model_key}_confidence"] = confidence_summary
+                is_baseline_model = bool(model_metadata.get('baseline') or (isinstance(confidence_summary, dict) and confidence_summary.get('baseline')))
+
                 # Store feature count from metadata if available
                 feature_count = model_metadata.get('feature_count')
                 # Also check performance_metrics for feature_count

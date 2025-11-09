@@ -1986,10 +1986,12 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
         # Calculate metrics
         link_clicks = max(link_clicks, 0.0)
         all_clicks = max(all_clicks, 0.0)
-        cpa = (spend / purch) if purch > 0 else float("inf")
-        ctr = ((link_clicks or 0.0) / impressions * 100) if impressions > 0 else 0
-        cpc = (spend / link_clicks) if link_clicks > 0 else ((spend / all_clicks) if all_clicks > 0 else 0)
-        cpm = (spend / impressions * 1000) if impressions > 0 else 0
+        cpa = (spend / purch) if purch > 0 else None
+        ctr = (link_clicks / impressions) if impressions > 0 else None
+        cpc = (spend / link_clicks) if link_clicks > 0 else None
+        if cpc is None and all_clicks > 0:
+            cpc = spend / all_clicks
+        cpm = (spend * 1000 / impressions) if impressions > 0 else None
         
         # If Meta already returned cost-per-link metric, prefer it when available
         if link_clicks > 0:
@@ -2032,20 +2034,20 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
             except (AttributeError, TypeError, ValueError, KeyError):
                 # Fallback to insights count if direct API call fails
                 active_ads_count = insights_ads_count
-                
+        
         except (AttributeError, TypeError, ValueError, KeyError):
             active_ads_count = 0
         
         return {
             "spend": round(spend, 2),
             "purchases": int(purch),
-            "cpa": None if cpa == float("inf") else round(cpa, 2),
+            "cpa": round(cpa, 2) if cpa is not None else None,
             "breakeven": be,
             "impressions": impressions,
             "clicks": int(round(link_clicks if link_clicks > 0 else all_clicks)),
-            "ctr": round(ctr, 2),
-            "cpc": round(cpc, 2),
-            "cpm": round(cpm, 2),
+            "ctr": round(ctr, 4) if ctr is not None else None,
+            "cpc": round(cpc, 2) if cpc is not None else None,
+            "cpm": round(cpm, 2) if cpm is not None else None,
             "atc": int(atc),
             "ic": int(ic),
             "active_ads": active_ads_count,
@@ -2929,12 +2931,16 @@ def main() -> None:
         logger.info(f"Active Ads: {acct.get('active_ads', 0)}")
         logger.info(f"Impressions: {acct.get('impressions', 0):,}")
         logger.info(f"Clicks: {acct.get('clicks', 0):,}")
-        logger.info(f"CTR: {acct.get('ctr', 0):.1f}%")
-        logger.info(f"CPC: €{acct.get('cpc', 0):.2f}")
-        logger.info(f"CPM: €{acct.get('cpm', 0):.2f}")
+        ctr_display = acct.get('ctr', 0) or 0.0
+        logger.info(f"CTR: {ctr_display * 100:.1f}%")
+        cpc_value = acct.get('cpc')
+        cpm_value = acct.get('cpm')
+        logger.info(f"CPC: €{(cpc_value if cpc_value is not None else 0):.2f}")
+        logger.info(f"CPM: €{(cpm_value if cpm_value is not None else 0):.2f}")
         if acct.get('purchases', 0) > 0:
             logger.info(f"Purchases: {acct.get('purchases', 0)}")
-            logger.info(f"CPA: €{acct.get('cpa', 0):.2f}")
+            cpa_value = acct.get('cpa')
+            logger.info(f"CPA: €{(cpa_value if cpa_value is not None else 0):.2f}")
     
     logger.debug(
         json.dumps(

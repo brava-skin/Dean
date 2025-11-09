@@ -458,7 +458,7 @@ class MLDashboard:
                         'ml_count': ml_count,
                         'rule_count': rule_count,
                         'total_decisions': total,
-                        'message': "No active model or predictions yet.",
+                        'message': "No automation decisions recorded yet.",
                     },
                 }
 
@@ -590,7 +590,19 @@ class MLDashboard:
         
         # Add health status
         accuracy_for_status = metrics.avg_model_accuracy or 0.0
-        if accuracy_for_status > 0.7 and metrics.error_rate < 0.1:
+        error_rate = metrics.error_rate or 0.0
+        has_predictions = bool(inference_details.get('confidence_samples')) or metrics.predictions_made_24h > 0
+        training_details = metrics.training_metrics or {}
+        has_models = metrics.models_trained_24h > 0 or bool(training_details.get('latest_trained_at'))
+
+        if accuracy_for_status is None:
+            if has_predictions or has_models:
+                report.append("")
+                report.append("⚠️ **Status: DEGRADED** (accuracy n/a)")
+            else:
+                report.append("")
+                report.append("❌ **Status: UNHEALTHY**")
+        elif accuracy_for_status > 0.7 and error_rate < 0.1:
             report.append("")
             report.append("✅ **Status: HEALTHY**")
         elif accuracy_for_status > 0.5:

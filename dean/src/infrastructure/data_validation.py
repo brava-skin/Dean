@@ -1079,10 +1079,23 @@ class DateValidationUtility:
         for field in timestamp_fields:
             if field in data and data[field] is not None:
                 try:
-                    validated_date = self.validate_and_correct_date(
-                        data[field], 
-                        field
-                    )
+                    if field == 'expires_at':
+                        horizon_hours = data.get('prediction_horizon_hours', 24)
+                        try:
+                            horizon_hours = max(1, int(float(horizon_hours)))
+                        except (TypeError, ValueError):
+                            horizon_hours = 24
+                        validated_date = self.validate_and_correct_date(
+                            data[field],
+                            field,
+                            allow_future=True,
+                            max_future_hours=horizon_hours + 1,
+                        )
+                    else:
+                        validated_date = self.validate_and_correct_date(
+                            data[field],
+                            field
+                        )
                     data[field] = validated_date.isoformat()
                 except Exception as e:
                     self.logger.error(f"Error validating {field}: {e}")
