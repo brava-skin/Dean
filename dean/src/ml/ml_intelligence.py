@@ -2402,7 +2402,6 @@ class XGBoostPredictor:
                 'hyperparameters': self.config.xgb_params,
                 'scaler_data': scaler_data_binary.hex() if scaler_data_binary else None,
                 'model_name': model_name,
-                'artifact_path': artifact_path,
             }
             if metadata_extra:
                 metadata_payload.update(metadata_extra)
@@ -2432,14 +2431,12 @@ class XGBoostPredictor:
                 'model_name': model_name,
                 'model_data': compressed_model.hex(),
                 'parameters_summary': parameters_summary,
-                'artifact_path': artifact_path,
                 'accuracy': accuracy,
                 'precision': precision,
                 'recall': recall,
                 'f1_score': f1_score,
                 'is_active': is_active,
                 'trained_at': now_utc().isoformat(),
-                'feature_version': feature_version,
                 'metadata': metadata_json,
             }
             
