@@ -37,6 +37,7 @@ from infrastructure.data_validation import (
     validate_all_timestamps,
     validate_supabase_data,
     ValidationError,
+    validate_and_sanitize_data,
 )
 from config.validate import validate_asc_plus_config
 
@@ -62,6 +63,9 @@ UTC = timezone.utc
 LOCAL_TZ = ZoneInfo(os.getenv("ACCOUNT_TZ", os.getenv("ACCOUNT_TIMEZONE", "Europe/Amsterdam")))
 ACCOUNT_CURRENCY = os.getenv("ACCOUNT_CURRENCY", "EUR")
 HYDRATION_SECONDS = int(os.getenv("ASC_PLUS_HYDRATION_SECONDS", "180"))
+
+
+_CREATIVE_PERFORMANCE_STAGE_DISABLED = False
 
 
 def _roas(row: Dict[str, Any]) -> float:
@@ -1253,6 +1257,8 @@ def _sync_creative_performance_records(
     stage: str,
     date_label: str,
 ) -> None:
+    global _CREATIVE_PERFORMANCE_STAGE_DISABLED
+
     if not ads or not metrics_map:
         return
 
@@ -1264,6 +1270,9 @@ def _sync_creative_performance_records(
 
     supabase_client = get_validated_supabase_client(enable_validation=True)
     if not supabase_client:
+        return
+
+    if _CREATIVE_PERFORMANCE_STAGE_DISABLED:
         return
 
     creative_lookup: Dict[str, str] = {}
@@ -1336,25 +1345,53 @@ def _sync_creative_performance_records(
             "performance_score": None,
         }
 
-        upsert_records.append(record)
+        try:
+            sanitized_record = validate_and_sanitize_data("creative_performance", record)
+        except ValidationError as val_exc:
+            logger.error(
+                "Creative performance record failed validation for %s/%s/%s: %s",
+                creative_id,
+                ad_id,
+                date_label,
+                val_exc,
+            )
+            continue
+
+        upsert_records.append(sanitized_record)
 
     if not upsert_records:
         return
 
     try:
-        supabase_client.table("creative_performance").upsert(
+        supabase_client.upsert(
+            "creative_performance",
             upsert_records,
             on_conflict="creative_id,ad_id,date_start",
-        ).execute()
+        )
     except Exception as exc:
         error_str = str(exc)
+        if "creative_performance_stage_check" in error_str:
+            if not _CREATIVE_PERFORMANCE_STAGE_DISABLED:
+                logger.warning(
+                    "Supabase creative_performance stage check rejected records. "
+                    "Skipping future creative performance syncs until the constraint is fixed in Supabase. "
+                    "Error: %s",
+                    error_str,
+                )
+            _CREATIVE_PERFORMANCE_STAGE_DISABLED = True
+            return
         if "42P10" in error_str:
             logger.debug(
                 "creative_performance table missing composite constraint; falling back to delete+insert"
             )
+            base_client = (
+                supabase_client.client
+                if hasattr(supabase_client, "client")
+                else supabase_client
+            )
             for record in upsert_records:
                 try:
-                    supabase_client.table("creative_performance").delete().match(
+                    base_client.table("creative_performance").delete().match(
                         {
                             "creative_id": record["creative_id"],
                             "ad_id": record["ad_id"],
@@ -1371,8 +1408,22 @@ def _sync_creative_performance_records(
                     )
 
             try:
-                supabase_client.table("creative_performance").insert(upsert_records).execute()
+                if hasattr(supabase_client, "insert"):
+                    supabase_client.insert("creative_performance", upsert_records)
+                else:
+                    base_client.table("creative_performance").insert(upsert_records).execute()
             except Exception as insert_exc:
+                insert_str = str(insert_exc)
+                if "creative_performance_stage_check" in insert_str:
+                    if not _CREATIVE_PERFORMANCE_STAGE_DISABLED:
+                        logger.warning(
+                            "Supabase creative_performance stage check rejected records during fallback insert. "
+                            "Skipping future creative performance syncs until the constraint is fixed in Supabase. "
+                            "Error: %s",
+                            insert_str,
+                        )
+                    _CREATIVE_PERFORMANCE_STAGE_DISABLED = True
+                    return
                 logger.error(
                     "Fallback insert failed for creative_performance records: %s",
                     insert_exc,
@@ -1967,6 +2018,7 @@ def _create_creative_and_ad(
             bool(supabase_storage_url),
             bool(image_path),
         )
+        resolved_instagram_actor_id = instagram_actor_id
         try:
             # Clean primary text - remove "Brava Product" and em dashes
             primary_text = ad_copy_dict.get("primary_text", "")
@@ -1997,8 +2049,40 @@ def _create_creative_and_ad(
             )
             logger.info(f"Meta API create_image_creative response: {creative}")
         except Exception as e:
-            logger.error(f"Meta API create_image_creative failed: {e}", exc_info=True)
-            return None, None, False
+            error_str = str(e)
+            if instagram_actor_id and "instagram_actor_id" in error_str.lower():
+                logger.warning(
+                    "Meta creative creation failed due to instagram_actor_id (%s). Retrying without Instagram placements.",
+                    error_str,
+                )
+                resolved_instagram_actor_id = None
+                try:
+                    creative = client.create_image_creative(
+                        page_id=page_id,
+                        name=creative_name,
+                        supabase_storage_url=supabase_storage_url,
+                        image_path=image_path if not supabase_storage_url else None,
+                        primary_text=primary_text,
+                        headline=ad_copy_dict.get("headline", ""),
+                        description=ad_copy_dict.get("description", ""),
+                        call_to_action="SHOP_NOW",
+                        instagram_actor_id=None,
+                        use_env_instagram_actor=False,
+                        creative_id=storage_creative_id,
+                    )
+                    logger.info(
+                        "Meta API create_image_creative succeeded without instagram_actor_id. Creative will run on Facebook placements only."
+                    )
+                except Exception as retry_exc:
+                    logger.error(
+                        "Meta API create_image_creative retry without instagram_actor_id failed: %s",
+                        retry_exc,
+                        exc_info=True,
+                    )
+                    return None, None, False
+            else:
+                logger.error(f"Meta API create_image_creative failed: {e}", exc_info=True)
+                return None, None, False
         
         meta_creative_id = creative.get("id")
         if not meta_creative_id:
@@ -2043,7 +2127,7 @@ def _create_creative_and_ad(
             ad_name,
             adset_id,
             meta_creative_id,
-            bool(instagram_actor_id),
+            bool(resolved_instagram_actor_id),
         )
         try:
             # Ensure creative_id is a string (Meta API requires string format)
@@ -2057,7 +2141,8 @@ def _create_creative_and_ad(
                 name=ad_name,
                 creative_id=creative_id_str,  # Use Meta's creative ID (ensure string format)
                 status="ACTIVE",
-                instagram_actor_id=instagram_actor_id,  # Add Instagram at ad level (alternative approach)
+                instagram_actor_id=resolved_instagram_actor_id,  # Add Instagram at ad level when available
+                use_env_instagram_actor=bool(resolved_instagram_actor_id),
                 tracking_specs=None,  # Will use default pixel-based tracking if pixel ID is set
             )
             logger.info(f"Meta API create_ad response: {ad}")

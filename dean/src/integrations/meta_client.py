@@ -2321,6 +2321,7 @@ class MetaClient:
         link_url: Optional[str] = None,
         utm_params: Optional[str] = None,
         instagram_actor_id: Optional[str] = None,
+        use_env_instagram_actor: bool = True,
         creative_id: Optional[str] = None,  # Creative ID for tracking
     ) -> Dict[str, Any]:
         """
@@ -2381,7 +2382,12 @@ class MetaClient:
             raise ValueError("Either supabase_storage_url, image_url, or image_path must be provided.")
 
         final_link = _clean_story_link(link_url, utm_params)
-        ig_id = instagram_actor_id or os.getenv("IG_ACTOR_ID") or None
+        if instagram_actor_id is not None:
+            ig_id = instagram_actor_id
+        elif use_env_instagram_actor:
+            ig_id = os.getenv("IG_ACTOR_ID") or None
+        else:
+            ig_id = None
         # Only use instagram_actor_id if it's a valid non-empty string
         # CRITICAL: If the ID is invalid (causes API errors), don't use it
         if ig_id:
@@ -2422,7 +2428,6 @@ class MetaClient:
             try:
                 import requests
                 import tempfile
-                import os
                 
                 logger.info(f"Uploading image to Meta Ad Image library: {final_image_url}")
                 
@@ -2706,6 +2711,7 @@ class MetaClient:
         original_ad_id: Optional[str] = None,
         instagram_actor_id: Optional[str] = None,  # Instagram account at ad level (alternative approach)
         tracking_specs: Optional[List[Dict[str, Any]]] = None,  # For shop destination/conversion tracking
+        use_env_instagram_actor: bool = True,
     ) -> Dict[str, Any]:
         self._check_names(ad=_s(name))
 
@@ -2725,7 +2731,12 @@ class MetaClient:
         }
         
         # Add Instagram actor ID at ad level (alternative approach if creative level doesn't work)
-        ig_id = instagram_actor_id or os.getenv("IG_ACTOR_ID") or None
+        if instagram_actor_id is not None:
+            ig_id = instagram_actor_id
+        elif use_env_instagram_actor:
+            ig_id = os.getenv("IG_ACTOR_ID") or None
+        else:
+            ig_id = None
         if ig_id:
             ig_id = str(ig_id).strip()
             if ig_id and ig_id.isdigit() and ig_id != "17841477094913251":  # Valid Instagram ID

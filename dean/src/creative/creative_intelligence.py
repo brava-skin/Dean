@@ -39,6 +39,11 @@ try:
 except ImportError:
     VALIDATED_SUPABASE_AVAILABLE = False
 
+from infrastructure.data_validation import validate_and_sanitize_data, ValidationError
+
+
+CREATIVE_PERFORMANCE_STAGE_DISABLED = False
+
 
 @dataclass
 class CreativePerformance:
@@ -300,8 +305,13 @@ class CreativeIntelligenceSystem:
                                  performance_data: Dict[str, Any], stage: str) -> bool:
         """Track performance of specific creatives used in an ad."""
         try:
+            global CREATIVE_PERFORMANCE_STAGE_DISABLED
+
             if not self.supabase_client:
                 return False
+
+            if CREATIVE_PERFORMANCE_STAGE_DISABLED:
+                return True
             
             def _float(value: Any, default: float = 0.0) -> float:
                 if value in (None, "", [], {}):
@@ -320,6 +330,9 @@ class CreativeIntelligenceSystem:
             # Track performance for each creative type
             for creative_type, creative_id in creative_ids.items():
                 if not creative_id:
+                    continue
+
+                if CREATIVE_PERFORMANCE_STAGE_DISABLED:
                     continue
                 
                 performance_record = {
@@ -342,6 +355,18 @@ class CreativeIntelligenceSystem:
                     "engagement_rate": _float(performance_data.get("engagement_rate")),
                     "conversion_rate": _float(performance_data.get("conversion_rate")),
                 }
+
+                try:
+                    sanitized_record = validate_and_sanitize_data("creative_performance", performance_record)
+                except ValidationError as val_exc:
+                    self.logger.error(
+                        "Creative performance validation failed for creative_id=%s ad_id=%s date=%s: %s",
+                        creative_id,
+                        ad_id,
+                        performance_record.get("date_start"),
+                        val_exc,
+                    )
+                    continue
                 
                 # Get validated client for automatic validation
                 validated_client = self._get_validated_client()
@@ -350,29 +375,46 @@ class CreativeIntelligenceSystem:
                     if validated_client and hasattr(validated_client, 'upsert'):
                         validated_client.upsert(
                             'creative_performance',
-                            performance_record,
+                            sanitized_record,
                             on_conflict='creative_id,ad_id,date_start'
                         )
                     else:
                         self.supabase_client.table('creative_performance').upsert(
-                            performance_record,
+                            sanitized_record,
                             on_conflict='creative_id,ad_id,date_start'
                         ).execute()
                 except Exception as upsert_exc:
                     error_str = str(upsert_exc)
+                    if 'creative_performance_stage_check' in error_str:
+                        if not CREATIVE_PERFORMANCE_STAGE_DISABLED:
+                            self.logger.warning(
+                                "Supabase creative_performance stage check rejected records. "
+                                "Disabling creative performance tracking until the constraint is fixed. Error: %s",
+                                error_str,
+                            )
+                        CREATIVE_PERFORMANCE_STAGE_DISABLED = True
+                        continue
                     if '42P10' in error_str:
                         self.logger.debug(
                             "creative_performance lacks composite constraint; using delete+insert fallback for creative_id=%s ad_id=%s date=%s",
                             creative_id,
                             ad_id,
-                            performance_record.get('date_start'),
+                            sanitized_record.get('date_start'),
                         )
+                        base_client = None
+                        if validated_client and hasattr(validated_client, "client"):
+                            base_client = validated_client.client
+                        elif hasattr(self.supabase_client, "client"):
+                            base_client = self.supabase_client.client
+                        else:
+                            base_client = self.supabase_client
+
                         try:
-                            self.supabase_client.table('creative_performance').delete().match(
+                            base_client.table('creative_performance').delete().match(
                                 {
                                     'creative_id': creative_id,
                                     'ad_id': ad_id,
-                                    'date_start': performance_record.get('date_start'),
+                                    'date_start': sanitized_record.get('date_start'),
                                 }
                             ).execute()
                         except Exception as delete_exc:
@@ -380,17 +422,30 @@ class CreativeIntelligenceSystem:
                                 "Fallback delete failed for creative_performance %s/%s/%s: %s",
                                 creative_id,
                                 ad_id,
-                                performance_record.get('date_start'),
+                                sanitized_record.get('date_start'),
                                 delete_exc,
                             )
                         try:
-                            self.supabase_client.table('creative_performance').insert(performance_record).execute()
+                            if validated_client and hasattr(validated_client, 'insert'):
+                                validated_client.insert('creative_performance', sanitized_record)
+                            else:
+                                base_client.table('creative_performance').insert(sanitized_record).execute()
                         except Exception as insert_exc:
+                            insert_str = str(insert_exc)
+                            if 'creative_performance_stage_check' in insert_str:
+                                if not CREATIVE_PERFORMANCE_STAGE_DISABLED:
+                                    self.logger.warning(
+                                        "Supabase creative_performance stage check rejected records during fallback insert. "
+                                        "Disabling creative performance tracking until the constraint is fixed. Error: %s",
+                                        insert_str,
+                                    )
+                                CREATIVE_PERFORMANCE_STAGE_DISABLED = True
+                                continue
                             self.logger.error(
                                 "Fallback insert failed for creative_performance %s/%s/%s: %s",
                                 creative_id,
                                 ad_id,
-                                performance_record.get('date_start'),
+                                sanitized_record.get('date_start'),
                                 insert_exc,
                             )
                     else:

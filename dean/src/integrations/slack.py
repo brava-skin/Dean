@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sqlite3
+import tempfile
 import threading
 import time
 import uuid
@@ -79,6 +80,32 @@ ENVBOOL = lambda v, d=False: (os.getenv(v, str(int(d))) or "").lower() in ("1", 
 ENVINT = lambda v, d: int(os.getenv(v, str(d)) or d)
 ENVF = lambda v, d: float(os.getenv(v, str(d)) or d)
 
+# Disable Slack by default for local runs unless explicitly overridden
+if not os.getenv("SLACK_ENABLED") and not os.getenv("CI"):
+    os.environ["SLACK_ENABLED"] = "0"
+    os.environ.setdefault("SLACK_DRY_RUN", "1")
+
+
+def _resolve_outbox_path() -> str:
+    override = os.getenv("SLACK_OUTBOX_DB")
+    if override:
+        return override
+
+    repo_candidate = os.path.join(os.getcwd(), "data", "slack_outbox.sqlite")
+    try:
+        os.makedirs(os.path.dirname(repo_candidate), exist_ok=True)
+        test_path = os.path.join(os.path.dirname(repo_candidate), ".slack_outbox.writecheck")
+        with open(test_path, "wb") as fh:
+            fh.write(b"")
+        os.remove(test_path)
+        return repo_candidate
+    except OSError:
+        pass
+
+    tmp_candidate = os.path.join(tempfile.gettempdir(), "dean_slack_outbox.sqlite")
+    os.makedirs(os.path.dirname(tmp_candidate), exist_ok=True)
+    return tmp_candidate
+
 SLACK_TIMEOUT = ENVF("SLACK_TIMEOUT", 10.0)
 SLACK_RETRY_MAX = ENVINT("SLACK_RETRY_MAX", 3)
 SLACK_BACKOFF_BASE = ENVF("SLACK_BACKOFF_BASE", 0.4)
@@ -91,7 +118,7 @@ SLACK_TTL_DEFAULT_S = ENVINT("SLACK_TTL_SEC", 7200)
 SLACK_SUPPRESS_MAX_H = ENVINT("SLACK_SUPPRESS_MAX_PER_H", 5)
 TOKEN_BURST = ENVINT("SLACK_TB_BURST", 5)
 TOKEN_RATE_QPS = ENVF("SLACK_TB_QPS", 1.0)
-OUTBOX_PATH = os.getenv("SLACK_OUTBOX_DB", os.path.join(os.getcwd(), "data", "slack_outbox.sqlite"))
+OUTBOX_PATH = _resolve_outbox_path()
 MAX_TEXT_LEN = max(1024, ENVINT("SLACK_MAX_TEXT_LEN", 38000))
 MAX_BLOCKS = max(1, ENVINT("SLACK_MAX_BLOCKS", 45))
 MAX_BLOCK_TEXT = max(256, ENVINT("SLACK_MAX_BLOCK_TEXT", 2900))
