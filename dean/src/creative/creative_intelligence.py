@@ -40,6 +40,7 @@ except ImportError:
     VALIDATED_SUPABASE_AVAILABLE = False
 
 from infrastructure.data_validation import validate_and_sanitize_data, ValidationError
+from config.constants import CREATIVE_PERFORMANCE_STAGE_VALUE
 
 
 CREATIVE_PERFORMANCE_STAGE_DISABLED = False
@@ -338,7 +339,7 @@ class CreativeIntelligenceSystem:
                 performance_record = {
                     "creative_id": creative_id,
                     "ad_id": ad_id,
-                    "stage": stage,
+                    "stage": CREATIVE_PERFORMANCE_STAGE_VALUE,
                     "date_start": performance_data.get("date_start", datetime.now().strftime("%Y-%m-%d")),
                     "date_end": performance_data.get("date_end", datetime.now().strftime("%Y-%m-%d")),
                     "impressions": _int(performance_data.get("impressions")),
@@ -466,9 +467,13 @@ class CreativeIntelligenceSystem:
             # Get performance data
             cutoff_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
             
-            performance_data = self.supabase_client.table('creative_performance').select(
-                'creative_id,impressions,clicks,spend,purchases,add_to_cart,initiate_checkout,ctr,cpc,cpm,roas,cpa'
-            ).gte('date_start', cutoff_date).execute()
+            performance_data = (
+                self.supabase_client.table('creative_performance')
+                .select('creative_id,impressions,clicks,spend,purchases,add_to_cart,initiate_checkout,ctr,cpc,cpm,roas,cpa')
+                .eq('stage', CREATIVE_PERFORMANCE_STAGE_VALUE)
+                .gte('date_start', cutoff_date)
+                .execute()
+            )
             
             if not performance_data.data:
                 return []
@@ -747,9 +752,13 @@ class CreativeIntelligenceSystem:
             # Get performance data for last 30 days
             cutoff_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
             
-            performance_data = self.supabase_client.table('creative_performance').select(
-                'creative_id,roas,ctr,purchases,clicks'
-            ).gte('date_start', cutoff_date).execute()
+            performance_data = (
+                self.supabase_client.table('creative_performance')
+                .select('creative_id,roas,ctr,purchases,clicks')
+                .eq('stage', CREATIVE_PERFORMANCE_STAGE_VALUE)
+                .gte('date_start', cutoff_date)
+                .execute()
+            )
             
             if not performance_data.data:
                 return False

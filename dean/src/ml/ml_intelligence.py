@@ -51,6 +51,7 @@ except ImportError:
     VALIDATED_SUPABASE_AVAILABLE = False
 
 from infrastructure.utils import now_utc, today_ymd_account, yesterday_ymd_account
+from config.constants import CREATIVE_PERFORMANCE_STAGE_VALUE
 from integrations.slack import notify
 
 # Import optimizations
@@ -4084,9 +4085,15 @@ def _add_asc_plus_tracking_methods():
             cutoff_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
             
             # Query for top performing creatives by ROAS
-            query = self.supabase.client.table('creative_performance').select(
-                'creative_id,ad_copy,text_overlay,image_prompt,roas,ctr,purchases'
-            ).eq('stage', 'asc_plus').gte('date_start', cutoff_date).order('roas', desc=True).limit(5).execute()
+            query = (
+                self.supabase.client.table('creative_performance')
+                .select('creative_id,ad_copy,text_overlay,image_prompt,roas,ctr,purchases')
+                .eq('stage', CREATIVE_PERFORMANCE_STAGE_VALUE)
+                .gte('date_start', cutoff_date)
+                .order('roas', desc=True)
+                .limit(5)
+                .execute()
+            )
             
             if not query.data:
                 return {}
@@ -4120,9 +4127,15 @@ def _add_asc_plus_tracking_methods():
             
             # Get worst performing scenarios (low ROAS)
             try:
-                worst_query = self.supabase.client.table('creative_performance').select(
-                    'creative_id,roas'
-                ).eq('stage', 'asc_plus').gte('date_start', cutoff_date).order('roas', desc=False).limit(3).execute()
+                worst_query = (
+                    self.supabase.client.table('creative_performance')
+                    .select('creative_id,roas')
+                    .eq('stage', CREATIVE_PERFORMANCE_STAGE_VALUE)
+                    .gte('date_start', cutoff_date)
+                    .order('roas', desc=False)
+                    .limit(3)
+                    .execute()
+                )
                 
                 worst_creative_ids = [c.get("creative_id") for c in worst_query.data if c.get("creative_id")]
                 if worst_creative_ids:

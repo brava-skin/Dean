@@ -30,8 +30,12 @@ from infrastructure.utils import (
 )
 from creative.image_generator import create_image_generator, ImageCreativeGenerator
 from config.constants import (
-    ASC_PLUS_BUDGET_MIN, ASC_PLUS_BUDGET_MAX, ASC_PLUS_MIN_BUDGET_PER_CREATIVE,
-    MAX_STAGE_DURATION_HOURS, DB_NUMERIC_MAX,
+    ASC_PLUS_BUDGET_MIN,
+    ASC_PLUS_BUDGET_MAX,
+    ASC_PLUS_MIN_BUDGET_PER_CREATIVE,
+    MAX_STAGE_DURATION_HOURS,
+    DB_NUMERIC_MAX,
+    CREATIVE_PERFORMANCE_STAGE_VALUE,
 )
 from infrastructure.data_validation import (
     validate_all_timestamps,
@@ -1324,7 +1328,7 @@ def _sync_creative_performance_records(
         record = {
             "creative_id": creative_id,
             "ad_id": ad_id,
-            "stage": stage,
+            "stage": CREATIVE_PERFORMANCE_STAGE_VALUE,
             "date_start": date_label,
             "date_end": date_label,
             "impressions": int(impressions) if impressions >= 0 else 0,

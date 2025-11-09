@@ -14,6 +14,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Any, Optional, Union, Callable
 from dataclasses import dataclass
 from enum import Enum
+from config.constants import CREATIVE_PERFORMANCE_STAGE_VALUE
 
 logger = logging.getLogger(__name__)
 STRICT_MODE = os.getenv("STRICT_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
@@ -605,7 +606,7 @@ class SupabaseDataValidator:
                 'creative_id': StringValidator('creative_id', required=True, max_length=100),
                 'ad_id': StringValidator('ad_id', required=True, max_length=100),
                 'stage': StringValidator('stage', required=True,
-                                       allowed_values=['asc_plus']),
+                                       allowed_values=['asc_plus', 'testing']),
                 'date_start': DateValidator('date_start', required=True),
                 'date_end': DateValidator('date_end', required=True),
                 'impressions': IntegerValidator('impressions', min_value=0),
@@ -886,6 +887,11 @@ class SupabaseDataValidator:
         
         validator = self.table_validators[table_name]
         result = validator.validate(data)
+
+        if table_name == 'creative_performance':
+            stage_value = result.sanitized_data.get('stage')
+            if stage_value == 'asc_plus':
+                result.sanitized_data['stage'] = CREATIVE_PERFORMANCE_STAGE_VALUE
 
         if STRICT_MODE:
             unit_errors = self.unit_enforcer.enforce(table_name, result.sanitized_data)

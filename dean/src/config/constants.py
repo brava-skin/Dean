@@ -10,6 +10,12 @@ DB_CTR_MAX = 99.9999
 DB_CPC_MAX = 9999.9999
 DB_CPM_MAX = 9999.9999
 
+# Supabase quirks
+# Supabase production constraint currently accepts only the legacy 'testing' stage
+# for the creative_performance table. Use this canonical value for reads/writes
+# while continuing to treat the logical stage as ASC+ elsewhere in the system.
+CREATIVE_PERFORMANCE_STAGE_VALUE = "testing"
+
 # Budget constraints
 ASC_PLUS_BUDGET_MIN = 5.0
 ASC_PLUS_BUDGET_MAX = 500.0
