@@ -18,6 +18,7 @@ import os
 import pickle
 import uuid
 import hashlib
+import re
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -498,16 +499,31 @@ class SupabaseMLClient:
                     self.logger.error(f"Prediction validation failed for ad {ad_id}: {ve}")
                     return None
                 except Exception as exc:
+                    if not self._is_retryable_error(exc):
+                        code = self._extract_error_code(exc)
+                        self.logger.error(
+                            "Prediction insert for ad %s failed with non-retryable error%s: %s",
+                            ad_id,
+                            f" ({code})" if code else "",
+                            exc,
+                        )
+                        return None
+
                     attempt += 1
                     if attempt >= max_attempts:
-                        self.logger.error(f"Failed to save prediction for ad {ad_id} after {max_attempts} attempts: {exc}")
+                        self.logger.error(
+                            f"Failed to save prediction for ad {ad_id} after {max_attempts} attempts: {exc}"
+                        )
                         return None
+
                     backoff = min(2 ** attempt, 5)
+                    code = self._extract_error_code(exc)
                     self.logger.warning(
-                        "Prediction insert retry %s/%s for ad %s due to error: %s (waiting %.1fs)",
+                        "Prediction insert retry %s/%s for ad %s due to error%s: %s (waiting %.1fs)",
                         attempt,
                         max_attempts,
                         ad_id,
+                        f" ({code})" if code else "",
                         exc,
                         backoff,
                     )
@@ -2386,6 +2402,7 @@ class XGBoostPredictor:
                 'hyperparameters': self.config.xgb_params,
                 'scaler_data': scaler_data_binary.hex() if scaler_data_binary else None,
                 'model_name': model_name,
+                'artifact_path': artifact_path,
             }
             if metadata_extra:
                 metadata_payload.update(metadata_extra)
@@ -2991,7 +3008,7 @@ class XGBoostPredictor:
             try:
                 response = (
                     self.supabase.client.table('ml_models')
-                    .select('id, model_type, model_name, metadata, feature_version')
+                    .select('id, model_type, model_name, metadata')
                     .eq('stage', stage)
                     .eq('model_type', model_type)
                     .eq('is_active', True)

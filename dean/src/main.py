@@ -138,6 +138,8 @@ def _install_stdout_noise_filter() -> None:
 
     if not isinstance(sys.stdout, _NoiseFilter):
         sys.stdout = _NoiseFilter(sys.stdout)  # type: ignore[assignment]
+    if not isinstance(sys.stderr, _NoiseFilter):
+        sys.stderr = _NoiseFilter(sys.stderr)  # type: ignore[assignment]
 
 
 _install_stdout_noise_filter()
@@ -150,14 +152,14 @@ def log_config_files(paths: Sequence[str]) -> None:
             continue
         path = Path(raw_path)
         if not path.exists():
-            logger.info("Config file %s (missing)", path)
+            logger.debug("Config file %s (missing)", path)
             continue
         try:
             size_bytes = path.stat().st_size
         except OSError:
-            logger.info("Config file %s (size unknown)", path)
+            logger.debug("Config file %s (size unknown)", path)
         else:
-            logger.info("Config file %s (%d bytes)", path, size_bytes)
+            logger.debug("Config file %s (%d bytes)", path, size_bytes)
 
 
 # -----------------------------------------------------

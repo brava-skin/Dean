@@ -1331,7 +1331,38 @@ def _sync_creative_performance_records(
             on_conflict="creative_id,ad_id,date_start",
         ).execute()
     except Exception as exc:
-        logger.debug(f"Failed to upsert creative performance records: {exc}")
+        error_str = str(exc)
+        if "42P10" in error_str:
+            logger.debug(
+                "creative_performance table missing composite constraint; falling back to delete+insert"
+            )
+            for record in upsert_records:
+                try:
+                    supabase_client.table("creative_performance").delete().match(
+                        {
+                            "creative_id": record["creative_id"],
+                            "ad_id": record["ad_id"],
+                            "date_start": record["date_start"],
+                        }
+                    ).execute()
+                except Exception as delete_exc:
+                    logger.debug(
+                        "Failed to delete existing creative_performance row for %s/%s/%s: %s",
+                        record["creative_id"],
+                        record["ad_id"],
+                        record["date_start"],
+                        delete_exc,
+                    )
+
+            try:
+                supabase_client.table("creative_performance").insert(upsert_records).execute()
+            except Exception as insert_exc:
+                logger.error(
+                    "Fallback insert failed for creative_performance records: %s",
+                    insert_exc,
+                )
+        else:
+            logger.debug(f"Failed to upsert creative performance records: {exc}")
 
 
 def _guardrail_kill(metrics: Dict[str, Any]) -> Tuple[bool, str]:

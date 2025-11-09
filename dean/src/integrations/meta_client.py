@@ -1137,6 +1137,15 @@ class MetaClient:
                 "No Instagram actor linked to page %s. Set IG_ACTOR_ID or connect the page to an Instagram business account.",
                 page_id,
             )
+        else:
+            ig_actor_id = str(ig_actor_id).strip()
+            if not ig_actor_id.isdigit():
+                logger.warning(
+                    "Instagram actor lookup returned non-numeric id %s for page %s; ignoring",
+                    ig_actor_id,
+                    page_id,
+                )
+                ig_actor_id = None
 
         self._instagram_actor_cache[page_id] = ig_actor_id
         return ig_actor_id
@@ -2338,10 +2347,6 @@ class MetaClient:
             # Validate it's a numeric string (Instagram IDs are numeric)
             elif not ig_id.isdigit():
                 logger.warning(f"Invalid Instagram actor ID format (not numeric): {ig_id} - skipping")
-                ig_id = None
-            # Additional validation: Check if it's a known invalid ID that causes errors
-            elif ig_id == "17841477094913251":  # This specific ID causes errors
-                logger.warning(f"Known invalid Instagram actor ID: {ig_id} - skipping")
                 ig_id = None
 
         if self.dry_run or not USE_SDK or not self.cfg.enable_creative_uploads:

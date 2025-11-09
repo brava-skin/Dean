@@ -346,17 +346,55 @@ class CreativeIntelligenceSystem:
                 # Get validated client for automatic validation
                 validated_client = self._get_validated_client()
                 
-                if validated_client and hasattr(validated_client, 'upsert'):
-                    validated_client.upsert(
-                        'creative_performance',
-                        performance_record,
-                        on_conflict='creative_id,ad_id,date_start'
-                    )
-                else:
-                    self.supabase_client.table('creative_performance').upsert(
-                        performance_record,
-                        on_conflict='creative_id,ad_id,date_start'
-                    ).execute()
+                try:
+                    if validated_client and hasattr(validated_client, 'upsert'):
+                        validated_client.upsert(
+                            'creative_performance',
+                            performance_record,
+                            on_conflict='creative_id,ad_id,date_start'
+                        )
+                    else:
+                        self.supabase_client.table('creative_performance').upsert(
+                            performance_record,
+                            on_conflict='creative_id,ad_id,date_start'
+                        ).execute()
+                except Exception as upsert_exc:
+                    error_str = str(upsert_exc)
+                    if '42P10' in error_str:
+                        self.logger.debug(
+                            "creative_performance lacks composite constraint; using delete+insert fallback for creative_id=%s ad_id=%s date=%s",
+                            creative_id,
+                            ad_id,
+                            performance_record.get('date_start'),
+                        )
+                        try:
+                            self.supabase_client.table('creative_performance').delete().match(
+                                {
+                                    'creative_id': creative_id,
+                                    'ad_id': ad_id,
+                                    'date_start': performance_record.get('date_start'),
+                                }
+                            ).execute()
+                        except Exception as delete_exc:
+                            self.logger.debug(
+                                "Fallback delete failed for creative_performance %s/%s/%s: %s",
+                                creative_id,
+                                ad_id,
+                                performance_record.get('date_start'),
+                                delete_exc,
+                            )
+                        try:
+                            self.supabase_client.table('creative_performance').insert(performance_record).execute()
+                        except Exception as insert_exc:
+                            self.logger.error(
+                                "Fallback insert failed for creative_performance %s/%s/%s: %s",
+                                creative_id,
+                                ad_id,
+                                performance_record.get('date_start'),
+                                insert_exc,
+                            )
+                    else:
+                        self.logger.error(f"Failed to track creative performance: {upsert_exc}")
             
             return True
             
