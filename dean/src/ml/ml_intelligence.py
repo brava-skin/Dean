@@ -1608,9 +1608,12 @@ class XGBoostPredictor:
 
             val_r2 = val_eval.get("r2")
 
+            mae = mean_absolute_error(y_test, y_pred_ensemble)
+            mse = mean_squared_error(y_test, y_pred_ensemble)
+            rmse = float(np.sqrt(mse)) if not np.isnan(mse) else float("nan")
             ensemble_metrics = {
-                "mae": mean_absolute_error(y_test, y_pred_ensemble),
-                "rmse": mean_squared_error(y_test, y_pred_ensemble, squared=False),
+                "mae": mae,
+                "rmse": rmse,
                 "r2": r2_score(y_test, y_pred_ensemble),
             }
 
