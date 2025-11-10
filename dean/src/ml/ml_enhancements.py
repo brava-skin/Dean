@@ -14,11 +14,16 @@ This module provides enhanced ML capabilities including:
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
+try:
+    from scipy import stats
+except ImportError:
+    stats = None
 from supabase import Client
 
 from infrastructure.utils import now_utc
@@ -69,7 +74,9 @@ class ModelValidator:
             
             for pred in predictions_response.data:
                 ad_id = pred['ad_id']
-                predicted_value = pred['predicted_value']
+                predicted_value = self._safe_float(pred.get('predicted_value'))
+                if predicted_value is None:
+                    continue
                 prediction_time = datetime.fromisoformat(pred['created_at'].replace('Z', '+00:00'))
                 
                 # Get actual performance 24h after prediction
@@ -81,8 +88,10 @@ class ModelValidator:
                 
                 if actual_response.data:
                     actual = actual_response.data[0]
-                    actual_value = actual.get('cpa' if 'predictor' in model_type else 'roas', 0)
-                    
+                    metric_key = 'cpa' if 'predictor' in model_type else 'roas'
+                    actual_value = self._safe_float(actual.get(metric_key))
+                    if actual_value is None:
+                        continue
                     pred_vs_actual.append((predicted_value, actual_value))
                     total_error += abs(predicted_value - actual_value)
             
@@ -95,10 +104,15 @@ class ModelValidator:
             
             mae = np.mean(np.abs(predictions - actuals))
             mse = np.mean((predictions - actuals) ** 2)
-            r2 = 1 - (mse / (np.var(actuals) + 1e-6))
+            variance = np.var(actuals)
+            r2 = 1 - (mse / (variance + 1e-6))
             
             # Accuracy: predictions within 20% of actual
-            within_20pct = sum(1 for p, a in pred_vs_actual if abs(p - a) / (abs(a) + 1e-6) < 0.2)
+            within_20pct = sum(
+                1
+                for p, a in pred_vs_actual
+                if abs(p - a) / (abs(a) + 1e-6) < 0.2
+            )
             accuracy = within_20pct / len(pred_vs_actual)
             
             is_performing_well = accuracy > 0.6 and r2 > 0.3
@@ -122,6 +136,19 @@ class ModelValidator:
         except Exception as e:
             self.logger.error(f"Error validating model: {e}")
             return None
+    
+    @staticmethod
+    def _safe_float(value: Any) -> Optional[float]:
+        """Convert value to float if possible and finite."""
+        if value is None:
+            return None
+        try:
+            result = float(value)
+        except (TypeError, ValueError):
+            return None
+        if math.isnan(result) or math.isinf(result):
+            return None
+        return result
     
     def _store_validation_result(self, result: ModelValidationResult) -> None:
         """Store validation result in database."""
@@ -678,6 +705,10 @@ class CausalImpactAnalyzer:
     
     def analyze_feature_causality(self, stage: str, days_back: int = 30) -> Dict[str, Any]:
         """Analyze causal relationships between features and purchases."""
+        if stats is None:
+            self.logger.warning("scipy.stats not available - skipping causal impact analysis")
+            return {}
+
         try:
             # Get performance data
             start_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')

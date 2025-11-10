@@ -890,14 +890,14 @@ def _sync_creative_intelligence_records(
 
         performance_score = _clamp(
             _calculate_performance_score(
-                {"avg_ctr": avg_ctr, "avg_cpa": avg_cpa, "avg_roas": avg_roas}
+            {"avg_ctr": avg_ctr, "avg_cpa": avg_cpa, "avg_roas": avg_roas}
             ),
             0.0,
             1.0,
         ) or 0.0
         fatigue_index = _clamp(
             _calculate_fatigue_index(
-                {"avg_ctr": avg_ctr, "avg_cpa": avg_cpa, "avg_roas": avg_roas}
+            {"avg_ctr": avg_ctr, "avg_cpa": avg_cpa, "avg_roas": avg_roas}
             ),
             0.0,
             1.0,
@@ -1432,8 +1432,12 @@ def _sync_creative_performance_records(
                     "Fallback insert failed for creative_performance records: %s",
                     insert_exc,
                 )
+            else:
+                _CREATIVE_PERFORMANCE_STAGE_DISABLED = False
         else:
             logger.debug(f"Failed to upsert creative performance records: {exc}")
+    else:
+        _CREATIVE_PERFORMANCE_STAGE_DISABLED = False
 
 
 def _guardrail_kill(metrics: Dict[str, Any]) -> Tuple[bool, str]:
@@ -2362,7 +2366,7 @@ def ensure_asc_plus_campaign(
             adset_placements: Optional[List[str]] = None
         else:
             adset_placements = placements_cfg.get("publisher_platforms") or default_placements
-
+        
         # Create ASC+ adset with Advantage+ placements
         asc_config = cfg(settings, "asc_plus") or {}
         daily_budget = cfg_or_env_f(asc_config, "daily_budget_eur", "ASC_PLUS_BUDGET", 50.0)
@@ -2582,7 +2586,7 @@ def _legacy_run_asc_plus_tick(
             ad_insight = next((i for i in insights if str(i.get("ad_id")) == ad_id), None)
             if not ad_insight:
                 continue
-
+            
             has_minimums, spend, impressions, link_clicks, hours_live = _has_minimum_delivery(
                 ad_id,
                 ad,
@@ -2607,7 +2611,7 @@ def _legacy_run_asc_plus_tick(
             roas = _roas(ad_insight)
             cpm = _cpm(ad_insight)
             purch, atc = _purchase_and_atc_counts(ad_insight)
-
+            
             # Evaluate lock rules first (may skip kill checks)
             lock_info_existing = lock_state.get(ad_id, {})
             is_locked = False

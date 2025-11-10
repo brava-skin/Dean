@@ -449,8 +449,12 @@ class CreativeIntelligenceSystem:
                                 sanitized_record.get('date_start'),
                                 insert_exc,
                             )
+                        else:
+                            CREATIVE_PERFORMANCE_STAGE_DISABLED = False
                     else:
                         self.logger.error(f"Failed to track creative performance: {upsert_exc}")
+                else:
+                    CREATIVE_PERFORMANCE_STAGE_DISABLED = False
             
             return True
             
