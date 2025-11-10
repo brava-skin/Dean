@@ -99,16 +99,16 @@ class TableMonitor:
             'ml_models': 'trained_at',
             'ml_predictions': 'created_at',
         }
-        self.table_creation_fields: Dict[str, str] = {
-            'performance_metrics': 'created_at',
-            'ad_lifecycle': 'created_at',
-            'time_series_data': 'created_at',
-            'ml_predictions': 'created_at',
-            'learning_events': 'created_at',
-            'creative_intelligence': 'created_at',
-            'historical_data': 'created_at',
-            'ad_creation_times': 'created_at',
-            'ml_models': 'created_at',
+        self.table_activity_fields: Dict[str, List[str]] = {
+            'performance_metrics': ['updated_at', 'created_at'],
+            'ad_lifecycle': ['updated_at', 'created_at'],
+            'time_series_data': ['created_at', 'updated_at'],
+            'ml_predictions': ['created_at', 'updated_at'],
+            'learning_events': ['created_at', 'updated_at'],
+            'creative_intelligence': ['created_at', 'updated_at'],
+            'historical_data': ['created_at', 'updated_at'],
+            'ad_creation_times': ['created_at', 'updated_at'],
+            'ml_models': ['created_at', 'updated_at', 'trained_at'],
         }
     
     def get_table_row_count(self, table_name: str) -> int:
@@ -166,22 +166,24 @@ class TableMonitor:
             return None
 
     def _count_recent_rows(self, table_name: str, since: Optional[datetime]) -> int:
-        """Count rows created since the last snapshot."""
+        """Count rows touched since the last snapshot (created or updated)."""
         if not self.supabase_client or not since:
             return 0
-        timestamp_field = self.table_creation_fields.get(table_name)
-        if not timestamp_field:
-            return 0
-        try:
-            response = (
-                self.supabase_client.table(table_name)
-                .select('id', count='exact')
-                .gt(timestamp_field, since.isoformat())
-                .execute()
-            )
-            return int(getattr(response, 'count', 0) or 0)
-        except Exception:
-            return 0
+        activity_fields = self.table_activity_fields.get(table_name, [])
+        for timestamp_field in activity_fields:
+            try:
+                response = (
+                    self.supabase_client.table(table_name)
+                    .select('id', count='exact')
+                    .gt(timestamp_field, since.isoformat())
+                    .execute()
+                )
+                recent = int(getattr(response, 'count', 0) or 0)
+                if recent > 0:
+                    return recent
+            except Exception:
+                continue
+        return 0
     
     def analyze_table_health(self, table_name: str) -> TableHealth:
         """Analyze health of a specific table."""
@@ -212,6 +214,7 @@ class TableMonitor:
                 new_rows = recent_inserts
                 growth_rate = (new_rows / max(previous_rows, 1)) * 100 if previous_rows > 0 else 0
                 issues = [issue for issue in issues if issue != "No new data since last tick"]
+                recent_activity = True
 
         if table_name in self.table_timestamp_fields:
             if last_insert_at:

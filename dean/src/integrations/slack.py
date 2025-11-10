@@ -85,6 +85,9 @@ if not os.getenv("SLACK_ENABLED") and not os.getenv("CI"):
     os.environ["SLACK_ENABLED"] = "0"
     os.environ.setdefault("SLACK_DRY_RUN", "1")
 
+# Temporary kill-switch so we can quiet Slack noise during mitigation
+SLACK_TEMP_DISABLED = ENVBOOL("SLACK_TEMP_DISABLE", True)
+
 
 def _resolve_outbox_path() -> str:
     override = os.getenv("SLACK_OUTBOX_DB")
@@ -798,6 +801,9 @@ class SlackClient:
         self.batch_started: Optional[float] = None
         self._sender_thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
+        if SLACK_TEMP_DISABLED:
+            self.enabled = False
+            self.dry_run = True
         if self.enabled and not self.dry_run:
             self._start_sender()
 
@@ -1039,6 +1045,11 @@ def notify(text: str, severity: Literal["info", "warn", "error"] = "info", topic
     """
     Smart notification with frequency control and content filtering.
     """
+    if SLACK_TEMP_DISABLED:
+        sanitized = _sanitize_line(text)
+        _log(f"[SLACK DISABLED {severity}/{topic}] {sanitized}")
+        return
+
     # Import smart notifications
     try:
         from smart_notifications import smart_notifications

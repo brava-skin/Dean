@@ -9,7 +9,7 @@ import logging
 import os
 import json
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional, Tuple, Iterable
+from typing import Any, Dict, List, Optional, Tuple, Iterable, Set
 import math
 
 import pandas as pd
@@ -1508,6 +1508,91 @@ def _select_ads_for_cap(
         candidates.append((score, ad_id, metrics))
     candidates.sort(key=lambda x: x[0])  # lowest score first
     return candidates[:limit]
+
+
+def _enforce_hard_cap(
+    client: MetaClient,
+    campaign_id: str,
+    adset_id: str,
+    metrics_map: Dict[str, Dict[str, Any]],
+    creation_lookup: Dict[str, datetime],
+    max_active: int,
+    killed_ids: Set[str],
+    allowed_statuses: Set[str],
+) -> Tuple[int, List[Dict[str, Any]], int, List[Tuple[str, str]], Set[str]]:
+    """Repeatedly pause the weakest ads until active count <= max_active."""
+    killed_log: List[Tuple[str, str]] = []
+    safety_counter = 0
+
+    def _active_ads_snapshot() -> List[Dict[str, Any]]:
+        try:
+            refreshed_ads = client.list_ads_in_adset(adset_id)
+        except Exception:
+            refreshed_ads = []
+        return [
+            ad
+            for ad in refreshed_ads
+            if str(ad.get("effective_status") or ad.get("status", "")).upper() in allowed_statuses
+        ]
+
+    active_ads = _active_ads_snapshot()
+    try:
+        active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
+    except Exception:
+        active_count = len(active_ads)
+
+    while active_count > max_active and safety_counter < 5:
+        overflow = active_count - max_active
+        cap_candidates = _select_ads_for_cap(
+            active_ads,
+            metrics_map,
+            list(killed_ids),
+            max(overflow * 3, overflow + 2),
+        )
+        if not cap_candidates:
+            break
+        paused_this_round = False
+        for _, candidate_ad_id, candidate_metrics in cap_candidates:
+            if active_count <= max_active:
+                break
+            if candidate_ad_id in killed_ids:
+                continue
+            if not candidate_metrics:
+                candidate_metrics = _build_ad_metrics(
+                    {"ad_id": candidate_ad_id, "spend": 0, "impressions": 0, "clicks": 0},
+                    "asc_plus",
+                    today_str(),
+                    creation_time=creation_lookup.get(str(candidate_ad_id)),
+                    now_ts=datetime.now(timezone.utc),
+                )
+                metrics_map[candidate_ad_id] = candidate_metrics
+            reason = (
+                f"Hard cap enforced to limit active ads to {max_active} "
+                f"(score {_ad_health_score(candidate_metrics):.2f})"
+            )
+            if _pause_ad(client, candidate_ad_id, reason):
+                killed_ids.add(candidate_ad_id)
+                killed_log.append((candidate_ad_id, reason))
+                paused_this_round = True
+        if not paused_this_round:
+            break
+        safety_counter += 1
+        active_ads = _active_ads_snapshot()
+        try:
+            active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
+        except Exception:
+            active_count = len(active_ads)
+
+    hydrated_candidates = []
+    hydrated_count = 0
+    for ad in active_ads:
+        ad_id = str(ad.get("id") or "")
+        metrics = metrics_map.get(ad_id)
+        if metrics and metrics.get("hydrated", True):
+            hydrated_candidates.append(ad)
+            hydrated_count += 1
+
+    return active_count, hydrated_candidates, hydrated_count, killed_log, killed_ids
 
 
 def _build_ad_metrics(
@@ -3957,64 +4042,25 @@ def run_asc_plus_tick(
             pass
         planning_active_count = active_count
 
-    # Final safety check to ensure we never exceed max_active after trims
-    if active_count > max_active:
-        try:
-            refreshed_ads = client.list_ads_in_adset(adset_id)
-        except Exception:
-            refreshed_ads = ads_list
-        refreshed_active_ads = [
-            ad
-            for ad in refreshed_ads
-            if str(ad.get("effective_status") or ad.get("status", "")).upper() in allowed_statuses
-        ]
-        overflow = max(0, active_count - max_active)
-        if overflow:
-            final_candidates = _select_ads_for_cap(
-                refreshed_active_ads,
-                metrics_map,
-                list(killed_ids),
-                max(overflow * 3, overflow + 2),
-            )
-            forced: List[Tuple[str, str]] = []
-            for _, candidate_ad_id, candidate_metrics in final_candidates:
-                if len(forced) >= overflow:
-                    break
-                if candidate_ad_id in killed_ids:
-                    continue
-                if not candidate_metrics:
-                    candidate_metrics = _build_ad_metrics(
-                        {"ad_id": candidate_ad_id, "spend": 0, "impressions": 0, "clicks": 0},
-                        "asc_plus",
-                        account_today,
-                        creation_time=creation_times.get(str(candidate_ad_id)) if creation_times else None,
-                        now_ts=now_utc,
-                    )
-                    metrics_map[candidate_ad_id] = candidate_metrics
-                reason = (
-                    f"Forced cap to enforce max_active={max_active} "
-                    f"(score {_ad_health_score(candidate_metrics):.2f})"
-                )
-                if _pause_ad(client, candidate_ad_id, reason):
-                    forced.append((candidate_ad_id, reason))
-                    killed_ids.add(candidate_ad_id)
-                    active_count = max(0, active_count - 1)
-                    planning_active_count = max(0, planning_active_count - 1)
-                    if candidate_metrics.get("hydrated", True):
-                        hydrated_active_count = max(0, hydrated_active_count - 1)
-                    _record_lifecycle_event(candidate_ad_id, "PAUSED", reason)
-            if forced:
-                killed_ads.extend(forced)
-                forced_ids = {ad_id for ad_id, _ in forced}
-                hydrated_active_ads = [
-                    ad for ad in hydrated_active_ads if str(ad.get("id")) not in forced_ids
-                ]
-                hydrated_active_count = len(hydrated_active_ads)
-        try:
-            active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
-        except Exception:
-            active_count = max_active if active_count > max_active else active_count
-        planning_active_count = min(active_count, max_active)
+    (
+        active_count,
+        hydrated_active_ads,
+        hydrated_active_count,
+        forced_kills,
+        killed_ids,
+    ) = _enforce_hard_cap(
+        client,
+        campaign_id,
+        adset_id,
+        metrics_map,
+        creation_times or {},
+        max_active,
+        killed_ids,
+        allowed_statuses,
+    )
+    if forced_kills:
+        killed_ads.extend(forced_kills)
+    planning_active_count = min(active_count, max_active)
 
     effective_target = min(target_count, max_active)
     available_slots = max(0, max_active - min(active_count, max_active))

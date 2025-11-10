@@ -1017,6 +1017,59 @@ class XGBoostPredictor:
         feature_count = XGBoostPredictor._infer_scaler_feature_count(scaler)
         return feature_count is not None and feature_count > 0
 
+    @staticmethod
+    def _rehydrate_scaler(
+        scaler: Any,
+        feature_names: Optional[List[str]],
+        feature_count_hint: Optional[int] = None,
+    ) -> bool:
+        """Populate missing scaler attributes so transform behaves like identity."""
+        if scaler is None:
+            return False
+        feature_count = feature_count_hint or XGBoostPredictor._infer_scaler_feature_count(scaler)
+        if feature_count is None and feature_names:
+            feature_count = len(feature_names)
+        if feature_count is None or feature_count <= 0:
+            return False
+
+        if isinstance(scaler, StandardScaler):
+            scaler.n_features_in_ = feature_count
+            scaler.n_samples_seen_ = max(1, int(getattr(scaler, "n_samples_seen_", feature_count)))
+            mean = getattr(scaler, "mean_", None)
+            scaler.mean_ = np.asarray(mean, dtype=float) if mean is not None else np.zeros(feature_count, dtype=float)
+            if scaler.mean_.shape[0] != feature_count:
+                scaler.mean_ = np.zeros(feature_count, dtype=float)
+            var = getattr(scaler, "var_", None)
+            scaler.var_ = np.asarray(var, dtype=float) if var is not None else np.ones(feature_count, dtype=float)
+            if scaler.var_.shape[0] != feature_count:
+                scaler.var_ = np.ones(feature_count, dtype=float)
+            scale = getattr(scaler, "scale_", None)
+            scaler.scale_ = np.asarray(scale, dtype=float) if scale is not None else np.ones(feature_count, dtype=float)
+            if scaler.scale_.shape[0] != feature_count:
+                scaler.scale_ = np.ones(feature_count, dtype=float)
+        elif isinstance(scaler, RobustScaler):
+            scaler.n_features_in_ = feature_count
+            center = getattr(scaler, "center_", None)
+            scaler.center_ = np.asarray(center, dtype=float) if center is not None else np.zeros(feature_count, dtype=float)
+            if scaler.center_.shape[0] != feature_count:
+                scaler.center_ = np.zeros(feature_count, dtype=float)
+            scale = getattr(scaler, "scale_", None)
+            scaler.scale_ = np.asarray(scale, dtype=float) if scale is not None else np.ones(feature_count, dtype=float)
+            if scaler.scale_.shape[0] != feature_count:
+                scaler.scale_ = np.ones(feature_count, dtype=float)
+        else:
+            try:
+                scaler.n_features_in_ = feature_count
+            except Exception:
+                return False
+
+        if feature_names:
+            try:
+                setattr(scaler, "feature_names_in_", np.asarray(feature_names, dtype=str))
+            except Exception:
+                pass
+        return True
+
     @classmethod
     def _is_scaler_fitted(cls, scaler: Any) -> bool:
         """Compatibility wrapper for legacy calls."""
@@ -2201,14 +2254,22 @@ class XGBoostPredictor:
                             except Exception:
                                 pass
                         if not self._scaler_is_ready(scaler):
+                            rehydrated = self._rehydrate_scaler(
+                                scaler,
+                                expected_features,
+                                scaler_n_features,
+                            )
+                            if rehydrated:
+                                _ml_log(logging.DEBUG, "Rehydrated scaler metadata for %s", model_key)
+                        if not self._scaler_is_ready(scaler):
                             raise NotFittedError("Scaler is not fitted")
                         feature_vector_scaled = scaler.transform([feature_vector])
                         _ml_log(logging.DEBUG, "Successfully scaled features")
                     except NotFittedError as e:
-                        self.logger.error(f"Scaler transform failed: {e}, using unscaled features")
+                        self.logger.warning(f"Scaler transform fallback: {e}, using unscaled features")
                         feature_vector_scaled = [feature_vector]
                     except AttributeError as e:
-                        self.logger.error(f"Scaler transform attribute error: {e}, using unscaled features")
+                        self.logger.warning(f"Scaler transform attribute error: {e}, using unscaled features")
                         feature_vector_scaled = [feature_vector]
                     except Exception as e:
                         self.logger.error(f"Scaler transform failed unexpectedly: {e}, using unscaled features")
@@ -3248,8 +3309,16 @@ class XGBoostPredictor:
                     
                     scaler = pickle.loads(scaler_bytes)
                     # Verify scaler is fitted before storing
-                    if self._is_scaler_fitted(scaler):
-                        feature_count = self._infer_scaler_feature_count(scaler)
+                    if not self._scaler_is_ready(scaler):
+                        rehydrated = self._rehydrate_scaler(
+                            scaler,
+                            selector_input_columns or feature_columns,
+                            feature_count,
+                        )
+                        if rehydrated:
+                            self.logger.info(f"✅ Rehydrated scaler metadata for {model_key}")
+                    if self._scaler_is_ready(scaler):
+                        feature_count = self._infer_scaler_feature_count(scaler) or feature_count
                         self.scalers[model_key] = scaler
                         if feature_count:
                             self.logger.info(f"✅ Loaded scaler for {model_key} (n_features={feature_count})")
