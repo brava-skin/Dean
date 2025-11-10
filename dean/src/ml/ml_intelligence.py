@@ -35,6 +35,16 @@ import time
 from sklearn.preprocessing import StandardScaler, RobustScaler
 from sklearn.dummy import DummyRegressor
 try:
+    from sklearn.exceptions import NotFittedError  # type: ignore
+except Exception:  # pragma: no cover
+    class NotFittedError(Exception):  # type: ignore
+        """Fallback NotFittedError when sklearn is unavailable."""
+        pass
+try:
+    from sklearn.utils.validation import check_is_fitted  # type: ignore
+except Exception:  # pragma: no cover
+    check_is_fitted = None  # type: ignore
+try:
     import xgboost as xgb
     XGBOOST_AVAILABLE = True
 except ImportError:
@@ -985,13 +995,32 @@ class XGBoostPredictor:
                     return int(value)
         return None
 
-    @classmethod
-    def _is_scaler_fitted(cls, scaler: Any) -> bool:
-        """Check whether a scaler instance has been fitted."""
+    @staticmethod
+    def _scaler_is_ready(scaler: Any) -> bool:
+        """Return True when a scaler appears fitted and ready for transform."""
         if scaler is None:
             return False
-        feature_count = cls._infer_scaler_feature_count(scaler)
+        if check_is_fitted is not None:
+            try:
+                check_is_fitted(scaler)
+                return True
+            except Exception:
+                return False
+        feature_attrs = ("scale_", "var_", "mean_", "center_", "data_range_", "data_min_", "data_max_")
+        for attr in feature_attrs:
+            if hasattr(scaler, attr):
+                value = getattr(scaler, attr)
+                if isinstance(value, np.ndarray) and value.size:
+                    return True
+                if isinstance(value, (list, tuple)) and len(value):
+                    return True
+        feature_count = XGBoostPredictor._infer_scaler_feature_count(scaler)
         return feature_count is not None and feature_count > 0
+
+    @classmethod
+    def _is_scaler_fitted(cls, scaler: Any) -> bool:
+        """Compatibility wrapper for legacy calls."""
+        return cls._scaler_is_ready(scaler)
     
     def _get_validated_client(self):
         """Get validated Supabase client for automatic data validation."""
@@ -2166,14 +2195,23 @@ class XGBoostPredictor:
                                 _ml_log(logging.DEBUG, "Padded features to %s", len(feature_vector))
                     
                     try:
-                        # Check if scaler is fitted before using it
-                        if hasattr(scaler, 'mean_') and scaler.mean_ is not None:
-                            feature_vector_scaled = scaler.transform([feature_vector])
-                            _ml_log(logging.DEBUG, "Successfully scaled features")
-                        else:
-                            raise ValueError("Scaler is not fitted")
-                    except (ValueError, AttributeError) as e:
+                        if hasattr(scaler, "feature_names_in_") and getattr(scaler, "feature_names_in_", None) is None:
+                            try:
+                                scaler.feature_names_in_ = np.array(expected_features)
+                            except Exception:
+                                pass
+                        if not self._scaler_is_ready(scaler):
+                            raise NotFittedError("Scaler is not fitted")
+                        feature_vector_scaled = scaler.transform([feature_vector])
+                        _ml_log(logging.DEBUG, "Successfully scaled features")
+                    except NotFittedError as e:
                         self.logger.error(f"Scaler transform failed: {e}, using unscaled features")
+                        feature_vector_scaled = [feature_vector]
+                    except AttributeError as e:
+                        self.logger.error(f"Scaler transform attribute error: {e}, using unscaled features")
+                        feature_vector_scaled = [feature_vector]
+                    except Exception as e:
+                        self.logger.error(f"Scaler transform failed unexpectedly: {e}, using unscaled features")
                         feature_vector_scaled = [feature_vector]
                 elif scaler is None:
                     if baseline_conf.get('baseline'):
