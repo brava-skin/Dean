@@ -450,11 +450,6 @@ class SupabaseMLClient:
         try:
             from datetime import datetime, timedelta
             
-            now = now_utc()
-            bucket_ts = now.replace(minute=0, second=0, microsecond=0)
-            deterministic_key = f"{ad_id}|{model_id or stage}|{stage}|{prediction_horizon_hours}|{bucket_ts.isoformat()}"
-            prediction_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, deterministic_key))
-            
             prediction_value = self._safe_float(prediction.predicted_value, 999999999.99)
             confidence_score = max(0.0, min(1.0, self._safe_float(prediction.confidence_score, 1.0)))
             
@@ -478,7 +473,11 @@ class SupabaseMLClient:
             features = _sanitize_mapping(features)
             feature_importance = _sanitize_mapping(feature_importance)
             
-            prediction_horizon_hours = prediction.prediction_horizon_hours or 24
+            prediction_horizon_hours = getattr(prediction, "prediction_horizon_hours", None) or 24
+            now = now_utc()
+            bucket_ts = now.replace(minute=0, second=0, microsecond=0)
+            deterministic_key = f"{ad_id}|{model_id or stage}|{stage}|{prediction_horizon_hours}|{bucket_ts.isoformat()}"
+            prediction_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, deterministic_key))
             expires_at = now + timedelta(hours=prediction_horizon_hours)
             
             model_name = model_version or prediction.model_version or (f"model_{model_id[:8]}" if model_id else f"model_{stage}_v1")
