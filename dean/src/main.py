@@ -1888,43 +1888,6 @@ def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dic
                     from integrations import alert_spend_cap_approaching
                     alert_spend_cap_approaching(account_id, spent, cap, currency)
             
-            # Check balance warnings - alert when approaching auto-charge threshold
-            balance = health_details.get("balance")
-            if balance is not None:
-                # Try to get auto-charge threshold from Meta's billing API first
-                auto_charge_threshold = health_details.get("auto_charge_threshold")
-                
-                if auto_charge_threshold is None:
-                    # Use dynamic threshold tracking system
-                    # Use the same SQLite path as the main system
-                    sqlite_path = settings.get("logging", {}).get("sqlite", {}).get("path", "data/state.sqlite")
-                    store = Store(sqlite_path)
-                    
-                    # Get current tracked threshold from storage
-                    current_threshold = store.get_state("auto_charge_threshold_eur")
-                    if current_threshold is None:
-                        # Initialize with configured threshold
-                        current_threshold = account_health_config.get("thresholds", {}).get("auto_charge_threshold_eur", 75.0)
-                        store.set_state("auto_charge_threshold_eur", current_threshold)
-                    
-                    auto_charge_threshold = current_threshold
-                    
-                    # Check if balance has hit the current threshold (indicating a charge occurred)
-                    if balance >= auto_charge_threshold:
-                        # Increase threshold by €5 for next charge
-                        new_threshold = auto_charge_threshold + 5.0
-                        store.set_state("auto_charge_threshold_eur", new_threshold)
-                        auto_charge_threshold = new_threshold
-                        
-                        # Send notification about threshold update
-                        from integrations import alert_threshold_updated
-                        alert_threshold_updated(account_id, new_threshold, currency)
-                
-                warning_buffer = account_health_config.get("thresholds", {}).get("balance_warning_buffer_eur", 10.0)
-                warning_threshold = auto_charge_threshold - warning_buffer
-                
-                # Balance monitoring removed as requested
-            
             # Send general warnings if any
             if warnings:
                 from integrations import alert_ad_account_health_warning
