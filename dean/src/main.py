@@ -2407,6 +2407,9 @@ def main() -> None:
             notify(f"   • Healthy tables: {initial_insights.healthy_tables}")
             if initial_insights.problematic_tables > 0:
                 notify(f"   • Problematic tables: {initial_insights.problematic_tables}")
+            
+            # Establish baseline counts so subsequent ticks show per-run deltas
+            table_monitor.update_previous_counts(initial_insights)
         except Exception as e:
             notify(f"⚠️ Failed to initialize table monitoring: {e}")
 

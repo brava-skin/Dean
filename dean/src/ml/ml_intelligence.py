@@ -954,6 +954,44 @@ class XGBoostPredictor:
             self.drift_detector = None
             self.data_loader = None
             self.performance_tracker = None
+
+    @staticmethod
+    def _infer_scaler_feature_count(scaler: Any) -> Optional[int]:
+        """Attempt to determine how many features a fitted scaler expects."""
+        if scaler is None:
+            return None
+        numeric_attrs = (
+            "n_features_in_",
+            "n_features_",
+            "scale_",
+            "center_",
+            "mean_",
+            "var_",
+            "data_min_",
+            "data_max_",
+        )
+        for attr in numeric_attrs:
+            if not hasattr(scaler, attr):
+                continue
+            value = getattr(scaler, attr)
+            if isinstance(value, (list, tuple)):
+                if len(value):
+                    return int(len(value))
+            elif isinstance(value, np.ndarray):
+                if value.size:
+                    return int(value.size)
+            elif isinstance(value, (int, float)) and attr.startswith("n_features"):
+                if value:
+                    return int(value)
+        return None
+
+    @classmethod
+    def _is_scaler_fitted(cls, scaler: Any) -> bool:
+        """Check whether a scaler instance has been fitted."""
+        if scaler is None:
+            return False
+        feature_count = cls._infer_scaler_feature_count(scaler)
+        return feature_count is not None and feature_count > 0
     
     def _get_validated_client(self):
         """Get validated Supabase client for automatic data validation."""
@@ -2033,6 +2071,8 @@ class XGBoostPredictor:
                 expected_feature_count_hint = len(expected_features) if expected_features else None
 
                 # Apply feature selection if available BEFORE creating feature vector
+                expected_feature_count_hint = None
+
                 if feature_selector is not None:
                     try:
                         # Create full feature vector first
@@ -2048,17 +2088,32 @@ class XGBoostPredictor:
                         # Apply feature selection
                         feature_vector = feature_selector.transform([full_feature_vector])[0]
                         _ml_log(logging.DEBUG, "Applied feature selection -> %s features", len(feature_vector))
+                        if model_expected:
+                            expected_feature_count_hint = len(model_expected)
+                        else:
+                            expected_feature_count_hint = len(feature_vector)
                     except Exception as e:
                         self.logger.warning(f"Feature selection failed during prediction: {e}")
                         # Fallback to original approach
                         feature_vector = np.array([
                             float(features.get(str(col), 0)) for col in expected_features
                         ])
+                        if model_expected:
+                            expected_feature_count_hint = len(model_expected)
+                        else:
+                            expected_feature_count_hint = len(feature_vector)
                 else:
+                    if model_expected:
+                        expected_features = list(model_expected)
+                    elif expected_features:
+                        expected_features = list(expected_features)
+                    else:
+                        expected_features = [str(k) for k in features.keys()]
                     # Create feature vector matching model's expected features EXACTLY
                     feature_vector = np.array([
                         float(features.get(str(col), 0)) for col in expected_features
                     ])
+                    expected_feature_count_hint = len(expected_features)
                 
                 # FIX: Ensure we have the exact number of features the scaler expects
                 baseline_conf = self.feature_importance.get(f"{model_key}_confidence", {})
@@ -2527,12 +2582,14 @@ class XGBoostPredictor:
             
             # Serialize and compress scaler data
             scaler_data_binary = None
-            if scaler:
+            if scaler and self._is_scaler_fitted(scaler):
                 try:
                     scaler_data = pickle.dumps(scaler)
                     scaler_data_binary = gzip.compress(scaler_data)
                 except Exception as e:
                     self.logger.warning(f"Failed to serialize scaler: {e}")
+            elif scaler:
+                self.logger.warning(f"Skipping serialization of unfitted scaler for {model_type}_{stage}")
             
             model_version = self._get_next_model_version(model_type, stage)
             model_name = f"{model_type}_{stage}_v{model_version}"
@@ -3153,9 +3210,13 @@ class XGBoostPredictor:
                     
                     scaler = pickle.loads(scaler_bytes)
                     # Verify scaler is fitted before storing
-                    if hasattr(scaler, 'mean_') and scaler.mean_ is not None:
+                    if self._is_scaler_fitted(scaler):
+                        feature_count = self._infer_scaler_feature_count(scaler)
                         self.scalers[model_key] = scaler
-                        self.logger.info(f"✅ Loaded scaler for {model_key} (n_features={len(scaler.mean_)})")
+                        if feature_count:
+                            self.logger.info(f"✅ Loaded scaler for {model_key} (n_features={feature_count})")
+                        else:
+                            self.logger.info(f"✅ Loaded scaler for {model_key}")
                     else:
                         self.logger.warning(f"Scaler for {model_key} is not fitted, will not use it")
                         self.scalers[model_key] = None

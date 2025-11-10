@@ -793,6 +793,7 @@ class SlackClient:
         self.fail_count = 0
         self.outbox = Outbox(OUTBOX_PATH)
         self.tb_by_webhook: Dict[str, TokenBucket] = {}
+        self._base_qps = TOKEN_RATE_QPS
         self.batch_buf: List[SlackMessage] = []
         self.batch_started: Optional[float] = None
         self._sender_thread: Optional[threading.Thread] = None
@@ -984,6 +985,7 @@ class SlackClient:
                     wait = max(5.0, SLACK_BACKOFF_BASE * (2 ** n))
                 wait = min(wait, SLACK_BACKOFF_CAP)
                 self._on_failure()
+                self._penalize_rate_limit(webhook, wait, topic)
                 _log(f"[SLACK WARN] 429 rate limit, backing off {wait:.1f}s (webhook topic={topic})")
                 time.sleep(wait)
                 continue
@@ -1005,6 +1007,22 @@ class SlackClient:
     def _on_success(self) -> None:
         self.fail_count = 0
         self.cb_open_until = None
+        for tb in self.tb_by_webhook.values():
+            with tb.lock:
+                tb.rate = min(self._base_qps, tb.rate * 1.2)
+
+    def _penalize_rate_limit(self, webhook: str, wait: float, topic: str) -> None:
+        penalty = max(wait, 1.0)
+        now = time.time()
+        self.cb_open_until = max(self.cb_open_until or 0.0, now + penalty)
+        tb = self.tb_by_webhook.get(webhook)
+        if tb:
+            with tb.lock:
+                tb.tokens = 0.0
+                tb.updated = time.monotonic()
+                tb.rate = max(0.05, min(tb.rate, 1.0 / penalty))
+        else:
+            self.tb_by_webhook[webhook] = TokenBucket(max(0.05, 1.0 / penalty), TOKEN_BURST)
 
 
 _client: Optional[SlackClient] = None
