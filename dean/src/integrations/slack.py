@@ -116,13 +116,14 @@ SLACK_BATCH_WINDOW = ENVINT("SLACK_BATCH_WINDOW_SEC", 15)
 SLACK_DEDUP_WINDOW_S = ENVINT("SLACK_DEDUP_WINDOW_SEC", 900)
 SLACK_TTL_DEFAULT_S = ENVINT("SLACK_TTL_SEC", 7200)
 SLACK_SUPPRESS_MAX_H = ENVINT("SLACK_SUPPRESS_MAX_PER_H", 5)
-TOKEN_BURST = ENVINT("SLACK_TB_BURST", 5)
-TOKEN_RATE_QPS = ENVF("SLACK_TB_QPS", 1.0)
+TOKEN_BURST = max(1, ENVINT("SLACK_TB_BURST", 1))
+TOKEN_RATE_QPS = max(0.05, ENVF("SLACK_TB_QPS", 0.5))
 OUTBOX_PATH = _resolve_outbox_path()
 MAX_TEXT_LEN = max(1024, ENVINT("SLACK_MAX_TEXT_LEN", 38000))
 MAX_BLOCKS = max(1, ENVINT("SLACK_MAX_BLOCKS", 45))
 MAX_BLOCK_TEXT = max(256, ENVINT("SLACK_MAX_BLOCK_TEXT", 2900))
 LOG_STDOUT = ENVBOOL("SLACK_LOG_STDOUT", True)
+SLACK_INFO_QUEUE_DROP = ENVINT("SLACK_DROP_INFO_AT", 40)
 
 try:
     from prometheus_client import Counter, Histogram  # type: ignore
@@ -833,6 +834,10 @@ class SlackClient:
         if self.outbox.exists_recent(dedup_key):
             if self.outbox.suppress_or_increment(dedup_key):
                 return
+        depth = self.outbox.queue_depth()
+        if msg.severity == "info" and depth >= SLACK_INFO_QUEUE_DROP:
+            _log(f"[SLACK DROP] queue backlog {depth}, skipping info message: {msg.sanitized_text()}")
+            return
         payloads = self._build_payloads(msg)
         sent_any = False
         for payload in payloads:
@@ -886,6 +891,9 @@ class SlackClient:
             M_QUEUE.labels(topic).inc()
         except Exception:
             pass
+        depth = self.outbox.queue_depth()
+        if depth and depth % 25 == 0:
+            _log(f"[SLACK QUEUE] {depth} messages pending (topic={topic})")
 
     def _build_payloads(self, msg: SlackMessage) -> List[Dict[str, Any]]:
         if msg.blocks:
@@ -969,12 +977,15 @@ class SlackClient:
             if 200 <= sc < 300:
                 return True
             if sc == 429:
-                ra = 1.0
+                retry_after = resp.headers.get("Retry-After")
                 try:
-                    ra = float(resp.headers.get("Retry-After", "1"))
-                except Exception:
-                    pass
-                time.sleep(max(0.5, ra))
+                    wait = float(retry_after)
+                except (TypeError, ValueError):
+                    wait = max(5.0, SLACK_BACKOFF_BASE * (2 ** n))
+                wait = min(wait, SLACK_BACKOFF_CAP)
+                self._on_failure()
+                _log(f"[SLACK WARN] 429 rate limit, backing off {wait:.1f}s (webhook topic={topic})")
+                time.sleep(wait)
                 continue
             if 500 <= sc < 600:
                 time.sleep(min(SLACK_BACKOFF_CAP, SLACK_BACKOFF_BASE * (2 ** n)))
@@ -1429,3 +1440,43 @@ __all__ = [
     "post_thread_ads_snapshot",
     "client",
 ]
+
+
+if __name__ == "__main__":
+    import argparse
+    import time
+
+    parser = argparse.ArgumentParser(description="Slack outbox utilities")
+    parser.add_argument(
+        "--flush",
+        action="store_true",
+        help="Drain the pending Slack outbox messages respecting rate limits.",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=600.0,
+        help="Maximum seconds to wait while draining the outbox.",
+    )
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Print current queue depth and exit.",
+    )
+    args = parser.parse_args()
+
+    slack_client = client()
+    depth = slack_client.outbox.queue_depth()
+    _log(f"[SLACK CLI] current queue depth: {depth}")
+
+    if args.flush:
+        deadline = time.time() + max(0.0, args.timeout)
+        _log(f"[SLACK CLI] draining queue (timeout {args.timeout}s)")
+        slack_client.flush(timeout=args.timeout)
+        depth_after = slack_client.outbox.queue_depth()
+        if depth_after > 0 and time.time() >= deadline:
+            _log(f"[SLACK CLI] drain timed out with {depth_after} messages still pending")
+        else:
+            _log(f"[SLACK CLI] drain complete, {depth_after} messages remaining")
+    elif not args.status:
+        parser.print_help()
