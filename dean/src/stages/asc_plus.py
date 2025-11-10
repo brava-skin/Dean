@@ -1861,7 +1861,7 @@ def _generate_creatives_for_deficit(
     return created_ads
 
 
-def _pause_ad(client: MetaClient, ad_id: str) -> bool:
+def _pause_ad(client: MetaClient, ad_id: str, reason: Optional[str] = None) -> bool:
     from infrastructure.error_handling import retry_with_backoff
 
     @retry_with_backoff(max_retries=3)
@@ -1870,7 +1870,10 @@ def _pause_ad(client: MetaClient, ad_id: str) -> bool:
 
     try:
         _pause(ad_id)
-        _asc_log(logging.INFO, "Paused ad %s per guardrail", ad_id)
+        if reason:
+            _asc_log(logging.INFO, "Paused ad %s per guardrail: %s", ad_id, reason)
+        else:
+            _asc_log(logging.INFO, "Paused ad %s per guardrail", ad_id)
         return True
     except Exception as exc:
         _asc_log(logging.ERROR, "Failed to pause ad %s: %s", ad_id, exc)
@@ -3899,7 +3902,7 @@ def run_asc_plus_tick(
         )
         kill, kill_reason = _guardrail_kill(metrics)
         if kill:
-            if _pause_ad(client, ad_id):
+            if _pause_ad(client, ad_id, kill_reason):
                 killed_ads.append((ad_id, kill_reason))
                 killed_ids.add(ad_id)
                 active_count = max(0, active_count - 1)
@@ -3927,7 +3930,7 @@ def run_asc_plus_tick(
             if candidate_ad_id in killed_ids:
                 continue
             reason = f"Capped to maintain {max_active} live ads (score { _ad_health_score(candidate_metrics):.2f})"
-            if _pause_ad(client, candidate_ad_id):
+            if _pause_ad(client, candidate_ad_id, reason):
                 trimmed.append((candidate_ad_id, reason))
                 killed_ids.add(candidate_ad_id)
                 active_count = max(0, active_count - 1)
