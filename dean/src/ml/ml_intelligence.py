@@ -450,8 +450,10 @@ class SupabaseMLClient:
         try:
             from datetime import datetime, timedelta
             
-            prediction_id = str(uuid.uuid4())
             now = now_utc()
+            bucket_ts = now.replace(minute=0, second=0, microsecond=0)
+            deterministic_key = f"{ad_id}|{model_id or stage}|{stage}|{prediction_horizon_hours}|{bucket_ts.isoformat()}"
+            prediction_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, deterministic_key))
             
             prediction_value = self._safe_float(prediction.predicted_value, 999999999.99)
             confidence_score = max(0.0, min(1.0, self._safe_float(prediction.confidence_score, 1.0)))
@@ -509,6 +511,12 @@ class SupabaseMLClient:
             
             # Get validated client for automatic validation
             validated_client = self._get_validated_client()
+
+            # Ensure id uniqueness by removing any existing record for this prediction window
+            try:
+                self.client.table('ml_predictions').delete().eq('id', prediction_id).execute()
+            except Exception:
+                pass
             
             attempt = 0
             while attempt < max_attempts:
@@ -526,6 +534,11 @@ class SupabaseMLClient:
                             attempt + 1,
                             confidence_score,
                         )
+                        try:
+                            prune_cutoff = (now - timedelta(days=3)).isoformat()
+                            self.client.table('ml_predictions').delete().lt('expires_at', prune_cutoff).execute()
+                        except Exception:
+                            pass
                         return prediction_id
 
                     raise RuntimeError("Insert returned no data")
@@ -1668,6 +1681,17 @@ class XGBoostPredictor:
                     original_feature_cols,
                 )
                 leakage_audit["note"] = "Validation R² > 0.98 with near-zero MAE"
+                correlations = leakage_audit.get("correlations", {}) or {}
+                if correlations:
+                    top_corr = sorted(
+                        correlations.items(),
+                        key=lambda item: abs(item[1]),
+                        reverse=True,
+                    )[:5]
+                    leakage_audit["top_correlation_features"] = [
+                        {"feature": name, "correlation": float(value)}
+                        for name, value in top_corr
+                    ]
 
             override_key = f"{model_type}:{stage}"
             override_allowed = (
@@ -1685,6 +1709,12 @@ class XGBoostPredictor:
                 if high_corr:
                     corr_excerpt = " Suspect features: " + ", ".join(
                         f"{name} ({corr:+.3f})" for name, corr in high_corr[:5]
+                    )
+                elif leakage_audit.get("top_correlation_features"):
+                    fallback = leakage_audit["top_correlation_features"][:3]
+                    corr_excerpt = " Top correlations: " + ", ".join(
+                        f"{item['feature']} ({item['correlation']:+.3f})"
+                        for item in fallback
                     )
                 message = (
                     f"⚠️ Leakage suspected for {model_type}_{stage}: "
@@ -2000,6 +2030,9 @@ class XGBoostPredictor:
                     else:
                         expected_features = [str(k) for k in features.keys()]
 
+                # Track the expected feature count derived from metadata/input alignment
+                expected_feature_count_hint = len(expected_features) if expected_features else None
+
                 # Apply feature selection if available BEFORE creating feature vector
                 if feature_selector is not None:
                     try:
@@ -2109,7 +2142,7 @@ class XGBoostPredictor:
                 
                 # CRITICAL FIX: Ensure feature vector matches model's expected input shape
                 # Get expected feature count from model or metadata
-                expected_model_features = None
+                expected_model_features = expected_feature_count_hint
                 
                 # Try multiple ways to get feature count
                 if hasattr(model, 'n_features_in_'):
@@ -3093,6 +3126,10 @@ class XGBoostPredictor:
             
             # Load scaler if available (can be None, empty string, or 'null', that's OK)
             scaler_data = model_data.get('scaler_data')
+            if not scaler_data:
+                scaler_data = model_metadata.get('scaler_data')
+            if scaler_data in ("", "null", None):
+                scaler_data = None
             if scaler_data and scaler_data != 'null' and scaler_data != '' and scaler_data is not None:
                 try:
                     import gzip

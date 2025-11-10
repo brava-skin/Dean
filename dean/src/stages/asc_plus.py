@@ -3916,13 +3916,19 @@ def run_asc_plus_tick(
         active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
     except Exception:
         pass
+    if killed_ids:
+        hydrated_active_ads = [
+            ad for ad in hydrated_active_ads if str(ad.get("id")) not in killed_ids
+        ]
+        hydrated_active_count = len(hydrated_active_ads)
 
-    planning_active_count = hydrated_active_count
+    planning_active_count = active_count
 
     # Step 4: enforce max active ceiling by trimming lowest performers
     excess = max(0, planning_active_count - max_active)
     if excess > 0:
-        cap_candidates = _select_ads_for_cap(hydrated_active_ads, metrics_map, list(killed_ids), excess * 2)
+        cap_pool = hydrated_active_ads if hydrated_active_ads else active_ads
+        cap_candidates = _select_ads_for_cap(cap_pool, metrics_map, list(killed_ids), excess * 2)
         trimmed: List[Tuple[str, str]] = []
         for _, candidate_ad_id, candidate_metrics in cap_candidates:
             if len(trimmed) >= excess:
@@ -3934,8 +3940,8 @@ def run_asc_plus_tick(
                 trimmed.append((candidate_ad_id, reason))
                 killed_ids.add(candidate_ad_id)
                 active_count = max(0, active_count - 1)
+                planning_active_count = max(0, planning_active_count - 1)
                 if candidate_metrics.get("hydrated", True):
-                    planning_active_count = max(0, planning_active_count - 1)
                     hydrated_active_count = max(0, hydrated_active_count - 1)
                 _record_lifecycle_event(candidate_ad_id, "PAUSED", reason)
         if trimmed:
@@ -3945,6 +3951,11 @@ def run_asc_plus_tick(
                 ad for ad in hydrated_active_ads if str(ad.get("id")) not in trimmed_ids
             ]
             hydrated_active_count = len(hydrated_active_ads)
+        try:
+            active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
+        except Exception:
+            pass
+        planning_active_count = active_count
 
     effective_target = min(target_count, max_active)
     available_slots = max(0, max_active - min(active_count, max_active))

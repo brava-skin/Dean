@@ -15,6 +15,7 @@ import time
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pandas as pd
 from supabase import Client
@@ -58,6 +59,14 @@ class TableMonitor:
         self.supabase_client = supabase_client
         self.previous_counts: Dict[str, int] = {}
         self.monitoring_enabled = supabase_client is not None
+        self.state_path = Path(".cache/table_monitor_state.json")
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            # In readonly environments we simply skip persistence
+            pass
+        self.last_snapshot_at: Optional[datetime] = None
+        self._load_previous_counts()
         
         # Critical tables for ML system (based on actual usage in codebase)
         self.critical_tables = [
@@ -281,6 +290,8 @@ class TableMonitor:
         """Update previous counts for next comparison."""
         for table_name, health in insights.tables.items():
             self.previous_counts[table_name] = health.current_rows
+        self.last_snapshot_at = datetime.now(timezone.utc)
+        self._persist_previous_counts()
     
     def format_insights_report(self, insights: TableInsights) -> str:
         """Format insights as a readable report."""
@@ -409,6 +420,52 @@ class TableMonitor:
             ml_status['recommendations'].append("✅ All ML tables have sufficient data for training")
         
         return ml_status
+
+    def _load_previous_counts(self) -> None:
+        """Load persisted table counts so deltas survive process restarts."""
+        if not hasattr(self, "state_path") or not isinstance(self.state_path, Path):
+            return
+        if not self.state_path.exists():
+            return
+        try:
+            raw = json.loads(self.state_path.read_text())
+            counts = raw.get("counts", {})
+            loaded: Dict[str, int] = {}
+            for key, value in counts.items():
+                try:
+                    loaded[str(key)] = int(value)
+                except (TypeError, ValueError):
+                    continue
+            if loaded:
+                self.previous_counts = loaded
+            timestamp_raw = raw.get("timestamp")
+            if timestamp_raw:
+                try:
+                    parsed = datetime.fromisoformat(timestamp_raw)
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    self.last_snapshot_at = parsed
+                except Exception:
+                    self.last_snapshot_at = None
+        except Exception:
+            # If the state file is corrupted we ignore it
+            self.previous_counts = {}
+            self.last_snapshot_at = None
+
+    def _persist_previous_counts(self) -> None:
+        """Persist current table counts so the next tick has a baseline."""
+        if not hasattr(self, "state_path") or not isinstance(self.state_path, Path):
+            return
+        snapshot_time = self.last_snapshot_at or datetime.now(timezone.utc)
+        payload = {
+            "timestamp": snapshot_time.isoformat(),
+            "counts": self.previous_counts,
+        }
+        try:
+            self.state_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        except Exception:
+            # Persistence failures are non-fatal
+            pass
 
     def alert_ml_tables(self, insights: TableInsights) -> None:
         """Emit Slack alerts when ML tables lack fresh data."""

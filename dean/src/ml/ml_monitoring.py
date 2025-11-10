@@ -17,6 +17,7 @@ from dataclasses import dataclass, asdict, field
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+import json
 import numpy as np
 import pandas as pd
 import pytz
@@ -293,11 +294,11 @@ class MLDashboard:
             # Try to get model metrics - performance_metrics may not exist in schema
             try:
                 response = self.client.table('ml_models').select(
-                    'id, trained_at'
+                    'id, trained_at, metadata'
                 ).gte('trained_at', since).execute()
             except Exception as e:
-                # If column doesn't exist, try without it
-                self.logger.warning(f"Could not query performance_metrics column: {e}")
+                # Fallback without metadata column (older schema)
+                self.logger.warning(f"Could not query metadata column: {e}")
                 response = self.client.table('ml_models').select(
                     'id, trained_at'
                 ).gte('trained_at', since).execute()
@@ -317,31 +318,76 @@ class MLDashboard:
             # Note: performance_metrics column may not exist in schema
             accuracy_samples: List[float] = []
             for row in rows:
-                model_id = row.get('id')
-                if not model_id:
-                    continue
-                try:
-                    perf_response = (
-                        self.client.table('ml_models')
-                        .select('performance_metrics')
-                        .eq('id', model_id)
-                        .execute()
-                    )
-                    perf_payload = getattr(perf_response, 'data', None)
-                    if perf_payload and perf_payload[0].get('performance_metrics'):
-                        perf_metrics = perf_payload[0]['performance_metrics']
-                        if isinstance(perf_metrics, dict):
-                            candidate = perf_metrics.get('test_r2') or perf_metrics.get('cv_score')
-                            if candidate is not None:
-                                try:
-                                    value = float(candidate)
-                                    if not (np.isnan(value) or np.isinf(value)):
-                                        accuracy_samples.append(value)
-                                except (TypeError, ValueError):
-                                    continue
-                except Exception:
-                    # Column doesn't exist or lookup failed - skip
-                    continue
+                candidate_value = None
+                metadata = row.get('metadata')
+                if isinstance(metadata, str):
+                    try:
+                        metadata = json.loads(metadata)
+                    except Exception:
+                        metadata = {}
+                elif not isinstance(metadata, dict):
+                    metadata = {}
+
+                if metadata:
+                    perf_metrics = metadata.get('performance_metrics') or {}
+                    if isinstance(perf_metrics, str):
+                        try:
+                            perf_metrics = json.loads(perf_metrics)
+                        except Exception:
+                            perf_metrics = {}
+                    if isinstance(perf_metrics, dict):
+                        candidate_value = (
+                            perf_metrics.get('val_r2')
+                            or perf_metrics.get('test_r2')
+                            or perf_metrics.get('cv_score')
+                        )
+
+                    if candidate_value is None:
+                        confidence = metadata.get('confidence_summary') or {}
+                        if isinstance(confidence, str):
+                            try:
+                                confidence = json.loads(confidence)
+                            except Exception:
+                                confidence = {}
+                        if isinstance(confidence, dict):
+                            candidate_value = (
+                                confidence.get('ensemble_r2')
+                                or confidence.get('val_r2')
+                                or confidence.get('test_r2')
+                                or confidence.get('cv_score')
+                            )
+
+                if candidate_value is None:
+                    # Final fallback: legacy performance_metrics column if available
+                    model_id = row.get('id')
+                    if not model_id:
+                        continue
+                    try:
+                        perf_response = (
+                            self.client.table('ml_models')
+                            .select('performance_metrics')
+                            .eq('id', model_id)
+                            .execute()
+                        )
+                        perf_payload = getattr(perf_response, 'data', None)
+                        if perf_payload and perf_payload[0].get('performance_metrics'):
+                            perf_metrics = perf_payload[0]['performance_metrics']
+                            if isinstance(perf_metrics, dict):
+                                candidate_value = (
+                                    perf_metrics.get('val_r2')
+                                    or perf_metrics.get('test_r2')
+                                    or perf_metrics.get('cv_score')
+                                )
+                    except Exception:
+                        pass
+
+                if candidate_value is not None:
+                    try:
+                        value = float(candidate_value)
+                        if not (np.isnan(value) or np.isinf(value)):
+                            accuracy_samples.append(value)
+                    except (TypeError, ValueError):
+                        continue
             
             avg_accuracy = None
             if accuracy_samples:
