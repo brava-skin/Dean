@@ -28,7 +28,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Sequence
+from typing import Any, Dict, List, Optional, Tuple, Sequence, Mapping
 
 from io import TextIOWrapper
 
@@ -337,6 +337,22 @@ def load_yaml(path: str) -> Dict[str, Any]:
 
 def load_cfg(settings_path: str, rules_path: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     return load_yaml(settings_path), load_yaml(rules_path)
+
+
+def cfg(data: Mapping[str, Any] | Dict[str, Any], path: str, default: Any = None) -> Any:
+    """
+    Safely retrieve nested configuration values using dot notation.
+
+    Example:
+        cfg(settings, "overrides.emergency.stop_all_automation", False)
+    """
+    current: Any = data
+    for key in path.split("."):
+        if isinstance(current, dict) and key in current:
+            current = current[key]
+        else:
+            return default
+    return current
 
 
 def _normalize_video_id_cell(v: Any) -> str:

@@ -10,15 +10,27 @@ jobs:
   dean-automation:
     runs-on: ubuntu-latest
     timeout-minutes: 20  # Reduced timeout since we're optimizing
+    env:
+      AUTOMATION_PAUSED: "true"
     
     steps:
+    - name: Automation paused notice
+      if: ${{ env.AUTOMATION_PAUSED == 'true' }}
+      run: |
+        echo "🚫 Dean ASC+ automation is currently paused via GitHub Actions workflow."
+        echo "   - Set AUTOMATION_PAUSED to \"false\" in .github/workflows/dean-automation.yml to resume."
+        echo "   - Last checked: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+      shell: bash
+
     - name: Checkout repository
+      if: ${{ env.AUTOMATION_PAUSED != 'true' }}
       uses: actions/checkout@v4
       with:
         fetch-depth: 1  # Only fetch latest commit, faster checkout
     
     # Install ffmpeg using pre-built binaries (MUCH faster than apt-get)
     - name: Install ffmpeg (optimized - pre-built binaries)
+      if: ${{ env.AUTOMATION_PAUSED != 'true' }}
       run: |
         echo "📹 Installing ffmpeg (optimized method)..."
         # Try pre-built static binary first (fastest - installs in seconds)
@@ -37,6 +49,7 @@ jobs:
     
     # Set up Python 3.11 (optimized - v5 with faster caching)
     - name: Set up Python 3.11
+      if: ${{ env.AUTOMATION_PAUSED != 'true' }}
       timeout-minutes: 5  # Timeout for Python setup (should be fast, fail if >5min)
       uses: actions/setup-python@v5
       with:
@@ -48,6 +61,7 @@ jobs:
         
     # Enhanced pip cache (parallel with setup-python cache)
     - name: Cache pip dependencies (enhanced)
+      if: ${{ env.AUTOMATION_PAUSED != 'true' }}
       uses: actions/cache@v4
       id: pip-cache
       with:
@@ -60,6 +74,7 @@ jobs:
           ${{ runner.os }}-pip-
           
     - name: Install Python dependencies (optimized - batched)
+      if: ${{ env.AUTOMATION_PAUSED != 'true' }}
       timeout-minutes: 10  # Timeout for dependency installation
       run: |
         echo "📦 Installing Python dependencies (optimized - batched install)..."
@@ -102,11 +117,13 @@ jobs:
         echo "✅ All dependencies installed successfully"
         
     - name: Verify ffmpeg installation
+      if: ${{ env.AUTOMATION_PAUSED != 'true' }}
       run: |
         ffmpeg -version | head -1
         echo "✅ ffmpeg ready"
     
     - name: Run Dean
+      if: ${{ env.AUTOMATION_PAUSED != 'true' }}
       env:
         # Meta Ads API Configuration
         FB_APP_ID: ${{ secrets.FB_APP_ID }}
