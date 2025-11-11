@@ -2173,6 +2173,11 @@ def main() -> None:
             return result
         settings = deep_merge(settings, rules_cfg)
 
+    if cfg(settings, "overrides.emergency.stop_all_automation", False):
+        logger.warning("Automation halted via overrides.emergency.stop_all_automation")
+        notify("⏸️ Automation paused by emergency override (stop_all_automation=true)")
+        return
+
     try:
         validate_asc_plus_config(settings)
     except ValueError as exc:
