@@ -51,7 +51,7 @@ try:
     ADVANCED_ML_AVAILABLE = True
 except ImportError:
     ADVANCED_ML_AVAILABLE = False
-    logger.warning("Advanced ML system not available")
+    logger.debug("Advanced ML system not available (expected - ML system removed)")
 
 # Import new optimization systems
 try:
@@ -1155,25 +1155,12 @@ def _sync_performance_metrics_records(
         atc_to_ic_rate = _fraction_or_none(initiate_checkout / add_to_cart, allow_percent=False) if add_to_cart > 0 else None
         ic_to_purchase_rate = _fraction_or_none(purchases / initiate_checkout, allow_percent=False) if initiate_checkout > 0 else None
 
-        try:
-            creation_time = storage.get_ad_creation_time(ad_id)
-        except Exception:
-            creation_time = None
-
-        age_days = None
-        stage_duration_hours = None
-        if creation_time:
-            delta = now - creation_time
-            if delta.total_seconds() >= 0:
-                age_days = delta.total_seconds() / 86400.0
-                stage_duration_hours = delta.total_seconds() / 3600.0
-        if stage_duration_hours is not None:
-            stage_duration_hours = min(stage_duration_hours, float(DB_NUMERIC_MAX))
+        # Note: age_days and stage_duration_hours removed from consolidated schema
+        # These were stage-specific fields that are no longer needed
 
         record = {
             "ad_id": ad_id,
-            "lifecycle_id": lifecycle_id,
-            "stage": stage,
+            # Note: lifecycle_id and stage removed from consolidated schema
             "window_type": "1d",
             "date_start": date_label,
             "date_end": date_label,
@@ -1188,20 +1175,12 @@ def _sync_performance_metrics_records(
             "cpm": cpm,
             "roas": roas,
             "cpa": cpa,
-            "dwell_time": dwell_time,
-            "frequency": frequency,
             "atc_rate": atc_rate,
-            "ic_rate": ic_rate,
             "purchase_rate": purchase_rate,
-            "atc_to_ic_rate": atc_to_ic_rate,
-            "ic_to_purchase_rate": ic_to_purchase_rate,
-            "performance_quality_score": None,
-            "fatigue_index": None,
-            "stability_score": None,
-            "momentum_score": None,
-            "age_days": age_days,
-            "stage_duration_hours": stage_duration_hours,
-            "revenue": revenue,
+            # Note: dwell_time, frequency, ic_rate, atc_to_ic_rate, ic_to_purchase_rate, revenue
+            # removed from consolidated schema - not in performance_metrics table
+            # Note: performance_quality_score, fatigue_index, stability_score, momentum_score
+            # removed from consolidated schema - these are now in ads table only
         }
 
         upserts.append(record)
@@ -2135,8 +2114,20 @@ def _create_creative_and_ad(
         # Resolve Instagram actor ID (env override -> automatic lookup)
         env_instagram_actor_id = os.getenv("IG_ACTOR_ID")
         instagram_actor_id = env_instagram_actor_id or client.get_instagram_actor_id(page_id)
+        
+        # Validate Instagram actor ID format (should be numeric string)
+        if instagram_actor_id:
+            try:
+                # Validate it's a valid numeric ID
+                int(instagram_actor_id)
+            except (ValueError, TypeError):
+                logger.warning(
+                    f"Invalid Instagram actor ID format: {instagram_actor_id}. Will skip Instagram placements."
+                )
+                instagram_actor_id = None
+        
         if not instagram_actor_id:
-            logger.info(
+            logger.debug(
                 "Instagram actor ID unavailable; creative will not run on Instagram placements unless the page is linked."
             )
         
@@ -2351,9 +2342,8 @@ def _create_creative_and_ad(
                             ad_id,
                         )
                         # Add calculated metrics to creative_intel_data
-                        creative_intel_data['avg_ctr'] = metrics.get('avg_ctr', 0.0)
-                        creative_intel_data['avg_cpa'] = metrics.get('avg_cpa', 0.0)
-                        creative_intel_data['avg_roas'] = metrics.get('avg_roas', 0.0)
+                        # Note: avg_ctr, avg_cpa, avg_roas don't exist in consolidated ads table
+                        # Only performance_score and fatigue_index are stored in ads table
                         creative_intel_data['performance_score'] = metrics.get('performance_score', 0.0)
                         creative_intel_data['fatigue_index'] = metrics.get('fatigue_index', 0.0)
                     except ImportError:

@@ -220,8 +220,7 @@ try:
     )
     ML_AVAILABLE = True
 except ImportError as e:
-    logger.warning(f"ML system not available: {e}")
-    logger.info("System will run in standard mode")
+    logger.debug(f"ML system not available (expected - ML system removed): {e}")
     ML_AVAILABLE = False
     # Create dummy classes for compatibility
     class SimpleMLIntelligenceSystem: pass
