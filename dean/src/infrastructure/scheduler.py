@@ -3,15 +3,12 @@ Background scheduler for automated monitoring and alerts.
 Handles hourly ticks, periodic summaries, and critical event alerts.
 """
 
-import asyncio
-import json
 import os
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 import threading
 import schedule
-from pathlib import Path
 
 from .storage import Store
 from integrations.slack import (

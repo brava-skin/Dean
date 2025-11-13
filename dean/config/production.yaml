@@ -15,8 +15,8 @@ profile:
 
 # ── ML System Configuration ───────────────────────────
 ml_system:
-  enabled: true
-  mode: "enhanced"  # enhanced | standard | disabled
+  enabled: false  # ML system disabled - focusing on rule system and creative engine
+  mode: "disabled"  # enhanced | standard | disabled
   fallback_to_legacy: true  # If ML fails, use rule-based system
   
   # Model Training
@@ -200,7 +200,7 @@ logging:
   include:
     ml_insights: true
     performance_metrics: true
-    learning_events: true
+    # Removed: learning_events (table no longer used)
     predictions: true
     model_updates: true
     error_tracking: true
@@ -260,37 +260,37 @@ overrides:
     disable_ml: false
 
 # ── Feature Flags ─────────────────────────────────────
-features:
-  ml_predictions: true
-  adaptive_thresholds: true
-  creative_similarity: true
-  fatigue_detection: true
-  temporal_analysis: true
-  cross_stage_transfer: true
-  auto_budget_optimization: true
-  predictive_scaling: true
+  features:
+    ml_predictions: false                   # Disabled during ATC learning phase
+    adaptive_thresholds: true
+    creative_similarity: true
+    fatigue_detection: true
+    temporal_analysis: true
+    cross_stage_transfer: false             # Disabled - single campaign focus
+    auto_budget_optimization: false         # Disabled - fixed €100/day budget
+    predictive_scaling: false                # Disabled - no scaling during learning phase
 
 # ── ASC+ Campaign Configuration ───────────────────────
 asc_plus:
-  daily_budget_eur: 50                     # Base budget: €50/day (€5 per creative for 10 creatives)
+  daily_budget_eur: 100                    # Fixed budget: €100/day for 30 days (no scaling)
   keep_ads_live: 10
   max_active_ads: 10
-  target_active_ads: 10                    # Always maintain 10 creatives live (Andromeda requirement)
-  optimization_goal: "PURCHASE"
+  target_active_ads: 10                    # Always maintain 10 creatives live
+  optimization_goal: "ADD_TO_CART"         # ATC optimization (not Purchase) - teaching pixel buyer intent
   naming_prefix: "[ASC+]"
 
-  # Budget allocation for 10 creatives (base: €50, scales up when ready)
-  budget_per_creative_eur: 5.0             # €5 per creative (€50 ÷ 10) - base budget
-  min_budget_per_creative_eur: 5.0         # Minimum budget per creative
-  max_budget_per_creative_eur: 15.0        # Maximum budget per creative (scales up to €150/day when ready)
+  # Budget allocation for 10 creatives (fixed at €100/day)
+  budget_per_creative_eur: 10.0            # €10 per creative (€100 ÷ 10) - fixed budget
+  min_budget_per_creative_eur: 10.0        # Fixed minimum budget per creative
+  max_budget_per_creative_eur: 10.0        # Fixed maximum budget per creative (no scaling)
 
-  # Scaling configuration
+  # Scaling configuration - DISABLED for 30-day ATC learning phase
   scaling:
-    enabled: true
-    min_confidence: 0.75                   # Only scale if ML confidence > 75%
-    min_roas_for_scale: 1.5                # Minimum ROAS to consider scaling
-    min_purchases_for_scale: 5             # Minimum purchases before scaling
-    scale_up_threshold_pct: 20             # Only scale up if recommendation is >20% increase
+    enabled: false                          # No scaling during 30-day learning phase
+    min_confidence: 0.75
+    min_roas_for_scale: 1.5
+    min_purchases_for_scale: 5
+    scale_up_threshold_pct: 20
 
   queue:
     enable_rotation: true

@@ -646,7 +646,7 @@ def template_digest(date_label: str, stage_stats: Dict[str, Dict[str, Any]]) -> 
 # ---------- Outbox, TokenBucket, client (unchanged behavior) ----------
 
 class Outbox:
-    def __init__(self, path: str):
+    def __init__(self, path: str) -> None:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         self.db = sqlite3.connect(path, check_same_thread=False, isolation_level=None, timeout=30)
         self.db.execute("PRAGMA journal_mode=WAL;")
@@ -762,7 +762,7 @@ class Outbox:
 
 
 class TokenBucket:
-    def __init__(self, rate_qps: float, burst: int):
+    def __init__(self, rate_qps: float, burst: int) -> None:
         self.rate = max(0.01, rate_qps)
         self.burst = max(1, burst)
         self.tokens = float(self.burst)
@@ -785,7 +785,7 @@ class TokenBucket:
 
 
 class SlackClient:
-    def __init__(self):
+    def __init__(self) -> None:
         self.enabled = _slack_enabled_now()
         self.dry_run = ENVBOOL("SLACK_DRY_RUN", False) or not self.enabled
         self.timeout = SLACK_TIMEOUT

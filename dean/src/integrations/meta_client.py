@@ -268,7 +268,7 @@ class RateLimitManager:
     Handles all rate limiting types: API-level, Business Use Case, Insights Platform, etc.
     """
     
-    def __init__(self, api_tier: str = "development", store: Optional[Any] = None):
+    def __init__(self, api_tier: str = "development", store: Optional[Any] = None) -> None:
         self.api_tier = api_tier.lower()
         self.store = store
         self.lock = Lock()
@@ -754,7 +754,7 @@ class MetaClient:
         dry_run: bool = True,
         store: Optional[Any] = None,
         tenant_id: Optional[str] = None,
-    ):
+    ) -> None:
         self.cfg = cfg or ClientConfig()
         self.store = store
         self.dry_run = bool(dry_run)

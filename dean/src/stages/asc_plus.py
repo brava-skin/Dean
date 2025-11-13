@@ -29,13 +29,14 @@ from infrastructure.utils import (
     safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name, Timekit
 )
 from creative.image_generator import create_image_generator, ImageCreativeGenerator
-from config.constants import (
+from config import (
     ASC_PLUS_BUDGET_MIN,
     ASC_PLUS_BUDGET_MAX,
     ASC_PLUS_MIN_BUDGET_PER_CREATIVE,
     MAX_STAGE_DURATION_HOURS,
     DB_NUMERIC_MAX,
     CREATIVE_PERFORMANCE_STAGE_VALUE,
+    validate_asc_plus_config
 )
 from infrastructure.data_validation import (
     validate_all_timestamps,
@@ -43,7 +44,6 @@ from infrastructure.data_validation import (
     ValidationError,
     validate_and_sanitize_data,
 )
-from config.validate import validate_asc_plus_config
 
 # Import advanced ML systems
 try:
@@ -311,7 +311,7 @@ def _load_lock_metadata(
 
     try:
         response = (
-            supabase_client.table("ad_lifecycle")
+            supabase_client.table("ads")
             .select("ad_id, metadata")
             .in_("ad_id", ad_ids)
             .eq("stage", stage)
@@ -543,19 +543,20 @@ def _sync_ad_creation_records(client: MetaClient, ads: List[Dict[str, Any]], sta
 
     existing_records: Dict[str, Dict[str, Any]] = {}
     try:
-        response = supabase_client.table("ad_creation_times").select(
-            "ad_id, created_at_iso, stage, lifecycle_id"
+        # Get from ads table instead of ad_creation_times
+        response = supabase_client.table("ads").select(
+            "ad_id, created_at, lifecycle_id"
         ).in_("ad_id", ad_ids).execute()
         data = getattr(response, "data", None) or []
         existing_records = {
             str(row.get("ad_id")): row for row in data if row and row.get("ad_id")
         }
         for ad_id, row in existing_records.items():
-            created_at = _parse_created_time(row.get("created_at_iso"))
+            created_at = _parse_created_time(row.get("created_at"))
             if created_at:
                 creation_map[ad_id] = created_at
     except Exception as exc:
-        logger.debug(f"Unable to load existing ad_creation_times records: {exc}")
+        logger.debug(f"Unable to load existing ads records: {exc}")
         existing_records = {}
 
     storage = SupabaseStorage(supabase_client)
@@ -647,14 +648,14 @@ def _sync_ad_lifecycle_records(
 
     existing_records: Dict[str, Dict[str, Any]] = {}
     try:
+        # Get from ads table instead of ad_lifecycle
         response = (
-            supabase_client.table("ad_lifecycle")
+            supabase_client.table("ads")
             .select(
-                "id, ad_id, creative_id, campaign_id, adset_id, stage, status, lifecycle_id, metadata, "
-                "stage_duration_hours, previous_stage, stage_performance, transition_reason, created_at"
+                "ad_id, creative_id, campaign_id, adset_id, status, lifecycle_id, metadata, "
+                "kill_reason, created_at, killed_at"
             )
             .in_("ad_id", ad_ids)
-            .eq("stage", stage)
             .execute()
         )
         data = getattr(response, "data", None) or []
@@ -662,7 +663,7 @@ def _sync_ad_lifecycle_records(
             str(row.get("ad_id")): row for row in data if row and row.get("ad_id")
         }
     except Exception as exc:
-        logger.debug(f"Unable to load existing ad_lifecycle records: {exc}")
+        logger.debug(f"Unable to load existing ads records: {exc}")
         existing_records = {}
 
     storage = SupabaseStorage(supabase_client)
@@ -704,6 +705,11 @@ def _sync_ad_lifecycle_records(
             or existing.get("status")
         )
         status = _normalize_lifecycle_status(raw_status)
+        # Map to new status values: active, paused, killed
+        if status in ["ACTIVE", "PAUSED"]:
+            status = status.lower()
+        elif status in ["DELETED", "ARCHIVED", "DISAPPROVED"]:
+            status = "killed"
 
         metadata_existing = _parse_metadata(existing.get("metadata"))
         metadata_from_ad = _parse_metadata(ad.get("metadata"))
@@ -726,44 +732,55 @@ def _sync_ad_lifecycle_records(
             or now
         )
 
-        stage_duration = max((now - created_at).total_seconds() / 3600.0, 0.0)
-        stage_duration = min(stage_duration, float(MAX_STAGE_DURATION_HOURS))
-        stage_duration = min(stage_duration, float(DB_NUMERIC_MAX))
+        # Determine kill_reason if status is killed
+        kill_reason = existing.get("kill_reason")
+        if status == "killed" and not kill_reason:
+            metrics = metrics_map.get(ad_id)
+            if metrics:
+                # Determine reason based on performance
+                if metrics.get("ctr", 0) < 0.008:
+                    kill_reason = "low_ctr"
+                elif metrics.get("cpc", 0) > 1.90:
+                    kill_reason = "high_cpc"
+                elif metrics.get("cpm", 0) > 80:
+                    kill_reason = "high_cpm"
+                elif metrics.get("add_to_cart", 0) < 1:
+                    kill_reason = "low_atc"
+                else:
+                    kill_reason = "performance_threshold"
+            else:
+                kill_reason = "manual_or_meta_status"
 
-        existing_previous = existing.get("previous_stage")
-        previous_stage = existing_previous or "created"
+        killed_at = None
+        if status == "killed" and not existing.get("killed_at"):
+            killed_at = now.isoformat()
+        elif existing.get("killed_at"):
+            killed_at = existing.get("killed_at")
 
-        metrics = metrics_map.get(ad_id)
-        stage_performance = _build_stage_performance(metrics)
-
-        transition_reason = _determine_transition_reason(status, stage_performance)
-
-        lifecycle_record: Dict[str, Any] = {
+        # Build ads record (consolidated from ad_lifecycle)
+        ads_record: Dict[str, Any] = {
             "ad_id": ad_id,
             "creative_id": creative_id,
             "campaign_id": campaign_value,
             "adset_id": adset_value,
-            "stage": stage,
             "status": status,
             "lifecycle_id": lifecycle_id,
             "metadata": metadata_existing,
-            "stage_duration_hours": round(stage_duration, 2),
-            "previous_stage": previous_stage,
-            "stage_performance": stage_performance,
-            "transition_reason": transition_reason,
+            "kill_reason": kill_reason,
             "created_at": created_at.isoformat(),
+            "killed_at": killed_at,
             "updated_at": now.isoformat(),
         }
 
-        lifecycle_record = validate_all_timestamps(lifecycle_record)
+        ads_record = validate_all_timestamps(ads_record)
 
         try:
-            supabase_client.table("ad_lifecycle").upsert(
-                lifecycle_record,
-                on_conflict="ad_id,stage",
+            supabase_client.table("ads").upsert(
+                ads_record,
+                on_conflict="ad_id",
             ).execute()
         except Exception as exc:
-            logger.debug(f"Failed to upsert lifecycle record for {ad_id}: {exc}")
+            logger.debug(f"Failed to upsert ads record for {ad_id}: {exc}")
 
 
 def _collect_storage_metadata(
@@ -774,8 +791,9 @@ def _collect_storage_metadata(
     if not ids:
         return {}
     try:
+        # Get from ads table instead of creative_storage
         response = (
-            supabase_client.table("creative_storage")
+            supabase_client.table("ads")
             .select("creative_id, file_size_bytes, storage_url, metadata")
             .in_("creative_id", ids)
             .execute()
@@ -811,15 +829,16 @@ def _sync_creative_intelligence_records(
         return {}
 
     try:
+        # Get from ads table instead of creative_intelligence
         existing_resp = (
-            supabase_client.table("creative_intelligence")
-            .select("*")
+            supabase_client.table("ads")
+            .select("ad_id, creative_id, headline, primary_text, description, image_prompt, performance_score, fatigue_index, metadata")
             .in_("ad_id", ad_ids)
             .execute()
         )
         existing_rows = getattr(existing_resp, "data", None) or []
     except Exception as exc:
-        logger.debug(f"Unable to load creative intelligence records: {exc}")
+        logger.debug(f"Unable to load ads records: {exc}")
         existing_rows = []
 
     existing_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -961,10 +980,24 @@ def _sync_creative_intelligence_records(
 
         record = validate_all_timestamps(record)
 
-        validation = validate_supabase_data("creative_intelligence", record, strict_mode=True)
+        # Update ads table with creative intelligence fields
+        ads_update: Dict[str, Any] = {
+            "ad_id": ad_id,
+            "creative_id": creative_id,
+            "headline": headline,
+            "primary_text": primary_text,
+            "description": description,
+            "image_prompt": existing.get("image_prompt"),
+            "performance_score": performance_score,
+            "fatigue_index": fatigue_index,
+            "metadata": metadata,
+            "updated_at": now_iso,
+        }
+
+        validation = validate_supabase_data("ads", ads_update, strict_mode=True)
         if not validation.is_valid:
             logger.warning(
-                "Skipping creative_intelligence sync for creative %s (%s): %s",
+                "Skipping ads sync for creative %s (%s): %s",
                 creative_id,
                 ad_id,
                 "; ".join(validation.errors),
@@ -977,15 +1010,15 @@ def _sync_creative_intelligence_records(
         return storage_map
 
     try:
-        supabase_client.upsert(
-            "creative_intelligence",
+        # Upsert to ads table instead of creative_intelligence
+        supabase_client.table("ads").upsert(
             sanitized_records,
-            on_conflict="creative_id,ad_id",
-        )
+            on_conflict="ad_id",
+        ).execute()
     except ValidationError as exc:
-        logger.error("Creative intelligence upsert blocked: %s", exc)
+        logger.error("Ads upsert blocked: %s", exc)
     except Exception as exc:
-        logger.debug(f"Failed to upsert creative intelligence records: {exc}")
+        logger.debug(f"Failed to upsert ads records: {exc}")
 
     return storage_map
 
@@ -1048,12 +1081,11 @@ def _sync_creative_storage_records(
             usage_count = 0
         usage_count = max(usage_count, 0) + 1
 
+        # Update ads table with storage info
         update_record = {
-            "creative_id": creative_id,
             "ad_id": ad_id,
+            "creative_id": creative_id,
             "status": storage_status,
-            "usage_count": usage_count,
-            "last_used_at": now_iso,
             "metadata": metadata,
             "updated_at": now_iso,
         }
@@ -1064,12 +1096,13 @@ def _sync_creative_storage_records(
         return
 
     try:
-        supabase_client.table("creative_storage").upsert(
+        # Upsert to ads table instead of creative_storage
+        supabase_client.table("ads").upsert(
             updates,
-            on_conflict="creative_id",
+            on_conflict="ad_id",
         ).execute()
     except Exception as exc:
-        logger.debug(f"Failed to upsert creative storage records: {exc}")
+        logger.debug(f"Failed to upsert ads records: {exc}")
 
 
 def _sync_performance_metrics_records(
@@ -1177,9 +1210,10 @@ def _sync_performance_metrics_records(
         return
 
     try:
+        # Upsert with correct unique constraint (stage column removed from schema)
         supabase_client.table("performance_metrics").upsert(
             upserts,
-            on_conflict="ad_id,stage,window_type,date_start",
+            on_conflict="ad_id,window_type,date_start",
         ).execute()
     except ValidationError as exc:
         logger.error("Performance metrics upsert blocked: %s", exc)
@@ -2263,7 +2297,7 @@ def _create_creative_and_ad(
             logger.info(f"Successfully created ad with ad_id={ad_id}")
             existing_creative_ids.add(str(meta_creative_id))
             
-            # Update creative_intelligence with Supabase Storage URL and Meta creative ID
+            # Update ads table with Supabase Storage URL and Meta creative ID
             try:
                 from infrastructure.supabase_storage import get_validated_supabase_client, SupabaseStorage
                 supabase_client = get_validated_supabase_client()
@@ -2327,9 +2361,10 @@ def _create_creative_and_ad(
                     except Exception as opt_error:
                         logger.debug(f"Failed to calculate metrics: {opt_error}")
                     
-                    supabase_client.table("creative_intelligence").upsert(
+                    # Update ads table instead of creative_intelligence
+                    supabase_client.table("ads").upsert(
                         creative_intel_data,
-                        on_conflict="creative_id,ad_id"
+                        on_conflict="ad_id"
                     ).execute()
                     
                     # Schedule async update for accurate metrics
@@ -2340,7 +2375,7 @@ def _create_creative_and_ad(
                     except Exception:
                         pass  # Non-critical
             except Exception as e:
-                logger.warning(f"Failed to update creative_intelligence with storage URL: {e}")
+                logger.warning(f"Failed to update ads table with storage URL: {e}")
             
             # Track in ML system
             if ml_system:
@@ -2485,12 +2520,14 @@ def ensure_asc_plus_campaign(
         }
         
         # Create adset with Advantage+ placements
-        adset_name = "[ASC+] US Men"
+        # ATC optimization - teaching pixel buyer intent patterns (30-day learning phase)
+        adset_name = "[ASC+] US Men ATC"
+        optimization_goal = cfg(asc_config, "optimization_goal") or "ADD_TO_CART"
         adset = client.ensure_adset(
             campaign_id=campaign_id,
             name=adset_name,
             daily_budget=daily_budget,
-            optimization_goal="OFFSITE_CONVERSIONS",
+            optimization_goal=optimization_goal,  # ADD_TO_CART for 30-day learning phase
             billing_event="IMPRESSIONS",
             bid_strategy="LOWEST_COST_WITHOUT_CAP",
             targeting=targeting,
@@ -2503,27 +2540,24 @@ def ensure_asc_plus_campaign(
             notify("❌ Failed to create ASC+ adset")
             return None, None
         
-        # Verify budget was set correctly and ensure it's at least base budget
-        base_budget = 50.0
+        # Verify budget was set correctly - enforce fixed €100/day budget (no scaling during 30-day ATC learning phase)
+        fixed_budget = 100.0  # Fixed budget for 30-day ATC learning phase
         try:
             adset_budget = client.get_adset_budget(adset_id)
             if adset_budget:
-                # If existing adset has budget below base, restore to base
-                if adset_budget < base_budget:
-                    logger.info(f"Restoring adset budget from €{adset_budget:.2f} to base €{base_budget:.2f}")
+                # Always enforce fixed budget - no scaling during learning phase
+                if abs(adset_budget - fixed_budget) > 0.01:
+                    logger.info(f"Enforcing fixed budget: €{adset_budget:.2f} -> €{fixed_budget:.2f}/day (30-day ATC learning phase)")
                     try:
                         client.update_adset_budget(
                             adset_id=adset_id,
-                            daily_budget=base_budget,
+                            daily_budget=fixed_budget,
                             current_budget=adset_budget,
                         )
-                        notify(f"✅ Restored adset budget to base: €{base_budget:.2f}/day")
-                        adset_budget = base_budget
+                        notify(f"✅ Fixed budget enforced: €{fixed_budget:.2f}/day (no scaling during learning phase)")
+                        adset_budget = fixed_budget
                     except Exception as e:
-                        logger.warning(f"Failed to restore base budget: {e}")
-                elif abs(adset_budget - daily_budget) > 0.01:
-                    # Budget mismatch but above base - log but don't change (might be scaled)
-                    logger.debug(f"Budget mismatch: requested €{daily_budget:.2f}, got €{adset_budget:.2f} (may be scaled)")
+                        logger.warning(f"Failed to enforce fixed budget: {e}")
         except Exception:
             pass
         
@@ -2884,11 +2918,11 @@ def _legacy_run_asc_plus_tick(
                                     creative_id = ad.get("creative_id") or ad_insight.get("creative_id")
                                 
                                 if creative_id:
-                                    # Try to find storage_creative_id from creative_intelligence
+                                    # Try to find storage_creative_id from ads table
                                     try:
-                                        ci_result = supabase_client.table("creative_intelligence").select(
+                                        ci_result = supabase_client.table("ads").select(
                                             "metadata"
-                                        ).eq("creative_id", str(creative_id)).execute()
+                                        ).eq("creative_id", str(creative_id)).limit(1).execute()
                                         if ci_result.data and len(ci_result.data) > 0:
                                             metadata = ci_result.data[0].get("metadata", {})
                                             storage_creative_id = metadata.get("storage_creative_id")
@@ -2913,7 +2947,7 @@ def _legacy_run_asc_plus_tick(
                 if not isinstance(meta, dict):
                     continue
                 try:
-                    supabase_lock_client.table("ad_lifecycle").update({"metadata": meta}).eq("ad_id", meta_ad_id).eq("stage", "asc_plus").execute()
+                    supabase_lock_client.table("ads").update({"metadata": meta}).eq("ad_id", meta_ad_id).execute()
                 except Exception as exc:
                     logger.debug(f"Failed to persist lock metadata for {meta_ad_id}: {exc}")
         
@@ -3503,25 +3537,6 @@ def _legacy_run_asc_plus_tick(
             elif final_active_count >= target_count:
                 notify(f"✅ Target reached: {final_active_count} active creatives")
             
-            # Optimize ML tables data - ensure all performance metrics are correct
-            try:
-                from infrastructure.data_optimizer import create_ml_data_optimizer
-                from infrastructure.supabase_storage import get_validated_supabase_client
-                
-                supabase_client = get_validated_supabase_client()
-                if supabase_client:
-                    optimizer = create_ml_data_optimizer(supabase_client)
-                    # Run optimization (non-blocking, will update metrics in background)
-                    try:
-                        optimizer.optimize_all_tables(stage='asc_plus', force_recalculate=False)
-                        logger.info("✅ ML tables optimized")
-                    except Exception as opt_error:
-                        logger.debug(f"Table optimization error (non-critical): {opt_error}")
-            except ImportError:
-                pass  # Optimizer not available
-            except Exception as e:
-                logger.debug(f"ML table optimization failed (non-critical): {e}")
-            
             # Cleanup unused and killed creatives from storage
             try:
                 from infrastructure.creative_storage import create_creative_storage_manager
@@ -3540,8 +3555,14 @@ def _legacy_run_asc_plus_tick(
             except Exception as e:
                 logger.warning(f"Failed to cleanup creatives from storage: {e}")
             
-            # Budget scaling - check if budget should be adjusted
-            if OPTIMIZATION_SYSTEMS_AVAILABLE:
+            # Budget scaling - DISABLED during 30-day ATC learning phase
+            # Budget is fixed at €100/day - no scaling, no optimization switching
+            scaling_config = cfg(settings, "asc_plus.scaling") or {}
+            scaling_enabled = scaling_config.get("enabled", False)  # Default to False for ATC learning phase
+            
+            if scaling_enabled and OPTIMIZATION_SYSTEMS_AVAILABLE:
+                logger.warning("⚠️ Budget scaling is enabled but should be disabled during 30-day ATC learning phase")
+                # Keep scaling code but it won't run if scaling_enabled is False
                 try:
                     from infrastructure.supabase_storage import get_validated_supabase_client
                     supabase_client = get_validated_supabase_client()
@@ -3562,24 +3583,21 @@ def _legacy_run_asc_plus_tick(
                                 })
                         
                         if len(performance_data) >= 3:
-                            # Get scaling configuration
-                            scaling_config = cfg(settings, "asc_plus.scaling") or {}
-                            scaling_enabled = scaling_config.get("enabled", True)
                             min_confidence = scaling_config.get("min_confidence", 0.75)
                             min_roas_for_scale = scaling_config.get("min_roas_for_scale", 1.5)
                             min_purchases_for_scale = scaling_config.get("min_purchases_for_scale", 5)
                             scale_up_threshold_pct = scaling_config.get("scale_up_threshold_pct", 20)
                             
                             if not scaling_enabled:
-                                logger.debug("Budget scaling disabled in config")
+                                logger.debug("Budget scaling disabled - fixed €100/day during 30-day ATC learning phase")
                             else:
                                 budget_engine = create_budget_scaling_engine()
-                                current_budget = cfg_or_env_f(cfg(settings, "asc_plus") or {}, "daily_budget_eur", "ASC_PLUS_BUDGET", 50.0)
+                                current_budget = cfg_or_env_f(cfg(settings, "asc_plus") or {}, "daily_budget_eur", "ASC_PLUS_BUDGET", 100.0)
                                 # Ensure current_budget is a float (cfg_or_env_f might return string)
                                 try:
-                                    current_budget = float(current_budget) if current_budget is not None else 50.0
+                                    current_budget = float(current_budget) if current_budget is not None else 100.0
                                 except (ValueError, TypeError):
-                                    current_budget = 50.0
+                                    current_budget = 100.0
                                 
                                 # Calculate aggregate performance metrics
                                 total_spend = sum(p.get("spend", 0) for p in performance_data)
@@ -3587,8 +3605,9 @@ def _legacy_run_asc_plus_tick(
                                 total_purchases = sum(p.get("purchases", 0) for p in performance_data)
                                 avg_roas = total_revenue / total_spend if total_spend > 0 else 0.0
                                 
-                                # Check if ready to scale (only scale up from €50 base budget)
-                                base_budget = 50.0
+                                # Check if ready to scale (only scale up from €100 base budget)
+                                # NOTE: Budget scaling is DISABLED during 30-day ATC learning phase
+                                base_budget = 100.0
                                 ready_to_scale = (
                                     current_budget <= base_budget and  # Only scale if at or below base budget
                                     avg_roas >= min_roas_for_scale and  # Minimum ROAS threshold

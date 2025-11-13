@@ -50,7 +50,7 @@ class RetryConfig:
 class CircuitBreaker:
     """Circuit breaker pattern for API calls."""
     
-    def __init__(self, name: str, config: CircuitBreakerConfig = None):
+    def __init__(self, name: str, config: Optional[CircuitBreakerConfig] = None) -> None:
         self.name = name
         self.config = config or CircuitBreakerConfig()
         self.state = CircuitState.CLOSED
@@ -122,7 +122,7 @@ class CircuitBreaker:
 class RetryHandler:
     """Retry logic with exponential backoff."""
     
-    def __init__(self, config: RetryConfig = None):
+    def __init__(self, config: Optional[RetryConfig] = None) -> None:
         self.config = config or RetryConfig()
     
     def execute(self, func: Callable[..., T], *args, **kwargs) -> T:
@@ -192,10 +192,10 @@ def retry_with_backoff(
 class CircuitBreakerManager:
     """Manages multiple circuit breakers."""
     
-    def __init__(self):
+    def __init__(self) -> None:
         self.breakers: Dict[str, CircuitBreaker] = {}
     
-    def get_breaker(self, name: str, config: CircuitBreakerConfig = None) -> CircuitBreaker:
+    def get_breaker(self, name: str, config: Optional[CircuitBreakerConfig] = None) -> CircuitBreaker:
         """Get or create a circuit breaker."""
         if name not in self.breakers:
             self.breakers[name] = CircuitBreaker(name, config)

@@ -68,13 +68,13 @@ class IndexRecommendation:
 class DatabaseOptimizer:
     """Database optimization and maintenance system."""
     
-    def __init__(self, supabase_client):
+    def __init__(self, supabase_client: Any) -> None:
         self.client = supabase_client
         self.archival_rules: List[ArchivalRule] = []
         self.last_optimization: Optional[datetime] = None
-        self.optimization_interval_hours = 24  # Run daily
+        self.optimization_interval_hours: int = 24  # Run daily
     
-    def add_archival_rule(self, rule: ArchivalRule):
+    def add_archival_rule(self, rule: ArchivalRule) -> None:
         """Add an archival rule."""
         self.archival_rules.append(rule)
         logger.info(f"Added archival rule for {rule.table_name}: archive after {rule.archive_after_days} days")
@@ -165,16 +165,7 @@ class DatabaseOptimizer:
                     priority=6,
                 ),
             ],
-            "ml_predictions": [
-                IndexRecommendation(
-                    table_name="ml_predictions",
-                    column_names=["ad_id", "predicted_at"],
-                    index_type="btree",
-                    reason="Time-series queries",
-                    estimated_improvement="High",
-                    priority=8,
-                ),
-            ],
+            # Removed: ml_predictions table recommendations (table no longer used)
             "creative_storage": [
                 IndexRecommendation(
                     table_name="creative_storage",
@@ -354,7 +345,7 @@ class DatabaseOptimizer:
             "performance_metrics",
             "ad_lifecycle",
             "creative_intelligence",
-            "ml_predictions",
+            # Removed: ml_predictions (table no longer used)
             "creative_storage",
         ]
         
@@ -743,19 +734,7 @@ def create_db_optimizer(supabase_client) -> DatabaseOptimizer:
         condition_column="created_at",
     ))
     
-    optimizer.add_archival_rule(ArchivalRule(
-        table_name="time_series_data",
-        archive_after_days=60,
-        archive_to_table=None,
-        condition_column="timestamp",
-    ))
-    
-    optimizer.add_archival_rule(ArchivalRule(
-        table_name="learning_events",
-        archive_after_days=180,
-        archive_to_table=None,
-        condition_column="timestamp",
-    ))
+    # Removed: time_series_data and learning_events archival rules (tables no longer used)
     
     return optimizer
 

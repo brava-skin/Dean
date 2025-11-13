@@ -20,8 +20,8 @@ copy_bank:
 # Campaign & AdSet IDs (root level for backward compatibility)
 # Single ASC+ Campaign Setup
 ids:
-  asc_plus_campaign_id: "120233669753230160"  # ASC+ Campaign ID
-  asc_plus_adset_id: "120233669753240160"    # ASC+ Ad Set ID
+  asc_plus_campaign_id: "120234137971970160"  # ASC+ Campaign ID
+  asc_plus_adset_id: "120234137971980160"    # ASC+ Ad Set ID
   # Legacy IDs removed - system now uses only ASC+ campaign
 
 # ── Meta API Defaults ────────────────────────────────
@@ -42,10 +42,12 @@ meta:
   
   audience:
     type: "broad"
+    country: "US"                           # United States only
     gender: "male"
     age_min: 18
     age_max: 54
-    # No interests, no exclusions
+    # No interests, no manual narrowing - pure broad targeting
+    # No exclusions - allowing pixel to learn naturally
   
   creative:
     dynamic_creative: false
@@ -66,11 +68,11 @@ placements:
 
 # ── ASC+ Campaign Configuration (lint baseline; production overrides detailed settings) ──
 asc_plus:
-  daily_budget_eur: 50
+  daily_budget_eur: 100                    # Fixed €100/day for 30-day ATC learning phase
   keep_ads_live: 10
   max_active_ads: 10
   target_active_ads: 10
-  optimization_goal: "PURCHASE"
+  optimization_goal: "ADD_TO_CART"         # ATC optimization - teaching pixel buyer intent patterns
   naming_prefix: "[ASC+]"
 
 # Scheduler cadence aligns with Andromeda requirement (10 creatives, 30-minute checks)

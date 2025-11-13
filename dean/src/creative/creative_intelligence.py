@@ -40,7 +40,7 @@ except ImportError:
     VALIDATED_SUPABASE_AVAILABLE = False
 
 from infrastructure.data_validation import validate_and_sanitize_data, ValidationError
-from config.constants import CREATIVE_PERFORMANCE_STAGE_VALUE
+from config import CREATIVE_PERFORMANCE_STAGE_VALUE
 
 
 CREATIVE_PERFORMANCE_STAGE_DISABLED = False
@@ -78,7 +78,12 @@ class CreativeInsight:
 class CreativeIntelligenceSystem:
     """Advanced creative intelligence system with ML and AI capabilities."""
     
-    def __init__(self, supabase_client=None, openai_api_key=None, settings=None):
+    def __init__(
+        self, 
+        supabase_client: Optional[Any] = None, 
+        openai_api_key: Optional[str] = None, 
+        settings: Optional[Dict[str, Any]] = None
+    ) -> None:
         self.supabase_client = supabase_client
         self.openai_api_key = openai_api_key
         self.settings = settings or {}

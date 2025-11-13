@@ -57,7 +57,7 @@ SIGNED_URL_VALIDITY_SECONDS = 600  # 10 minutes
 class FluxClient:
     """Client for FLUX.1 Kontext API image generation with credit management."""
     
-    def __init__(self, api_key: Optional[str] = None, check_credits: bool = True):
+    def __init__(self, api_key: Optional[str] = None, check_credits: bool = True) -> None:
         # Validate API key (lazy check - only when client is actually created)
         self.api_key = api_key or FLUX_API_KEY
         if not self.api_key:
@@ -67,9 +67,9 @@ class FluxClient:
         self.credits_url = FLUX_CREDITS_URL
         self.check_credits = check_credits
         self._cached_credits: Optional[float] = None
-        self._credits_cache_time: float = 0
-        from config.constants import FLUX_CREDITS_CACHE_TTL_SECONDS
-        self._credits_cache_ttl: float = FLUX_CREDITS_CACHE_TTL_SECONDS
+        self._credits_cache_time: float = 0.0
+        from config import FLUX_CREDITS_CACHE_TTL_SECONDS
+        self._credits_cache_ttl: float = float(FLUX_CREDITS_CACHE_TTL_SECONDS)
     
     def create_image(
         self,

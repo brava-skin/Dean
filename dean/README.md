@@ -1,152 +1,325 @@
-# 🤖 Dean - ML-Enhanced Meta Ads Automation
+# 🤖 Dean - Enterprise Meta Ads Automation
 
-Dean is a production-ready automation system for Meta Advantage+ Shopping campaigns. The runner combines deterministic guardrails with a deep ML stack that learns from Supabase-hosted performance data, refreshes creatives, and keeps humans in the loop via Slack.
+Dean is a production-ready automation system for Meta Advantage+ Shopping campaigns. The system combines rule-based automation with a creative engine for intelligent ad management.
 
 ## 🚀 Core Capabilities
 
-- **Automation Runner** – `src/main.py` orchestrates Advantage+ campaign checks, applies safety guardrails, and coordinates Slack reporting.
-- **Unified ML Pipeline** – `ml/ml_pipeline.py`, `ml/ml_intelligence.py`, and `ml/ml_decision_engine.py` handle training, caching, inference, and explainable kill/promote/scale decisions.
-- **Advanced Enhancements** – `ml/ml_enhancements.py` & `ml/ml_advanced_features.py` add validation, anomaly detection, reinforcement learning, LSTM forecasting, SHAP explainability, and portfolio/budget optimisation.
-- **Creative Intelligence** – `creative/image_generator.py`, `creative/advanced_creative.py`, and `ml/creative_pipeline.py` generate and score new assets using Flux + template libraries.
-- **Analytics & Monitoring** – `analytics/performance_tracking.py`, `analytics/table_monitoring.py`, and `ml/ml_monitoring.py` track fatigue, health, and table integrity.
-- **Infrastructure & Integrations** – Supabase storage (`infrastructure/supabase_storage.py`, `data_validation.py`, `transactions.py`), Meta & Flux API clients (`integrations/meta_client.py`, `integrations/flux_client.py`), Slack alerts, caching, scheduling, and rate-limit protection.
+- **Rule-Based Automation** – Threshold-based decision making for ad management
+- **Creative Engine** – AI-powered creative generation using Flux and OpenAI
+- **ASC+ Campaign Management** – Automated Advantage+ Shopping Campaign optimization
+- **Performance Tracking** – Comprehensive metrics collection and analysis
+- **Auto-Refill Logic** – Automatic creative generation when active count drops
+- **Slack Integration** – Real-time notifications and alerts
+
+## 📋 Requirements
+
+- Python 3.9+
+- ffmpeg (system binary, not Python package)
+- Meta Ads API credentials
+- Supabase account
+- OpenAI API key (for creative prompts)
+- Flux API key (for image generation)
+
+## 🛠️ Installation
+
+1. **Clone the repository:**
+   ```bash
+   git clone <repository-url>
+   cd dean
+   ```
+
+2. **Create virtual environment:**
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+
+3. **Install dependencies:**
+   ```bash
+   make install
+   # or
+   pip install -r requirements.txt
+   ```
+
+4. **Install ffmpeg:**
+   ```bash
+   # macOS
+   brew install ffmpeg
+   
+   # Linux
+   sudo apt-get install ffmpeg
+   ```
+
+5. **Configure environment:**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your credentials
+   ```
+
+## 🏃 Running
+
+**Run Dean automation:**
+```bash
+make run
+# or
+python src/main.py
+```
+
+**Run with options:**
+```bash
+python src/main.py --stage asc_plus --dry-run
+```
+
+## 📁 Project Structure
+
+```
+dean/
+├── src/                    # Source code
+│   ├── main.py            # Entry point
+│   ├── config.py          # Configuration constants
+│   ├── stages/            # Campaign stages
+│   │   └── asc_plus.py    # ASC+ campaign logic
+│   ├── rules/             # Business rules
+│   │   └── rules.py       # Rule engine
+│   ├── creative/          # Creative services
+│   │   ├── image_generator.py
+│   │   ├── creative_intelligence.py
+│   │   └── advanced_creative.py
+│   ├── integrations/      # External integrations
+│   │   ├── meta_client.py # Meta API
+│   │   ├── flux_client.py # Flux API
+│   │   └── slack.py       # Slack notifications
+│   ├── infrastructure/    # Infrastructure layer
+│   │   ├── storage.py     # Data storage
+│   │   ├── caching.py     # Caching
+│   │   ├── scheduler.py   # Task scheduling
+│   │   ├── error_handling.py
+│   │   ├── health_check.py
+│   │   ├── optimization.py
+│   │   ├── rate_limit_manager.py
+│   │   ├── supabase_storage.py
+│   │   ├── data_validation.py
+│   │   ├── data_optimizer.py
+│   │   ├── creative_storage.py
+│   │   └── utils.py        # Utilities
+│   └── analytics/         # Analytics
+│       └── metrics.py     # Metrics collection
+├── config/                # Configuration files
+│   ├── production.yaml
+│   ├── rules.yaml
+│   └── settings.yaml
+├── data/                  # Runtime data
+├── scripts/               # Utility scripts
+├── tests/                 # Test suite
+│   ├── unit/
+│   └── integration/
+├── requirements.txt       # Dependencies
+├── setup.py               # Package setup
+├── pyproject.toml          # Modern Python config
+└── Makefile              # Build automation
+```
 
 ## 🏗️ System Architecture
 
 ```
-┌───────────────────────────────────────────────┐
-│            Advantage+ Shopping Ads            │
-└──────────────────────────────┬────────────────┘
-                               │ Graph API
-                               ↓
-┌───────────────────────────────────────────────┐
-│          Automation & Decision Layer           │
-│  • Runner & scheduler (`src/main.py`)          │
-│  • ASC+ stage logic (`stages/asc_plus.py`)     │
-│  • Slack insights (`integrations/slack.py`)    │
-└──────────────┬──────────────┬─────────────────┘
-               │              │
-               │              │
-        ┌──────▼──────┐ ┌─────▼─────┐
-        │ ML Pipeline │ │ Creative  │
-        │ (`ml/*`)    │ │ Engine    │
-        └──────┬──────┘ └─────┬─────┘
-               │              │
-               ▼              ▼
-        ┌────────────────────────────┐
-        │   Supabase Data Backbone   │
-        │ performance_metrics,       │
-        │ ad_lifecycle, time_series, │
-        │ creative_intelligence, ... │
-        └────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                    Entry Point                           │
+│                  src/main.py (CLI)                       │
+└──────────────────────┬────────────────────────────────────┘
+                       │
+        ┌──────────────┼──────────────┐
+        │              │              │
+        ▼              ▼              ▼
+┌──────────────┐ ┌──────────┐ ┌──────────────┐
+│   Stages     │ │  Rules   │ │  Creative   │
+│  (ASC+)      │ │  Engine  │ │  Engine     │
+└──────┬───────┘ └────┬─────┘ └──────┬──────┘
+       │              │               │
+       └──────────────┼───────────────┘
+                     │
+        ┌────────────┼────────────┐
+        │            │            │
+        ▼            ▼            ▼
+┌─────────────┐ ┌──────────┐ ┌─────────────┐
+│ Integrations│ │Infrastructure│ Analytics │
+│  (Meta,     │ │ (Storage,   │ (Metrics)  │
+│   Flux,     │ │  Caching,   │            │
+│   Slack)    │ │  Utils)     │            │
+└─────────────┘ └──────────┘ └─────────────┘
 ```
 
-## 🆕 Recent Updates (November 2025)
+### Core Components
 
-- **ASC+ First Class Citizen** – `stages/asc_plus.py` consolidates rule logic, ML feedback, creative refresh, and lifecycle logging for a five-creative Advantage+ stack.
-- **ML Reliability Hardening** – `ml/ml_pipeline.py` gained retry/backoff, execution telemetry, creative similarity cold starts, and weekly validation via `ModelValidator`.
-- **Creative Automation Revamp** – Flux-powered generator + template libraries now run through `ml/advanced_system.py` for DNA analysis, variant testing, and self-healing refresh strategies.
-- **Analytics Layer Expansion** – `analytics/performance_tracking.py` & `ml/ml_monitoring.py` capture fatigue velocity, momentum, and table health, feeding Slack learning summaries.
-- **Infrastructure Safeguards** – `infrastructure/data_validation.py`, `rate_limit_manager.py`, `performance_optimization.py`, and `transactions.py` protect writes, Supabase quotas, and long-running jobs.
+1. **Entry Point** (`src/main.py`) - Orchestrates automation cycle, manages configuration, coordinates stage execution
+2. **Stages** (`src/stages/`) - ASC+ campaign management with rule application, creative generation, and auto-refill
+3. **Rules Engine** (`src/rules/`) - Business rule evaluation, threshold-based decisions, kill/promote/scale logic
+4. **Creative Engine** (`src/creative/`) - Image generation via Flux, prompt engineering via OpenAI, performance tracking
+5. **Integrations** (`src/integrations/`) - Meta Ads API, Flux API, Slack notifications
+6. **Infrastructure** (`src/infrastructure/`) - Storage, caching, scheduling, error handling, health checks, rate limiting
+7. **Analytics** (`src/analytics/`) - Metrics collection, performance tracking, data validation
 
-## ⚙️ Quick Start
+### Data Flow
 
-1. **Install**
-   ```bash
-   git clone https://github.com/YOUR_USERNAME/Dean.git
-   cd Dean/dean
-   pip install -r requirements.txt
-   ```
-2. **Configure environment**
-   ```bash
-   cp .env.example .env  # create manually if missing
-   ```
-   Required keys: `FB_APP_ID`, `FB_APP_SECRET`, `FB_ACCESS_TOKEN`, `FB_AD_ACCOUNT_ID`, `FB_PIXEL_ID`, `FB_PAGE_ID`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SLACK_WEBHOOK_URL`, `STORE_URL`.
-3. **Set campaign & guardrails**  
-   Edit `config/settings.yaml` (campaign IDs, budgets) and `config/rules.yaml` (CPA/ROAS thresholds).
-4. **Provision Supabase tables**  
-   Use the schema in `models/registry/` or copy the definitions from the Supabase dashboard exports referenced in the modules.
-5. **Run**
-   ```bash
-   python src/main.py --profile production        # live
-   python src/main.py --dry-run                   # inspect decisions
-   python src/main.py --no-ml                     # legacy rule mode
-   python src/main.py --explain                   # include reasoning
-   ```
+1. Configuration Loading → Load YAML configs and environment variables
+2. Client Initialization → Initialize Meta, Flux, and Supabase clients
+3. Stage Execution → Run ASC+ stage logic
+4. Rule Evaluation → Apply business rules to ad performance
+5. Creative Generation → Generate new creatives when needed
+6. Data Storage → Store performance metrics in Supabase
+7. Reporting → Send Slack notifications and generate reports
 
-## 🔍 Key Modules
+## 🧪 Development
 
-| Location | Purpose |
-| --- | --- |
-| `src/main.py` | Main automation runner, scheduler management, Slack reporting. |
-| `src/stages/asc_plus.py` | Single-stage Advantage+ campaign handler with ML-aware guardrails. |
-| `src/ml/ml_pipeline.py` | Orchestrates ML intelligence, anomaly checks, validation, and decision output. |
-| `src/ml/ml_enhancements.py` | Model validation, data readiness tracking, anomaly detection, forecasting, similarity, causal analysis. |
-| `src/ml/ml_advanced_features.py` | Reinforcement learning agent, LSTM predictor, SHAP explainability, portfolio optimisation, seasonal tuning. |
-| `src/ml/advanced_system.py` | Aggregates creative DNA, variant testing, prompt evolution, budget optimisation, and self-healing automation. |
-| `src/creative/image_generator.py` | Flux-powered static creative generator with prompt engineering safeguards. |
-| `src/analytics/performance_tracking.py` | Fatigue detection, decay modelling, Supabase persistence. |
-| `src/infrastructure/*` | Validation, caching, optimisation, rate limiting, Supabase storage, background jobs. |
-| `src/integrations/*` | Meta Graph API, Flux API, Slack notifications, formatting helpers. |
+**Install development dependencies:**
+```bash
+make install-dev
+```
 
-## 📡 Automation Loop
+**Run tests:**
+```bash
+make test
+# or
+pytest tests/ --cov=src --cov-report=html
+```
 
-1. Pull Meta insights for active Advantage+ ads.
-2. Normalise metrics, sync lifecycle data, and append daily digests.
-3. Run ML pipeline: detect anomalies, score performance, predict future outcomes, validate models, and assemble reasoning.
-4. Apply ASC+ guardrails with ML overrides where confident; queue kills/promotes/scales.
-5. Refresh creatives when fatigue or health signals require new assets.
-6. Persist metrics, predictions, and creative intelligence to Supabase.
-7. Push Slack updates with status, confidence, anomalies, and learning progress.
+**Format code:**
+```bash
+make format
+# or
+black src/ tests/
+```
 
-## 🧠 ML Insights
+**Lint code:**
+```bash
+make lint
+# or
+mypy src/
+ruff check src/
+```
 
-- **Confidence & Explainability** – Ensemble variance + SHAP (`ml/ml_advanced_features.py`) surface why a decision was made.
-- **Time-Series Forecasting** – `ml/time_series_forecast.py` and LSTM predictors estimate CPA/ROAS trajectories.
-- **Cold Start Strategy** – `CreativeSimilarityAnalyzer` scores new ads based on embeddings from proven winners.
-- **Self-Healing** – `ml/auto_optimization.py` and `performance_adaptation.py` adjust thresholds and retry failed operations without manual intervention.
+**Clean build artifacts:**
+```bash
+make clean
+```
 
-## 🗃 Supabase Data Contract
+### Adding New Features
 
-- `performance_metrics`, `time_series_data`, `fatigue_analysis`, `performance_decay` – used by analytics layer.
-- `ad_lifecycle`, `ad_creation_times`, `creative_intelligence`, `ml_predictions`, `ml_models`, `model_validations` – consumed by ML pipeline and Slack digests.
-- `models/registry/` contains reference exports; each write is validated through `infrastructure/data_validation.py` and `transactions.py`.
+1. **New Stage:** Create file in `src/stages/`, implement stage function, add to main.py
+2. **New Rule:** Extend `src/rules/rules.py`, add rule configuration to `config/rules.yaml`
+3. **New Integration:** Create client in `src/integrations/`, add to `__init__.py` exports
+4. **New Infrastructure:** Add module to `src/infrastructure/`, export from `__init__.py`
 
-## 🔔 Monitoring & Alerts
+### Code Style
 
-- Slack notifications: run summaries, kill/promote alerts, budget warnings, and ML learning status (`integrations/slack.py`).
-- Health checks: Supabase latency, rate limits, cache saturation (`infrastructure/health_check.py`, `rate_limit_manager.py`).
-- Table watchdogs: `analytics/table_monitoring.py` raises alarms on missing rows or schema drift.
+- Follow PEP 8
+- Use type hints
+- Add docstrings for public APIs
+- Keep functions focused and small
+- Use dataclasses where appropriate
 
-## 🧪 Troubleshooting
+## 🔧 Configuration
 
-- **“ML system not available”** – ensure Supabase credentials and optional dependencies (xgboost, torch, shap, featuretools) are installed.
-- **Timezone or date parsing errors** – `infrastructure/data_validation.py` normalises timestamps; confirm Meta account timezone via `ACCOUNT_TZ`.
-- **Supabase rate limits** – batch writes through `infrastructure/transactions.py` and enable caching in `infrastructure/caching.py`.
-- **Creative generation failures** – check Flux API keys and file quotas in `creative/image_generator.py`; fall back to templates when Flux unavailable.
-- Use `python src/main.py --dry-run --explain` for verbose reasoning and anomaly diagnostics.
+Configuration is managed through YAML files in `config/`:
 
-## 📦 Deployment
+- `production.yaml` - Production settings
+- `rules.yaml` - Business rules and thresholds
+- `settings.yaml` - General settings
 
-- **GitHub Actions** – schedule hourly runs with secrets for Meta, Supabase, Slack.
-- **VPS / cron** – run every 30–60 minutes, rotating logs and using screen/tmux if background mode unavailable.
-- **Background scheduler** – `infrastructure/scheduler.py` can keep the process alive locally; remember to stop it via `stop_background_scheduler()` on exit.
+Environment variables override YAML configuration. See `.env.example` for available options.
 
-## 📚 Requirements
+### Required Environment Variables
 
-- Python 3.9+ (3.13 tested via bundled `venv/`)
-- Core packages: `xgboost`, `scikit-learn`, `pandas`, `numpy`, `torch` (optional), `optuna`, `featuretools`, `supabase`, `slack_sdk`
-- Hardware: 1 vCPU / 1GB RAM recommended for hourly runs with ML enabled.
+- `FB_APP_ID`, `FB_APP_SECRET`, `FB_ACCESS_TOKEN`, `FB_AD_ACCOUNT_ID`
+- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_TABLE`
+- `OPENAI_API_KEY`, `FLUX_API_KEY`
+- `SLACK_WEBHOOK_URL`
+- `BREAKEVEN_CPA`, `COGS_PER_PURCHASE`, `USD_EUR_RATE`
+
+## 🚀 Deployment
+
+### Production Deployment
+
+1. Set up virtual environment and install dependencies
+2. Configure all environment variables
+3. Verify configuration: `python src/main.py --dry-run`
+4. Run in production: `python src/main.py`
+
+### GitHub Actions
+
+The project includes a GitHub Actions workflow (`.github/workflows/dean-automation.yml`) that runs Dean on a schedule.
+
+**Setup:**
+1. Set up GitHub Secrets with all required environment variables
+2. Update workflow file to set `AUTOMATION_PAUSED: "false"`
+3. Workflow runs every 30 minutes by default
+
+### Docker Deployment (Optional)
+
+```dockerfile
+FROM python:3.11-slim
+
+# Install ffmpeg
+RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy requirements and install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Run Dean
+CMD ["python", "src/main.py"]
+```
+
+Build and run:
+```bash
+docker build -t dean .
+docker run --env-file .env dean
+```
+
+## 🔍 Troubleshooting
+
+### Common Issues
+
+1. **ffmpeg not found:**
+   - Install ffmpeg system package
+   - Verify PATH includes ffmpeg
+
+2. **API rate limits:**
+   - Check rate limit configuration
+   - Review `META_REQUEST_DELAY` setting
+
+3. **Supabase connection errors:**
+   - Verify credentials
+   - Check network connectivity
+   - Review Supabase logs
+
+4. **Creative generation failures:**
+   - Verify Flux API key
+   - Check OpenAI API key
+   - Review API quotas
+
+## 🔐 Security
+
+- Never commit `.env` files
+- Use environment variables for sensitive data
+- Rotate API keys regularly
+- Review Supabase RLS policies
+
+## 📝 License
+
+MIT License
 
 ## 🤝 Contributing
 
-Dean ships as a turnkey system—fork and tailor rules, creatives, and ML components for your account. Please follow:
+1. Create a feature branch
+2. Make your changes
+3. Run tests and linting
+4. Submit a pull request
 
-- Type hints + docstrings for new modules.
-- Defensive error handling (no bare excepts).
-- Validation on all external data writes.
-- Update this README when introducing new subsystems.
+## 📞 Support
 
----
-
-**Dean** — self-learning Meta Advantage+ automation with auditable ML decisions and automated creative refresh.
+For issues and questions, please open an issue in the repository.

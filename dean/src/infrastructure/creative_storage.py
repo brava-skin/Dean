@@ -126,54 +126,44 @@ class CreativeStorageManager:
                 logger.error(f"Failed to get public URL for creative {creative_id}")
                 return None
             
-            # Store metadata in creative_storage table
-            # Status: "queue" when first uploaded, "active" when used in campaign, "killed" when ad is killed
-            # Enhanced metadata includes format, style, message_type, target_motivation, forecasts
-            enhanced_metadata = metadata or {}
-            
-            # Ensure enhanced metadata fields are included
-            if "format" not in enhanced_metadata:
-                enhanced_metadata["format"] = "static_image"
-            if "style" not in enhanced_metadata:
-                enhanced_metadata["style"] = ""
-            if "message_type" not in enhanced_metadata:
-                enhanced_metadata["message_type"] = ""
-            if "target_motivation" not in enhanced_metadata:
-                enhanced_metadata["target_motivation"] = ""
-            
-            storage_data = {
-                "creative_id": creative_id,
-                "ad_id": ad_id,
-                "storage_path": storage_path,
-                "storage_url": public_url,
-                "file_size_bytes": file_size,
-                "file_type": file_type,
-                "status": "queue",  # Start as "queue" - will be "active" when used in campaign
-                "last_used_at": datetime.now(timezone.utc).isoformat(),
-                "usage_count": 0,  # Will be incremented when used
-                "metadata": enhanced_metadata,  # Enhanced metadata with format, style, message_type, etc.
-            }
-            
-            try:
-                # Use data optimizer to ensure complete metadata
-                try:
-                    from infrastructure.data_optimizer import CreativeStorageOptimizer
-                    optimizer = CreativeStorageOptimizer(self.client)
-                    complete_metadata = optimizer.ensure_complete_metadata(creative_id, enhanced_metadata)
-                    storage_data["metadata"] = complete_metadata
-                except ImportError:
-                    pass  # Optimizer not available, use existing metadata
+            # Store metadata in ads table (consolidated from creative_storage)
+            # Note: ad_id is required for ads table, so we only store if ad_id exists
+            # If ad_id doesn't exist yet, the ad record will be created when the ad is created
+            if ad_id:
+                enhanced_metadata = metadata or {}
                 
-                self.client.table("creative_storage").upsert(
-                    storage_data,
-                    on_conflict="creative_id"
-                ).execute()
-                logger.info(f"✅ Uploaded creative {creative_id} to Supabase Storage")
-                return public_url
-            except Exception as e:
-                logger.error(f"Failed to record creative storage metadata: {e}")
-                # Still return URL even if metadata insert fails
-                return public_url
+                # Ensure enhanced metadata fields are included
+                if "format" not in enhanced_metadata:
+                    enhanced_metadata["format"] = "static_image"
+                if "style" not in enhanced_metadata:
+                    enhanced_metadata["style"] = ""
+                if "message_type" not in enhanced_metadata:
+                    enhanced_metadata["message_type"] = ""
+                if "target_motivation" not in enhanced_metadata:
+                    enhanced_metadata["target_motivation"] = ""
+                
+                # Update ads table with storage info
+                # If ad doesn't exist yet, it will be created when ad is created
+                storage_data = {
+                    "creative_id": creative_id,
+                    "storage_path": storage_path,
+                    "storage_url": public_url,
+                    "file_size_bytes": file_size,
+                    "file_type": file_type,
+                    "status": "active",  # Creative is active when uploaded (ad will be created)
+                    "metadata": enhanced_metadata,
+                }
+                
+                try:
+                    # Try to update existing ad record
+                    self.client.table("ads").update(storage_data).eq("ad_id", ad_id).execute()
+                    logger.debug(f"Updated ad {ad_id} with storage info for creative {creative_id}")
+                except Exception as e:
+                    # Ad might not exist yet - that's okay, it will be created when ad is created
+                    logger.debug(f"Ad {ad_id} not found yet (will be created later): {e}")
+            
+            logger.info(f"✅ Uploaded creative {creative_id} to Supabase Storage")
+            return public_url
                 
         except Exception as e:
             logger.error(f"Error uploading creative {creative_id}: {e}", exc_info=True)
@@ -182,7 +172,7 @@ class CreativeStorageManager:
     
     def mark_creative_killed(self, creative_id: str) -> bool:
         """
-        Mark a creative as killed in storage.
+        Mark a creative as killed - updates ads table.
         
         Args:
             creative_id: Creative ID to mark as killed
@@ -194,13 +184,15 @@ class CreativeStorageManager:
             if not self.client:
                 return False
             
-            # Update status in creative_storage table
-            self.client.table("creative_storage").update({
+            # Update status in ads table for all ads using this creative
+            now = datetime.now(timezone.utc).isoformat()
+            self.client.table("ads").update({
                 "status": "killed",
-                "killed_at": datetime.now(timezone.utc).isoformat(),
+                "killed_at": now,
+                "updated_at": now,
             }).eq("creative_id", creative_id).execute()
             
-            logger.info(f"✅ Marked creative {creative_id} as killed")
+            logger.info(f"✅ Marked ads with creative {creative_id} as killed")
             return True
             
         except Exception as e:
@@ -209,51 +201,24 @@ class CreativeStorageManager:
     
     def get_queued_creative(self) -> Optional[Dict[str, Any]]:
         """
-        Get the most recently created queued creative (FIFO - oldest first).
+        Get the most recently created queued creative - not applicable with new schema.
+        Creatives are now created when ads are created, so there's no queue.
         
         Returns:
-            Creative data dict with storage_url, creative_id, metadata, etc. or None if none available
+            None (queue concept removed with consolidated schema)
         """
-        try:
-            if not self.client:
-                return None
-            
-            # Get the oldest queued creative (FIFO)
-            result = self.client.table("creative_storage").select(
-                "creative_id, storage_url, storage_path, metadata, created_at"
-            ).eq("status", "queue").order("created_at", desc=False).limit(1).execute()
-            
-            if result.data and len(result.data) > 0:
-                creative = result.data[0]
-                logger.info(f"✅ Found queued creative: {creative.get('creative_id')}")
-                return creative
-            
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error getting queued creative: {e}")
-            return None
+        # With the new consolidated schema, creatives are created when ads are created
+        # There's no separate queue - ads are created directly
+        return None
     
     def get_queued_creative_count(self) -> int:
         """
-        Get count of queued creatives available for use.
+        Get count of queued creatives - not applicable with new schema.
         
         Returns:
-            Number of queued creatives
+            0 (queue concept removed)
         """
-        try:
-            if not self.client:
-                return 0
-            
-            result = self.client.table("creative_storage").select(
-                "creative_id", count="exact"
-            ).eq("status", "queue").execute()
-            
-            return result.count if hasattr(result, 'count') else len(result.data or [])
-            
-        except Exception as e:
-            logger.error(f"Error getting queued creative count: {e}")
-            return 0
+        return 0
     
     def should_pre_generate_creatives(self, target_count: int = 10, buffer_size: int = 3) -> bool:
         """
@@ -271,14 +236,13 @@ class CreativeStorageManager:
     
     def get_recently_created_creative(self, minutes_back: int = 5) -> Optional[Dict[str, Any]]:
         """
-        Get the most recently created creative (within last N minutes).
-        Used to find a creative that was just generated.
+        Get the most recently created ad/creative (within last N minutes).
         
         Args:
             minutes_back: How many minutes back to look (default 5)
             
         Returns:
-            Creative data dict or None if none found
+            Ad data dict with creative info or None if none found
         """
         try:
             if not self.client:
@@ -286,15 +250,22 @@ class CreativeStorageManager:
             
             cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=minutes_back)
             
-            # Get most recently created creative (any status, but prefer queue)
-            result = self.client.table("creative_storage").select(
-                "creative_id, storage_url, storage_path, metadata, status, created_at"
+            # Get most recently created ad
+            result = self.client.table("ads").select(
+                "ad_id, creative_id, storage_url, storage_path, metadata, status, created_at"
             ).gte("created_at", cutoff_time.isoformat()).order("created_at", desc=True).limit(1).execute()
             
             if result.data and len(result.data) > 0:
-                creative = result.data[0]
-                logger.info(f"✅ Found recently created creative: {creative.get('creative_id')} (status: {creative.get('status')})")
-                return creative
+                ad = result.data[0]
+                # Return in format expected by callers
+                return {
+                    "creative_id": ad.get("creative_id"),
+                    "storage_url": ad.get("storage_url"),
+                    "storage_path": ad.get("storage_path"),
+                    "metadata": ad.get("metadata", {}),
+                    "status": ad.get("status"),
+                    "created_at": ad.get("created_at"),
+                }
             
             return None
             
@@ -304,41 +275,27 @@ class CreativeStorageManager:
     
     def mark_creative_active(self, creative_id: str, ad_id: Optional[str] = None) -> bool:
         """
-        Mark a creative as active (used in campaign).
+        Mark a creative/ad as active (used in campaign).
         
         Args:
             creative_id: Creative ID to mark as active
-            ad_id: Optional ad ID associated with this creative
+            ad_id: Ad ID associated with this creative (required)
             
         Returns:
             True if successful, False otherwise
         """
         try:
-            if not self.client:
+            if not self.client or not ad_id:
                 return False
             
-            update_data = {
+            # Update ads table - mark ad as active
+            now = datetime.now(timezone.utc).isoformat()
+            self.client.table("ads").update({
                 "status": "active",
-                "last_used_at": datetime.now(timezone.utc).isoformat(),
-            }
+                "updated_at": now,
+            }).eq("ad_id", ad_id).eq("creative_id", creative_id).execute()
             
-            if ad_id:
-                update_data["ad_id"] = ad_id
-            
-            # Increment usage count
-            result = self.client.table("creative_storage").select("usage_count").eq(
-                "creative_id", creative_id
-            ).execute()
-            
-            if result.data:
-                current_count = result.data[0].get("usage_count", 0) or 0
-                update_data["usage_count"] = current_count + 1
-            
-            self.client.table("creative_storage").update(update_data).eq(
-                "creative_id", creative_id
-            ).execute()
-            
-            logger.info(f"✅ Marked creative {creative_id} as active")
+            logger.info(f"✅ Marked ad {ad_id} (creative {creative_id}) as active")
             return True
             
         except Exception as e:
@@ -347,7 +304,7 @@ class CreativeStorageManager:
     
     def update_usage(self, creative_id: str) -> bool:
         """
-        Update last_used_at timestamp for a creative.
+        Update usage for a creative - updates ads table.
         
         Args:
             creative_id: Creative ID to update
@@ -359,20 +316,11 @@ class CreativeStorageManager:
             if not self.client:
                 return False
             
-            # Get current usage count
-            result = self.client.table("creative_storage").select("usage_count").eq(
-                "creative_id", creative_id
-            ).execute()
-            
-            current_count = 0
-            if result.data and len(result.data) > 0:
-                current_count = result.data[0].get("usage_count", 0)
-            
-            # Update usage
-            self.client.table("creative_storage").update({
-                "last_used_at": datetime.now(timezone.utc).isoformat(),
-                "usage_count": current_count + 1,
-                "status": "active",  # Reactivate if it was marked unused
+            # Update all ads using this creative
+            now = datetime.now(timezone.utc).isoformat()
+            self.client.table("ads").update({
+                "status": "active",  # Ensure active status
+                "updated_at": now,
             }).eq("creative_id", creative_id).execute()
             
             return True
@@ -392,44 +340,9 @@ class CreativeStorageManager:
             if not self.client:
                 return 0
             
-            cutoff_date = datetime.now(timezone.utc) - timedelta(days=CREATIVE_UNUSED_DAYS)
-            
-            # Find unused creatives
-            result = self.client.table("creative_storage").select(
-                "creative_id, storage_path, status"
-            ).eq("status", "unused").lt(
-                "last_used_at", cutoff_date.isoformat()
-            ).execute()
-            
-            deleted_count = 0
-            
-            for record in (result.data or []):
-                creative_id = record.get("creative_id")
-                storage_path = record.get("storage_path")
-                
-                try:
-                    # Delete from storage (remove expects a list)
-                    try:
-                        self.client.storage.from_(self.bucket_name).remove([storage_path])
-                    except Exception as storage_error:
-                        # If file doesn't exist in storage, continue with DB cleanup
-                        logger.debug(f"Storage file not found (may already be deleted): {storage_error}")
-                    
-                    # Delete from database
-                    self.client.table("creative_storage").delete().eq(
-                        "creative_id", creative_id
-                    ).execute()
-                    
-                    deleted_count += 1
-                    logger.info(f"🗑️ Deleted unused creative {creative_id} from storage")
-                    
-                except Exception as e:
-                    logger.error(f"Error deleting creative {creative_id}: {e}")
-            
-            if deleted_count > 0:
-                notify(f"🧹 Cleaned up {deleted_count} unused creatives from storage")
-            
-            return deleted_count
+            # With new schema, ads are either active or killed
+            # No unused state to clean up
+            return 0
             
         except Exception as e:
             logger.error(f"Error cleaning up unused creatives: {e}", exc_info=True)
@@ -448,9 +361,9 @@ class CreativeStorageManager:
             
             cutoff_date = datetime.now(timezone.utc) - timedelta(days=CREATIVE_KILLED_DAYS)
             
-            # Find killed creatives older than cutoff
-            result = self.client.table("creative_storage").select(
-                "creative_id, storage_path"
+            # Find killed ads older than cutoff
+            result = self.client.table("ads").select(
+                "ad_id, creative_id, storage_path"
             ).eq("status", "killed").lt(
                 "killed_at", cutoff_date.isoformat()
             ).execute()
@@ -464,18 +377,18 @@ class CreativeStorageManager:
                 try:
                     # Delete from storage (remove expects a list)
                     try:
-                        self.client.storage.from_(self.bucket_name).remove([storage_path])
+                        if storage_path:
+                            self.client.storage.from_(self.bucket_name).remove([storage_path])
                     except Exception as storage_error:
-                        # If file doesn't exist in storage, continue with DB cleanup
                         logger.debug(f"Storage file not found (may already be deleted): {storage_error}")
                     
-                    # Delete from database
-                    self.client.table("creative_storage").delete().eq(
-                        "creative_id", creative_id
+                    # Delete ad record from database
+                    self.client.table("ads").delete().eq(
+                        "ad_id", record.get("ad_id")
                     ).execute()
                     
                     deleted_count += 1
-                    logger.info(f"🗑️ Deleted killed creative {creative_id} from storage")
+                    logger.info(f"🗑️ Deleted killed ad/creative {creative_id} from storage")
                     
                 except Exception as e:
                     logger.error(f"Error deleting killed creative {creative_id}: {e}")
@@ -491,33 +404,22 @@ class CreativeStorageManager:
     
     def mark_creative_unused(self, creative_id: str) -> bool:
         """
-        Mark a creative as unused (when ad is no longer active but not killed).
+        Mark a creative as unused - not applicable with new schema.
+        Ads are either active or killed.
         
         Args:
-            creative_id: Creative ID to mark as unused
+            creative_id: Creative ID (not used)
             
         Returns:
-            True if successful, False otherwise
+            False (unused state removed)
         """
-        try:
-            if not self.client:
-                return False
-            
-            # Update status to unused
-            self.client.table("creative_storage").update({
-                "status": "unused",
-            }).eq("creative_id", creative_id).execute()
-            
-            logger.debug(f"Marked creative {creative_id} as unused")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error marking creative {creative_id} as unused: {e}")
-            return False
+        # With new schema, ads are either active or killed
+        # No unused state
+        return False
     
     def get_creative_url(self, creative_id: str) -> Optional[str]:
         """
-        Get the public URL for a creative.
+        Get the public URL for a creative from ads table.
         
         Args:
             creative_id: Creative ID
@@ -529,9 +431,9 @@ class CreativeStorageManager:
             if not self.client:
                 return None
             
-            result = self.client.table("creative_storage").select(
+            result = self.client.table("ads").select(
                 "storage_url, storage_path"
-            ).eq("creative_id", creative_id).execute()
+            ).eq("creative_id", creative_id).limit(1).execute()
             
             if result.data and len(result.data) > 0:
                 return result.data[0].get("storage_url")

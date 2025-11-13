@@ -1,73 +1,52 @@
 #!/usr/bin/env python3
 """
-Backfills Meta ad insights into Supabase with deterministic pagination and idempotent upserts.
+Database Maintenance Utilities
+Combined utilities for Meta insights ingestion and failed insert repair.
 
 Usage:
-    python -m dean.src.scripts.meta_insights_ingest --start-date 2024-10-01 --end-date 2024-10-05
+    # Ingest Meta insights
+    python -m dean.src.scripts.database_maintenance ingest --start-date 2024-10-01 --end-date 2024-10-05
+    
+    # Repair failed inserts
+    python -m dean.src.scripts.database_maintenance repair --start 2025-10-01T00:00:00Z --end 2025-10-02T00:00:00Z
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
 import time
-from dataclasses import asdict
+from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import yaml
 
+try:
+    from supabase import create_client  # type: ignore
+except Exception:
+    create_client = None  # type: ignore
+
 from analytics.metrics import Metrics, metrics_from_row
 from integrations.meta_client import AccountAuth, ClientConfig, MetaClient
+from integrations.slack import notify
 from infrastructure.supabase_storage import get_validated_supabase_client
 
 logger = logging.getLogger(__name__)
 
+# =====================================================
+# INSIGHTS INGESTION
+# =====================================================
 
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Ingest Meta ad insights into Supabase.")
-    parser.add_argument("--settings", default="config/settings.yaml", help="Path to settings YAML.")
-    parser.add_argument(
-        "--start-date",
-        required=True,
-        help="Start date (inclusive) in YYYY-MM-DD (UTC midnight).",
-    )
-    parser.add_argument(
-        "--end-date",
-        help="End date (exclusive) in YYYY-MM-DD (UTC midnight). "
-        "Defaults to start-date + 1 day.",
-    )
-    parser.add_argument(
-        "--stage",
-        default="asc_plus",
-        help="Stage label stored in Supabase (default: asc_plus).",
-    )
-    parser.add_argument(
-        "--adset-id",
-        help="Optional Meta adset id filter. Falls back to settings.ids.asc_plus_adset_id.",
-    )
-    parser.add_argument(
-        "--debounce",
-        type=float,
-        default=0.5,
-        help="Seconds to sleep between paginated requests (default 0.5).",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print actions without writing to Supabase.",
-    )
-    return parser.parse_args()
-
-
-def _load_settings(path: str) -> Dict[str, any]:
+def _load_settings(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as fh:
         return yaml.safe_load(fh)
 
 
-def _build_meta_client(settings: Dict[str, any], *, dry_run: bool) -> MetaClient:
+def _build_meta_client(settings: Dict[str, Any], *, dry_run: bool) -> MetaClient:
     auth = AccountAuth(
         account_id=os.getenv("FB_AD_ACCOUNT_ID", ""),
         access_token=os.getenv("META_ACCESS_TOKEN", ""),
@@ -104,7 +83,7 @@ def _to_float(value: Optional[str]) -> Optional[float]:
         return None
 
 
-def _row_has_required_values(row: Dict[str, any]) -> bool:
+def _row_has_required_values(row: Dict[str, Any]) -> bool:
     impressions = _to_float(row.get("impressions"))
     spend = _to_float(row.get("spend"))
     return impressions is not None and spend is not None
@@ -127,7 +106,7 @@ def _fetch_insights_for_day(
     *,
     adset_id: Optional[str],
     debounce: float,
-) -> List[Dict[str, any]]:
+) -> List[Dict[str, Any]]:
     if getattr(client, "dry_run", False):
         logger.info("Meta client in dry-run mode; skipping fetch for %s", day.isoformat())
         return []
@@ -139,7 +118,7 @@ def _fetch_insights_for_day(
     if adset_id:
         filtering.append({"field": "adset.id", "operator": "IN", "value": [adset_id]})
 
-    rows: List[Dict[str, any]] = []
+    rows: List[Dict[str, Any]] = []
     seen_cursors: set[str] = set()
     after: Optional[str] = None
 
@@ -187,8 +166,8 @@ def _build_performance_record(
     day: date,
     stage: str,
     metrics: Metrics,
-    raw_row: Dict[str, any],
-) -> Dict[str, any]:
+    raw_row: Dict[str, Any],
+) -> Dict[str, Any]:
     impressions, clicks, purchases, add_to_cart, initiate_checkout, revenue = _extract_counts(metrics)
     spend = float(metrics.spend or 0.0)
 
@@ -238,7 +217,7 @@ def ingest_day(
     rows = _fetch_insights_for_day(client, day, adset_id=adset_id, debounce=debounce)
     logger.info("Fetched %d raw rows for %s", len(rows), day.isoformat())
 
-    processed: List[Dict[str, any]] = []
+    processed: List[Dict[str, Any]] = []
     for row in rows:
         ad_id = str(row.get("ad_id") or "").strip()
         if not ad_id:
@@ -268,12 +247,12 @@ def ingest_day(
     return len(processed), len(rows)
 
 
-def main() -> None:
+def cmd_ingest(args) -> None:
+    """Command: Ingest Meta ad insights into Supabase."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
     )
-    args = _parse_args()
 
     try:
         start = datetime.strptime(args.start_date, "%Y-%m-%d").date()
@@ -324,6 +303,200 @@ def main() -> None:
     )
 
 
+# =====================================================
+# INSERT REPAIR
+# =====================================================
+
+DEFAULT_ERROR_TABLE = os.getenv("SUPABASE_INSERT_ERROR_TABLE", "insert_failures")
+DEFAULT_BATCH_SIZE = int(os.getenv("INSERT_REPAIR_BATCH_SIZE", "50"))
+MAX_RETRIES = int(os.getenv("INSERT_REPAIR_MAX_RETRIES", "4"))
+BACKOFF_BASE = float(os.getenv("INSERT_REPAIR_BACKOFF_BASE", "1.0"))
+
+
+def _build_supabase_client():
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
+    if not (create_client and url and key):
+        return None
+    try:
+        return create_client(url, key)
+    except Exception:
+        return None
+
+
+def _get_validated_client():
+    try:
+        return get_validated_supabase_client(enable_validation=True)
+    except Exception:
+        return None
+
+
+def _parse_payload(raw: Any) -> Dict[str, Any]:
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _iso_to_datetime(value: str) -> datetime:
+    value = value.replace("Z", "+00:00")
+    return datetime.fromisoformat(value)
+
+
+def replay_failed_inserts(
+    start_iso: str,
+    end_iso: str,
+    error_table: str = DEFAULT_ERROR_TABLE,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+) -> Tuple[int, int, int]:
+    supabase = _build_supabase_client()
+    if not supabase:
+        raise RuntimeError("Supabase client unavailable (check SUPABASE_URL and keys).")
+
+    validated_client = _get_validated_client() or supabase
+
+    start_dt = _iso_to_datetime(start_iso)
+    end_dt = _iso_to_datetime(end_iso)
+
+    fetch = (
+        supabase.table(error_table)
+        .select("*")
+        .gte("created_at", start_dt.isoformat())
+        .lte("created_at", end_dt.isoformat())
+        .order("created_at")
+        .execute()
+    )
+
+    rows = getattr(fetch, "data", None) or []
+    if not rows:
+        notify("✅ Insert repair: no failed inserts found in the provided window.")
+        return 0, 0, 0
+
+    grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        table = row.get("table_name")
+        if not table:
+            continue
+        payload = _parse_payload(row.get("payload"))
+        if not payload:
+            continue
+        payload["_repair_origin"] = "insert_replay"
+        grouped[table].append({"id": row.get("id"), "payload": payload})
+
+    repaired = 0
+    skipped = 0
+    total = sum(len(entries) for entries in grouped.values())
+    start_time = time.monotonic()
+
+    for table_name, entries in grouped.items():
+        idx = 0
+        while idx < len(entries):
+            chunk = entries[idx : idx + batch_size]
+            payloads = [entry["payload"] for entry in chunk]
+            ids = [entry["id"] for entry in chunk if entry.get("id") is not None]
+            attempt = 0
+            backoff = BACKOFF_BASE
+            while attempt < MAX_RETRIES:
+                try:
+                    validated_client.table(table_name).insert(payloads).execute()
+                    repaired += len(payloads)
+                    if ids:
+                        supabase.table(error_table).update(
+                            {"status": "repaired", "repaired_at": datetime.now(timezone.utc).isoformat()}
+                        ).in_("id", ids).execute()
+                    break
+                except Exception as exc:
+                    attempt += 1
+                    if attempt >= MAX_RETRIES:
+                        skipped += len(payloads)
+                        if ids:
+                            supabase.table(error_table).update(
+                                {
+                                    "status": "skipped",
+                                    "repair_note": f"Retries exhausted: {exc}",
+                                }
+                            ).in_("id", ids).execute()
+                    else:
+                        time.sleep(backoff)
+                        backoff *= 2
+            idx += batch_size
+
+    elapsed = time.monotonic() - start_time
+    summary = (
+        f"🛠️ Insert repair complete\n"
+        f"• Window: {start_iso} → {end_iso}\n"
+        f"• Rows repaired: {repaired}/{total}\n"
+        f"• Rows skipped: {skipped}\n"
+        f"• Duration: {elapsed:.1f}s"
+    )
+    notify(summary)
+    return repaired, skipped, total
+
+
+def cmd_repair(args) -> None:
+    """Command: Replay failed Supabase inserts."""
+    repaired, skipped, total = replay_failed_inserts(
+        args.start,
+        args.end,
+        error_table=args.table,
+        batch_size=args.batch_size,
+    )
+    print(
+        json.dumps(
+            {
+                "window": {"start": args.start, "end": args.end},
+                "repaired": repaired,
+                "skipped": skipped,
+                "attempted": total,
+            }
+        )
+    )
+
+
+# =====================================================
+# MAIN ENTRY POINT
+# =====================================================
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Database maintenance utilities",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Command to run", required=True)
+    
+    # Ingest subcommand
+    ingest_parser = subparsers.add_parser("ingest", help="Ingest Meta ad insights into Supabase")
+    ingest_parser.add_argument("--settings", default="config/settings.yaml", help="Path to settings YAML.")
+    ingest_parser.add_argument("--start-date", required=True, help="Start date (inclusive) in YYYY-MM-DD (UTC midnight).")
+    ingest_parser.add_argument("--end-date", help="End date (exclusive) in YYYY-MM-DD (UTC midnight). Defaults to start-date + 1 day.")
+    ingest_parser.add_argument("--stage", default="asc_plus", help="Stage label stored in Supabase (default: asc_plus).")
+    ingest_parser.add_argument("--adset-id", help="Optional Meta adset id filter. Falls back to settings.ids.asc_plus_adset_id.")
+    ingest_parser.add_argument("--debounce", type=float, default=0.5, help="Seconds to sleep between paginated requests (default 0.5).")
+    ingest_parser.add_argument("--dry-run", action="store_true", help="Print actions without writing to Supabase.")
+    
+    # Repair subcommand
+    repair_parser = subparsers.add_parser("repair", help="Replay failed Supabase inserts")
+    repair_parser.add_argument("--start", required=True, help="ISO timestamp (inclusive)")
+    repair_parser.add_argument("--end", required=True, help="ISO timestamp (inclusive)")
+    repair_parser.add_argument("--table", default=DEFAULT_ERROR_TABLE, help="Error log table name")
+    repair_parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help="Batch size per insert")
+    
+    args = parser.parse_args()
+    
+    if args.command == "ingest":
+        cmd_ingest(args)
+    elif args.command == "repair":
+        cmd_repair(args)
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     main()
-

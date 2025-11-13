@@ -9,9 +9,11 @@ import logging
 import json
 import hashlib
 import pickle
-from typing import Any, Dict, Optional, Callable
+from typing import Any, Dict, Optional, Callable, TypeVar
 from datetime import datetime, timedelta
 import functools
+
+T = TypeVar('T')
 
 logger = logging.getLogger(__name__)
 

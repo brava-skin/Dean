@@ -1,78 +1,88 @@
 # =====================================================
-# DEAN BUSINESS RULES - SIMPLIFIED FOR ASC+ CAMPAIGN
-# Single Advantage+ Shopping Campaign with 10 creatives (Andromeda requirement)
+# DEAN BUSINESS RULES - ASC+ ATC TRAINING CAMPAIGN
+# Goal: Increase ATC signal density while maintaining creative learning time
+# Always keep 10 active creatives
 # =====================================================
 
-version: 3.0
+version: 4.3
 env: prod
 
-# ── Performance Thresholds ───────────────────────────
+# Performance reference thresholds
 thresholds:
   ctr:
-    asc_plus_floor: 0.008      # Minimum CTR to keep creative alive
-  cpa:  # EUR
-    asc_plus_max: null
-  roas:
-    asc_plus_min: null
+    floor: 0.010
+    healthy: 0.014
+  cpc:
+    soft_ceiling: 1.50
+    warning_ceiling: 1.90
+  cpm:
+    soft_ceiling: 60
+    warning_ceiling: 80
+  atc:
+    soft_floor: 1.0
+    healthy: 3.0       # UPDATED: healthy ATC increased from 2.5 → 3.0
 
-# ── Minimum Requirements ──────────────────────────────
+# Minimum requirements for fair evaluation
 minimums:
-  impressions: 1500
-  clicks: 15
-  spend_eur: 35
-  runtime_hours: 24
+  impressions: 2500
+  spend_eur: 55
+  runtime_hours: 48
 
-# ── ASC+ Campaign Rules ───────────────────────────────
-# Simple rules for ASC+ campaign - always 10 creatives live (Andromeda compliance)
-asc_plus:
+asc_plus_atc:
   minimums:
-    min_impressions: 1500
-    min_spend_eur: 35
-    min_clicks: 15
-    min_delivery_hours: 24
-    min_link_clicks: 15
+    min_impressions: 2500
+    min_spend_eur: 55
+    min_runtime_hours: 48
 
   keep:
-    - {type: "ctr_gte", ctr_gte: 0.015}
-    - {type: "ctr_cpm_combo", ctr_gte: 0.012, cpm_lte: 55}
+    # Strong CTR alone is positive (even under Andromeda)
+    - {type: "ctr_gte", ctr_gte: 0.012}
+
+    # Strong click efficiency + normal CPM
+    - {type: "ctr_cpm_combo", ctr_gte: 0.010, cpm_lte: 55}
+
+    # Strong ATC signaling (even if CTR mid-range)
+    - {type: "atc_signal_lock", atc_gte: 3, spend_gte: 55}   # UPDATED from 2 → 3
 
   locks:
-    - {type: "ctr_cpm_lock", ctr_gte: 0.018, cpm_lte: 55, evaluation_hours: 48, lock_hours: 72}
+    # Protect real winners from removal
+    - {type: "performance_lock", ctr_gte: 0.014, cpm_lte: 50, atc_gte: 3, evaluation_hours: 72, lock_hours: 96} 
+      # UPDATED: atc_gte 2 → 3
 
   kill:
-    - {type: "ctr_cpm_spend_combo", spend_gte: 45, ctr_lt: 0.01, cpm_gt: 65}
-    - {type: "ctr_spend_floor", spend_gte: 60, ctr_lt: 0.007}
-    - {type: "cpm_spend_ctr_combo", spend_gte: 60, cpm_gt: 120, ctr_lt: 0.012}
+    # Low CTR after spend threshold: creative doesn't create desire
+    - {type: "ctr_spend_floor", spend_gte: 45, ctr_lt: 0.008}   # UPDATED: spend 60 → 45
+
+    # CPC too high = low value traffic, even if CTR passable
+    - {type: "cpc_spend_combo", spend_gte: 50, cpc_gt: 1.90}    # UPDATED: spend 70 → 50
+
+    # Expensive delivery + weak attention
+    - {type: "cpm_ctr_combo", cpm_gt: 80, ctr_lt: 0.009}
+
+    # Clear ATC failure after fair learning window
+    - {type: "atc_efficiency_fail", spend_gte: 55, atc_lt: 1}   # UPDATED: spend 75 → 55
 
   engine:
     consecutive_ticks_required: 2
 
     fairness:
-      min_spend_before_kill_eur: 35
-      min_runtime_hours: 24
+      min_spend_before_kill_eur: 55
+      min_runtime_hours: 48
 
     learning:
-      max_learning_budget_eur: 60
-
-    tripwires:
-      lifetime_spend_no_purchase_eur: 0
+      max_learning_budget_eur: 150
 
     queue:
-      max_launches_per_tick: 10
       maintain_creative_count: 10
-      max_creative_turnover_per_24h: 0.3
+      max_creative_turnover_per_24h: 0.15
+      new_creative_grace_hours: 36
 
   attribution_windows: ["7d_click", "1d_view"]
 
-# ── Global Settings ───────────────────────────────────
+# Stability controls
 stability:
   consecutive_ticks: 2
   smoothing_epsilon: 0.0
-
-attribution:
-  click_days: 7
-  view_days: 1
-  roas_source: "computed"
 
 windows:
   day_1: {days: 1}
@@ -80,32 +90,12 @@ windows:
   day_7: {days: 7}
   last_48h: {hours: 48}
 
-# ── ML System Configuration ──────────────────────────
 ml_system:
   enabled: true
-  track_ad_copy: true
-  track_creative_performance: true
-  track_scaling_decisions: true
   learn_from_asc_plus: true
-  
-  # Data tracking
-  track_metrics:
-    - "ad_copy"
-    - "creative_text"
-    - "ad_performance"
-    - "creative_performance"
-    - "scaling_opportunities"
-  
-  # Learning parameters
   learning_rate: 0.01
   confidence_threshold: 0.7
-  min_samples_for_learning: 10
+  min_samples_for_learning: 12
 
-# ── Economics ─────────────────────────────────────────
 economics:
   currency: "EUR"
-  breakeven_cpa_env: "BREAKEVEN_CPA"
-  cogs_env: "COGS_PER_PURCHASE"
-  fx:
-    enabled: false
-    usd_to_eur_env: "USD_EUR_RATE"

@@ -4,31 +4,20 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.dmypy.json
+dmypy.json
 
 # Virtual environments
-.env
-.venv
-env/
 venv/
+env/
 ENV/
-env.bak/
-venv.bak/
 
 # IDE
 .vscode/
@@ -39,38 +28,11 @@ venv.bak/
 
 # OS
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
 
-# macOS specific
-.AppleDouble
-.LSOverride
-Icon?
-._*
-.DocumentRevisions-V100
-.fseventsd
-.Spotlight-V100
-.TemporaryItems
-.Trashes
-.VolumeIcon.icns
-.com.apple.timemachine.donotpresent
-
 # Project specific
+data/*.sqlite*
 data/*.sqlite-shm
 data/*.sqlite-wal
-data/digests/*.jsonl
-logs/
 *.log
-
-# Environment files
 .env.local
-.env.production
-.env.staging
-
-# Temporary files
-*.tmp
-*.temp

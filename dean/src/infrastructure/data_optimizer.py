@@ -1,7 +1,7 @@
 """
-Data Optimizer for ML Tables
-Ensures creative_intelligence, creative_storage, and learning_events tables
-always have correct, complete data for ML system
+Data Optimizer for Creative Tables
+Ensures creative_intelligence and creative_storage tables
+always have correct, complete data
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class CreativeIntelligenceOptimizer:
     """Optimizes creative_intelligence table data."""
     
-    def __init__(self, supabase_client):
+    def __init__(self, supabase_client: Any) -> None:
         self.client = supabase_client
     
     def calculate_performance_metrics(
@@ -38,10 +38,10 @@ class CreativeIntelligenceOptimizer:
             ).eq('ad_id', ad_id).gte('date_start', start_date).execute()
             
             # If no data by ad_id, try to find ads with this creative_id
-            if not response.data or len(response.data) == 0:
-                # Get ad_ids that use this creative from creative_intelligence
+            if not response.data:
+                # Get ad_ids that use this creative from ads table
                 try:
-                    creative_response = self.client.table('creative_intelligence').select(
+                    creative_response = self.client.table('ads').select(
                         'ad_id'
                     ).eq('creative_id', creative_id).execute()
                     
@@ -54,7 +54,7 @@ class CreativeIntelligenceOptimizer:
                 except Exception:
                     pass  # Fall through to defaults
             
-            if not response.data or len(response.data) == 0:
+            if not response.data:
                 # No performance data yet - return defaults
                 return {
                     'avg_ctr': 0.0,
@@ -152,13 +152,13 @@ class CreativeIntelligenceOptimizer:
         ad_id: str,
         force_recalculate: bool = False,
     ) -> bool:
-        """Update creative performance metrics in creative_intelligence table."""
+        """Update creative performance metrics in ads table."""
         try:
             # Check if metrics need updating
             if not force_recalculate:
-                existing = self.client.table('creative_intelligence').select(
-                    'avg_ctr, avg_cpa, avg_roas, updated_at'
-                ).eq('creative_id', creative_id).execute()
+                existing = self.client.table('ads').select(
+                    'performance_score, fatigue_index, updated_at'
+                ).eq('ad_id', ad_id).execute()
                 
                 if existing.data:
                     last_update = existing.data[0].get('updated_at')
@@ -175,61 +175,37 @@ class CreativeIntelligenceOptimizer:
             # Calculate metrics
             metrics = self.calculate_performance_metrics(creative_id, ad_id)
             
-            # Update creative_intelligence table
+            # Update ads table
             update_data = {
-                'avg_ctr': metrics['avg_ctr'],
-                'avg_cpa': metrics['avg_cpa'],
-                'avg_roas': metrics['avg_roas'],
                 'performance_score': metrics['performance_score'],
                 'fatigue_index': metrics['fatigue_index'],
                 'updated_at': datetime.now(timezone.utc).isoformat(),
             }
             
-            self.client.table('creative_intelligence').update(update_data).eq(
-                'creative_id', creative_id
+            self.client.table('ads').update(update_data).eq(
+                'ad_id', ad_id
             ).execute()
             
-            logger.info(f"✅ Updated performance metrics for creative {creative_id}")
+            logger.info(f"✅ Updated performance metrics for ad {ad_id} (creative {creative_id})")
             return True
         except Exception as e:
             logger.error(f"Error updating creative performance for {creative_id}: {e}")
             return False
     
     def calculate_performance_ranks(self, stage: str = 'asc_plus') -> bool:
-        """Calculate and update performance ranks for all creatives in a stage."""
-        try:
-            # Get all creatives with performance scores
-            response = self.client.table('creative_intelligence').select(
-                'creative_id, performance_score, avg_roas, avg_ctr'
-            ).eq('stage', stage).execute()
-            
-            if not response.data:
-                return False
-            
-            df = pd.DataFrame(response.data)
-            
-            # Calculate ranks based on performance score
-            df['performance_rank'] = df['performance_score'].rank(ascending=False, method='min').astype(int)
-            
-            # Update ranks in batches
-            for _, row in df.iterrows():
-                self.client.table('creative_intelligence').update({
-                    'performance_rank': int(row['performance_rank']),
-                }).eq('creative_id', row['creative_id']).execute()
-            
-            logger.info(f"✅ Updated performance ranks for {len(df)} creatives")
-            return True
-        except Exception as e:
-            logger.error(f"Error calculating performance ranks: {e}")
-            return False
+        """Calculate and update performance ranks for all ads - not applicable with new schema."""
+        # Performance ranks are no longer stored in the consolidated schema
+        # This method is kept for backward compatibility but does nothing
+        logger.debug("Performance ranks calculation skipped - not applicable with consolidated schema")
+        return True
     
     def backfill_missing_metrics(self, stage: str = 'asc_plus') -> Dict[str, int]:
-        """Backfill missing performance metrics for all creatives."""
+        """Backfill missing performance metrics for all ads."""
         try:
-            # Get all creatives (with or without metrics)
-            response = self.client.table('creative_intelligence').select(
-                'creative_id, ad_id, avg_ctr, avg_cpa, avg_roas'
-            ).eq('stage', stage).limit(1000).execute()  # Limit to avoid timeout
+            # Get all ads (with or without metrics)
+            response = self.client.table('ads').select(
+                'ad_id, creative_id, performance_score, fatigue_index'
+            ).limit(1000).execute()  # Limit to avoid timeout
             
             if not response.data:
                 return {'updated': 0, 'skipped': 0, 'errors': 0}
@@ -277,7 +253,7 @@ class CreativeIntelligenceOptimizer:
 class CreativeStorageOptimizer:
     """Optimizes creative_storage table data."""
     
-    def __init__(self, supabase_client):
+    def __init__(self, supabase_client: Any) -> None:
         self.client = supabase_client
     
     def ensure_complete_metadata(
@@ -285,12 +261,12 @@ class CreativeStorageOptimizer:
         creative_id: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Ensure metadata has all required fields."""
+        """Ensure metadata has all required fields - now uses ads table."""
         try:
-            # Get existing metadata
-            response = self.client.table('creative_storage').select('metadata').eq(
+            # Get existing metadata from ads table
+            response = self.client.table('ads').select('metadata').eq(
                 'creative_id', creative_id
-            ).execute()
+            ).limit(1).execute()
             
             existing_metadata = {}
             if response.data and response.data[0].get('metadata'):
@@ -311,12 +287,12 @@ class CreativeStorageOptimizer:
                 if field not in complete_metadata:
                     complete_metadata[field] = default
             
-            # Update if needed
+            # Update if needed (update first ad with this creative_id)
             if complete_metadata != existing_metadata:
-                self.client.table('creative_storage').update({
+                self.client.table('ads').update({
                     'metadata': complete_metadata,
                     'updated_at': datetime.now(timezone.utc).isoformat(),
-                }).eq('creative_id', creative_id).execute()
+                }).eq('creative_id', creative_id).limit(1).execute()
             
             return complete_metadata
         except Exception as e:
@@ -324,22 +300,22 @@ class CreativeStorageOptimizer:
             return metadata or {}
     
     def validate_storage_data(self, creative_id: str) -> Tuple[bool, List[str]]:
-        """Validate creative_storage data completeness."""
+        """Validate ads table data completeness for a creative."""
         issues = []
         
         try:
-            response = self.client.table('creative_storage').select('*').eq(
+            response = self.client.table('ads').select('*').eq(
                 'creative_id', creative_id
-            ).execute()
+            ).limit(1).execute()
             
             if not response.data:
-                issues.append("Creative not found in storage")
+                issues.append("Ad with creative not found")
                 return False, issues
             
             data = response.data[0]
             
             # Check required fields
-            required_fields = ['creative_id', 'storage_path', 'storage_url', 'file_type', 'status']
+            required_fields = ['ad_id', 'creative_id', 'status']
             for field in required_fields:
                 if not data.get(field):
                     issues.append(f"Missing required field: {field}")
@@ -352,13 +328,13 @@ class CreativeStorageOptimizer:
                     issues.append(f"Missing metadata field: {field}")
             
             # Check status validity
-            valid_statuses = ['queue', 'active', 'killed']
+            valid_statuses = ['active', 'paused', 'killed']
             if data.get('status') not in valid_statuses:
                 issues.append(f"Invalid status: {data.get('status')}")
             
             return len(issues) == 0, issues
         except Exception as e:
-            logger.error(f"Error validating storage data for {creative_id}: {e}")
+            logger.error(f"Error validating ads data for {creative_id}: {e}")
             issues.append(f"Validation error: {e}")
             return False, issues
     
@@ -378,18 +354,18 @@ class CreativeStorageOptimizer:
                 return True
             
             # Fix status issues if any remain
-            response = self.client.table('creative_storage').select('status').eq(
+            response = self.client.table('ads').select('status').eq(
                 'creative_id', creative_id
-            ).execute()
+            ).limit(1).execute()
             
             if response.data:
                 status = response.data[0].get('status')
-                if status not in ['queue', 'active', 'killed']:
-                    # Set to queue if invalid
+                if status not in ['active', 'paused', 'killed']:
+                    # Set to active if invalid
                     try:
-                        self.client.table('creative_storage').update({
-                            'status': 'queue',
-                        }).eq('creative_id', creative_id).execute()
+                        self.client.table('ads').update({
+                            'status': 'active',
+                        }).eq('creative_id', creative_id).limit(1).execute()
                     except Exception as e:
                         logger.debug(f"Error fixing status for {creative_id}: {e}")
             
@@ -406,307 +382,10 @@ class CreativeStorageOptimizer:
             return False
 
 
-class LearningEventsOptimizer:
-    """Optimizes learning_events table data."""
-    
-    def __init__(self, supabase_client):
-        self.client = supabase_client
-    
-    def ensure_complete_event(
-        self,
-        event_id: str,
-        event_data: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """Ensure learning event has all required fields."""
-        try:
-            # Get existing event
-            response = self.client.table('learning_events').select('*').eq('id', event_id).execute()
-            
-            existing_data = {}
-            if response.data:
-                existing_data = response.data[0]
-            
-            # Merge with provided data
-            complete_data = {**existing_data, **(event_data or {})}
-            
-            # Ensure required fields
-            required_fields = {
-                'event_type': 'unknown',
-                'ad_id': '',
-                'lifecycle_id': '',
-                'stage': 'asc_plus',
-                'confidence_score': 0.5,
-                'impact_score': 0.5,
-                'learning_data': {},
-                'event_data': {},
-            }
-            
-            for field, default in required_fields.items():
-                if field not in complete_data or complete_data[field] is None:
-                    complete_data[field] = default
-            
-            # Validate event_type
-            valid_event_types = [
-                'creative_created',
-                'creative_generation_failed',
-                'ad_killed',
-                'ad_promoted',
-                'budget_scaled',
-                'rule_adapted',
-                'model_trained',
-                'stage_transition',
-            ]
-            
-            if complete_data.get('event_type') not in valid_event_types:
-                complete_data['event_type'] = 'unknown'
-            
-            # Update if needed (only update fields that can be updated, not read-only ones like id, created_at)
-            # Note: learning_events table doesn't have updated_at field
-            if complete_data != existing_data:
-                update_fields = {
-                    'confidence_score': float(complete_data.get('confidence_score', 0.5)),
-                    'impact_score': float(complete_data.get('impact_score', 0.5)),
-                }
-                # Only update if values actually changed
-                if (abs(update_fields['confidence_score'] - existing_data.get('confidence_score', 0.5)) > 0.01 or
-                    abs(update_fields['impact_score'] - existing_data.get('impact_score', 0.5)) > 0.01):
-                    try:
-                        self.client.table('learning_events').update(update_fields).eq('id', event_id).execute()
-                    except Exception as e:
-                        logger.debug(f"Failed to update learning event {event_id}: {e}")
-            
-            return complete_data
-        except Exception as e:
-            logger.error(f"Error ensuring complete event for {event_id}: {e}")
-            return event_data or {}
-    
-    def calculate_confidence_score(
-        self,
-        event_type: str,
-        learning_data: Dict[str, Any],
-    ) -> float:
-        """Calculate confidence score for learning event."""
-        try:
-            base_confidence = 0.5
-            
-            # Adjust based on event type
-            if event_type == 'creative_created':
-                base_confidence = 0.7
-            elif event_type == 'ad_killed':
-                base_confidence = 0.8
-            elif event_type == 'model_trained':
-                base_confidence = 0.9
-            
-            # Adjust based on learning data
-            if 'learning_confidence' in learning_data:
-                base_confidence = learning_data['learning_confidence']
-            elif 'success_metrics' in learning_data:
-                base_confidence = max(base_confidence, learning_data['success_metrics'])
-            
-            return max(0.0, min(1.0, base_confidence))
-        except Exception:
-            return 0.5
-    
-    def calculate_impact_score(
-        self,
-        event_type: str,
-        event_data: Dict[str, Any],
-    ) -> float:
-        """Calculate impact score for learning event."""
-        try:
-            base_impact = 0.5
-            
-            # Adjust based on event type
-            if event_type in ['ad_killed', 'ad_promoted', 'budget_scaled']:
-                base_impact = 0.7
-            elif event_type == 'model_trained':
-                base_impact = 0.8
-            
-            # Adjust based on event data
-            if 'impact_score' in event_data:
-                base_impact = event_data['impact_score']
-            elif 'event_impact' in event_data:
-                base_impact = event_data['event_impact']
-            
-            return max(0.0, min(1.0, base_impact))
-        except Exception:
-            return 0.5
-    
-    def backfill_event_scores(self, days_back: int = 30) -> Dict[str, int]:
-        """Backfill confidence and impact scores for learning events."""
-        try:
-            start_date = (datetime.now() - timedelta(days=days_back)).isoformat()
-            
-            response = self.client.table('learning_events').select(
-                'id, event_type, learning_data, event_data, confidence_score, impact_score'
-            ).gte('created_at', start_date).execute()
-            
-            if not response.data:
-                return {'updated': 0, 'skipped': 0, 'errors': 0}
-            
-            updated = 0
-            skipped = 0
-            errors = 0
-            
-            for event in response.data:
-                event_id = event.get('id')
-                event_type = event.get('event_type', 'unknown')
-                learning_data = event.get('learning_data', {})
-                event_data = event.get('event_data', {})
-                
-                # Calculate scores
-                confidence = self.calculate_confidence_score(event_type, learning_data)
-                impact = self.calculate_impact_score(event_type, event_data)
-                
-                # Check if update needed
-                current_confidence = event.get('confidence_score', 0.0)
-                current_impact = event.get('impact_score', 0.0)
-                
-                if abs(confidence - current_confidence) > 0.01 or abs(impact - current_impact) > 0.01:
-                    try:
-                        # Only update score fields (learning_events table doesn't have updated_at field)
-                        update_data = {
-                            'confidence_score': float(confidence),
-                            'impact_score': float(impact),
-                        }
-                        self.client.table('learning_events').update(update_data).eq('id', event_id).execute()
-                        updated += 1
-                    except Exception as e:
-                        logger.debug(f"Failed to update learning event {event_id}: {e}")
-                        errors += 1
-                else:
-                    skipped += 1
-            
-            logger.info(f"✅ Backfilled event scores: {updated} updated, {skipped} skipped, {errors} errors")
-            return {'updated': updated, 'skipped': skipped, 'errors': errors}
-        except Exception as e:
-            logger.error(f"Error backfilling event scores: {e}")
-            return {'updated': 0, 'skipped': 0, 'errors': 1}
-
-
-class MLDataOptimizer:
-    """Main optimizer for all ML-related tables."""
-    
-    def __init__(self, supabase_client):
-        self.client = supabase_client
-        self.creative_intel_optimizer = CreativeIntelligenceOptimizer(supabase_client)
-        self.creative_storage_optimizer = CreativeStorageOptimizer(supabase_client)
-        self.learning_events_optimizer = LearningEventsOptimizer(supabase_client)
-    
-    def optimize_all_tables(
-        self,
-        stage: str = 'asc_plus',
-        force_recalculate: bool = False,
-    ) -> Dict[str, Any]:
-        """Optimize all ML tables."""
-        results = {
-            'creative_intelligence': {},
-            'creative_storage': {},
-            'learning_events': {},
-        }
-        
-        try:
-            # Optimize creative_intelligence
-            logger.info("Optimizing creative_intelligence table...")
-            backfill_results = self.creative_intel_optimizer.backfill_missing_metrics(stage)
-            results['creative_intelligence'] = backfill_results
-            
-            # Calculate performance ranks
-            self.creative_intel_optimizer.calculate_performance_ranks(stage)
-            
-            # Optimize learning_events
-            logger.info("Optimizing learning_events table...")
-            event_results = self.learning_events_optimizer.backfill_event_scores()
-            results['learning_events'] = event_results
-            
-            # Validate and auto-fix creative_storage
-            logger.info("Validating and fixing creative_storage table...")
-            storage_issues = self._validate_all_storage()
-            fixed_count = 0
-            # Auto-fix missing metadata fields
-            # Issue format: "creative_id: Missing metadata field: field_name"
-            creatives_to_fix = set()  # Track which creatives need fixing
-            for issue in storage_issues:
-                if 'Missing metadata field' in issue or 'Missing required field' in issue:
-                    # Extract creative_id from issue string (format: "creative_id: Missing metadata field: field_name")
-                    parts = issue.split(':')
-                    if len(parts) >= 1:
-                        creative_id = parts[0].strip()
-                        # Validate creative_id format (should start with "creative_")
-                        if creative_id.startswith('creative_'):
-                            creatives_to_fix.add(creative_id)
-            
-            # Fix all creatives that need fixing (fix once per creative, but ensure all fields are fixed)
-            for creative_id in creatives_to_fix:
-                try:
-                    # fix_storage_data will call ensure_complete_metadata which fixes ALL missing fields at once
-                    if self.creative_storage_optimizer.fix_storage_data(creative_id):
-                        fixed_count += 1
-                        logger.debug(f"✅ Fixed all metadata fields for {creative_id}")
-                except Exception as e:
-                    logger.debug(f"Failed to fix creative {creative_id}: {e}")
-            results['creative_storage'] = {
-                'validated': len(storage_issues) == 0,
-                'issues_found': len(storage_issues),
-                'fixed': fixed_count,
-                'issues': storage_issues[:10],  # Limit to first 10
-            }
-            
-            logger.info("✅ All ML tables optimized")
-            return results
-        except Exception as e:
-            logger.error(f"Error optimizing ML tables: {e}")
-            return results
-    
-    def _validate_all_storage(self) -> List[str]:
-        """Validate all creative_storage entries."""
-        issues = []
-        try:
-            response = self.client.table('creative_storage').select('creative_id').execute()
-            
-            for creative in response.data[:100]:  # Limit to first 100
-                creative_id = creative.get('creative_id')
-                if creative_id:
-                    is_valid, creative_issues = self.creative_storage_optimizer.validate_storage_data(creative_id)
-                    if not is_valid:
-                        issues.extend([f"{creative_id}: {issue}" for issue in creative_issues])
-        except Exception as e:
-            logger.error(f"Error validating storage: {e}")
-            issues.append(f"Validation error: {e}")
-        
-        return issues
-    
-    def ensure_creative_data_completeness(
-        self,
-        creative_id: str,
-        ad_id: str,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> bool:
-        """Ensure creative has complete data in all tables."""
-        try:
-            # Update creative_intelligence performance metrics
-            self.creative_intel_optimizer.update_creative_performance(creative_id, ad_id)
-            
-            # Ensure creative_storage metadata is complete
-            self.creative_storage_optimizer.ensure_complete_metadata(creative_id, metadata)
-            
-            logger.info(f"✅ Ensured data completeness for creative {creative_id}")
-            return True
-        except Exception as e:
-            logger.error(f"Error ensuring data completeness for {creative_id}: {e}")
-            return False
-
-
-def create_ml_data_optimizer(supabase_client) -> MLDataOptimizer:
-    """Create ML data optimizer."""
-    return MLDataOptimizer(supabase_client)
 
 
 __all__ = [
-    "MLDataOptimizer",
     "CreativeIntelligenceOptimizer",
     "CreativeStorageOptimizer",
-    "LearningEventsOptimizer",
-    "create_ml_data_optimizer",
 ]
 

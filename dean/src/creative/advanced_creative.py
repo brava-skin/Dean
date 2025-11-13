@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import logging
 import hashlib
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -24,17 +24,13 @@ class CreativeTemplate:
     usage_count: int = 0
     average_roas: float = 0.0
     average_ctr: float = 0.0
-    created_at: datetime = None
-    
-    def __post_init__(self):
-        if self.created_at is None:
-            self.created_at = datetime.now()
+    created_at: datetime = field(default_factory=datetime.now)
 
 
 class CreativeTemplateLibrary:
     """Library of creative templates."""
     
-    def __init__(self):
+    def __init__(self) -> None:
         self.templates: Dict[str, CreativeTemplate] = {}
     
     def add_template(
@@ -70,7 +66,7 @@ class CreativeTemplateLibrary:
         template_id: str,
         roas: float,
         ctr: float,
-    ):
+    ) -> None:
         """Update template performance."""
         if template_id not in self.templates:
             return
@@ -101,7 +97,7 @@ class CreativeTemplateLibrary:
 class CreativeVersionManager:
     """Manages creative versions and rollback."""
     
-    def __init__(self):
+    def __init__(self) -> None:
         self.versions: Dict[str, List[Dict[str, Any]]] = {}
     
     def create_version(
@@ -151,11 +147,11 @@ class CreativeVersionManager:
 class CreativeQualityChecker:
     """Automated creative quality checks."""
     
-    def __init__(self):
-        self.quality_rules: List[callable] = []
+    def __init__(self) -> None:
+        self.quality_rules: List[Callable[[Dict[str, Any]], bool]] = []
         self._setup_default_rules()
     
-    def _setup_default_rules(self):
+    def _setup_default_rules(self) -> None:
         """Setup default quality rules."""
         
         def check_image_present(creative: Dict[str, Any]) -> bool:
@@ -208,7 +204,7 @@ class CreativeQualityChecker:
 class StyleTransferEngine:
     """Style transfer from winning creatives."""
     
-    def __init__(self, creative_dna=None):
+    def __init__(self, creative_dna: Optional[Any] = None) -> None:
         self.creative_dna = creative_dna
         self.winning_styles: Dict[str, Dict[str, Any]] = {}
     

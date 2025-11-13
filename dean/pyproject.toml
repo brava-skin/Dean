@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dean"
+version = "1.0.0"
+description = "Enterprise Meta Ads Automation System - Rule-based automation with creative engine"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Dean Team"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+
+dependencies = [
+    "facebook-business==19.0.1",
+    "python-dotenv==1.0.1",
+    "PyYAML==6.0.2",
+    "requests==2.32.3",
+    "pytz>=2020.1,<2024",
+    "pandas==2.2.2",
+    "openpyxl==3.1.5",
+    "SQLAlchemy==2.0.35",
+    "prometheus-client==0.20.0",
+    "jsonschema==4.23.0",
+    "supabase>=2.5.0",
+    "schedule==1.2.0",
+    "numpy>=1.24.0",
+    "openai>=1.0.0",
+    "sentence-transformers>=2.2.0",
+    "redis>=5.0.0",
+    "psutil>=5.9.0",
+    "Pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+dean = "src.cli:main"
+
+[tool.setuptools]
+packages = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ['py39', 'py310', 'py311']
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+

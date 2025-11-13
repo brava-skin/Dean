@@ -30,27 +30,36 @@ except ImportError:
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 CHATGPT5_MODEL = "gpt-5"
 
-# Calm confidence text options
+# Premium Lifestyle Photography Creative Direction:
+# - High-quality photoshoot-level lifestyle imagery
+# - Editorial, cinematic, sophisticated masculine lifestyle
+# - No products, no textures, no applications, no mirrors
+# - Consistent brand visual language
+
 CREATIVE_TEXT_OPTIONS = [
-    "Refined skincare, not complicated.",
-    "Elevate your skin.",
-    "Consistency builds clear skin.",
-    "Skincare, not vanity.",
-    "Take care of skin.",
-    "Clear skin, quiet confidence.",
-    "Discipline for better skin.",
-    "Skincare with purpose.",
+    "Elevate your presence.",
+    "Refined confidence.",
+    "Quiet strength.",
+    "Discipline in detail.",
+    "Consistent excellence.",
+    "Purposeful living.",
+    "Calm authority.",
+    "Built for the long term.",
 ]
 
 HEADLINE_OPTIONS = [
     "For men who value discipline.",
-    "Clean skin is the foundation of presence.",
-    "Your routine communicates who you are.",
-    "Look like a man who takes care of himself.",
+    "Consistency builds presence.",
+    "Quality in every detail.",
+    "Refined, not complicated.",
+    "Purpose over convenience.",
+    "Discipline for excellence.",
 ]
 
 PRIMARY_TEXT_OPTIONS = [
-    "Precision skincare designed to elevate daily standards.",
+    "Premium lifestyle. Consistent quality. Refined confidence.",
+    "Editorial lifestyle photography. Cinematic quality. Masculine sophistication.",
+    "Quality, consistency, and purpose. No hype, just results.",
 ]
 
 
@@ -116,21 +125,32 @@ class PromptEngineer:
     ) -> str:
         """Build advanced system prompt with ML insights"""
         
-        # Brand guidelines
+        # Brand guidelines - Premium Lifestyle Photography Focus
         guidelines_text = ""
         if brand_guidelines:
-            brand_name = brand_guidelines.get('brand_name', "Premium men's skincare")
-            target_audience = brand_guidelines.get('target_audience', 'premium men')
-            style = brand_guidelines.get('style', 'premium, sophisticated, calm confidence')
-            aesthetic = brand_guidelines.get('aesthetic', 'editorial, cinematic, refined')
+            brand_name = brand_guidelines.get('brand_name', "Premium men's lifestyle")
+            target_audience = brand_guidelines.get('target_audience', 'men 18-54, United States, broad')
+            style = brand_guidelines.get('style', 'masculine lifestyle, editorial, cinematic, refined')
+            aesthetic = brand_guidelines.get('aesthetic', 'editorial, cinematic, refined, premium quality')
             guidelines_text = f"""
-Brand Guidelines:
+Brand Guidelines - Premium Lifestyle Photography:
 - Brand: {brand_name}
 - Target Audience: {target_audience}
 - Style: {style}
 - Aesthetic: {aesthetic}
-- Tone: Calm confidence, self-respect, not convenience
-- CRITICAL EXCLUSIONS: Never include females, kids, or products in image
+- Focus: High-quality photoshoot-level lifestyle imagery
+- Visual Language: Consistent brand visual language across all ads
+- CRITICAL EXCLUSIONS: 
+  - NEVER include women, females, or female models
+  - NEVER show products, product packaging, or product containers
+  - NEVER show product textures, material details, or product close-ups
+  - NEVER show product application, usage, or hands interacting with products
+  - NEVER show mirror reflections, bathroom mirrors, or reflective surfaces
+  - NEVER show kids or children
+  - NEVER include futuristic elements, sci-fi aesthetics, or futuristic technology
+  - NEVER include vintage elements, retro aesthetics, or period-specific styling
+  - NEVER include surreal elements, dreamlike imagery, or unrealistic scenarios
+- Focus: Premium masculine lifestyle photography - editorial, cinematic, sophisticated, contemporary realism
 """
         
         # ML insights integration
@@ -220,17 +240,27 @@ STRICT ABSOLUTE PROHIBITIONS (ZERO TOLERANCE):
 - NEVER omit cinematic elements - ALWAYS include cinematic lighting, cinematic color grading, cinematic composition, cinematic atmosphere
 - NEVER skip hyperrealistic requirements - ALWAYS include hyperrealistic textures, hyperrealistic lighting, hyperrealistic color science
 
-BRAND-SPECIFIC RULES:
-- NEVER include females, kids, or products in the image
-- NEVER use bathroom settings, selfie-style photos, or standard product shots
-- Focus on premium men's lifestyle, sophistication, and luxury
-- Think luxury fashion brand aesthetic (Dior, Louis Vuitton, Aesop style)
+BRAND-SPECIFIC RULES - PREMIUM LIFESTYLE PHOTOGRAPHY:
+- CRITICAL EXCLUSIONS (ZERO TOLERANCE):
+  - NEVER include women, females, or female models - men only
+  - NEVER show products, product packaging, containers, or product-related items
+  - NEVER show product textures, material details, product close-ups, or product surfaces
+  - NEVER show product application, usage, hands interacting with products, or product in use
+  - NEVER show mirror reflections, bathroom mirrors, reflective surfaces, or mirror selfies
+  - NEVER show kids, children, or minors
+  - NEVER use bathroom settings, selfie-style photos, or standard product shots
+  - NEVER include futuristic elements, sci-fi aesthetics, futuristic technology, or future-looking designs
+  - NEVER include vintage elements, retro aesthetics, period-specific styling, or historical references
+  - NEVER include surreal elements, dreamlike imagery, unrealistic scenarios, or fantastical elements
+- Focus: Premium masculine lifestyle photography - editorial, cinematic, sophisticated, contemporary realism
+- Creative direction: High-quality photoshoot-level lifestyle imagery - contemporary, realistic, grounded
+- Think luxury men's lifestyle aesthetic (editorial fashion, cinematic lifestyle, premium quality, contemporary)
 - Use positive descriptions only (e.g., "peaceful solitude" instead of "no crowds")
-- Create cinematic, editorial-style imagery with ultra-realistic quality
-- Maintain calm confidence aesthetic: refined, sophisticated, self-respecting
-- ALWAYS include model diversity: Different ethnicities, various facial hair styles (clean-shaven, stubble, beard, mustache), different hair types (short, long, curly, straight, wavy, textured)
-- ALWAYS vary age representation: Men in their 20s, 30s, 40s, 50s
-- Create dramatically diverse scenarios - avoid generic "portrait" shots
+- Create cinematic, editorial-style imagery with ultra-realistic quality - contemporary and grounded
+- Maintain consistent brand visual language across all ads
+- ALWAYS include model diversity: Specific ethnicities (white, African American, Japanese, Latino, mixed African American and white), facial hair styles (full beard, goatee, stubble beard, no facial hair), diverse short hairstyles (fade, undercut, textured, curly, wavy, afro, quiff, slicked back)
+- ALWAYS vary age representation: Men between 21 and 50 years old, NO gray hair
+- Create diverse lifestyle scenarios - premium masculine lifestyle contexts, contemporary and realistic
 
 Return ONLY the optimized prompt. No explanations, no additional text, just the prompt."""
     
@@ -391,7 +421,7 @@ class ImageCreativeGenerator:
                 scenario_description = self._last_scenario_description
             if not scenario_description:
                 # Fallback if scenario wasn't generated
-                scenario_description = "Premium men's lifestyle portrait, sophisticated, calm confidence, editorial style"
+                scenario_description = "A man standing in soft morning light near a tall window, light gently illuminating his face and skin texture, calm confidence, editorial style"
             
             # Step 5: Generate calm confidence ad copy (needed for text overlay context)
             ad_copy = self._generate_ad_copy(product_info, ml_insights, scenario_description)
@@ -539,7 +569,7 @@ class ImageCreativeGenerator:
         
         if not scenario_description:
             # Fallback to generic if scenario generation fails
-            scenario_description = "Premium men's lifestyle portrait, sophisticated, calm confidence, editorial style"
+            scenario_description = "A man standing in soft morning light near a tall window, light gently illuminating his face and skin texture, calm confidence, editorial style"
         
         # Store scenario description for inclusion in result (for ML tracking)
         self._last_scenario_description = scenario_description
@@ -549,7 +579,18 @@ class ImageCreativeGenerator:
             "target_audience": "premium American men aged 18-54 who value discipline",
             "style": "premium, sophisticated, calm confidence",
             "aesthetic": "editorial, cinematic, refined, luxury fashion brand style (like Dior/LV/Aesop)",
-            "exclusions": ["females", "kids", "products", "bathroom settings", "selfie-style photos", "formal suits", "business attire", "Indian/South Asian men", "turbans", "traditional ethnic clothing"],
+            "exclusions": [
+                "females", "women", "kids", "children",
+                "products", "product packaging", "product containers", "product-related items",
+                "product textures", "material details", "product close-ups", "product surfaces",
+                "product application", "product usage", "hands interacting with products", "product in use",
+                "mirror reflections", "bathroom mirrors", "reflective surfaces", "mirror selfies",
+                "bathroom settings", "selfie-style photos", "standard product shots",
+                "futuristic elements", "sci-fi aesthetics", "futuristic technology", "future-looking designs",
+                "vintage elements", "retro aesthetics", "period-specific styling", "historical references",
+                "surreal elements", "dreamlike imagery", "unrealistic scenarios", "fantastical elements",
+                "formal suits", "business attire", "Indian/South Asian men", "turbans", "traditional ethnic clothing"
+            ],
             "preferences": ["casual luxury", "streetwear", "athleisure", "minimalist fashion", "contemporary American style", "diverse American men (Caucasian, African American, Hispanic, Asian American, etc.)"],
         }
         
@@ -642,52 +683,94 @@ class ImageCreativeGenerator:
             if current_count < 2:
                 batch_requirements += "\n- BATCH REQUIREMENT: This batch needs more outdoor/urban scenarios\n"
             
-            # Expanded examples (30-40 diverse scenarios) - AMERICAN MEN, NO SUITS
+            # Expanded examples - Premium Lifestyle Photography Direction
             expanded_examples = """EXAMPLES OF DIVERSE SCENARIOS (use as inspiration, create something NEW and EXTREMELY DETAILED):
 CRITICAL: Target American men (Caucasian, African American, Hispanic, Asian American, etc.) - NO Indian/South Asian men, NO formal suits/business attire
+FOCUS: High-quality photoshoot-level lifestyle imagery with emphasis on lighting, composition, and facial features
 
-MOOD/EMOTION VARIATIONS:
-- A contemplative close-up of a man in his late 30s with salt-and-pepper stubble, looking out a floor-to-ceiling window in a minimalist Tokyo penthouse at blue hour, wearing a tailored navy cashmere turtleneck, soft natural window light creating Rembrandt triangle, shallow depth of field blurring the city skyline behind, Vogue editorial aesthetic
-- An energetic medium shot of a confident man in his 20s with textured curly hair, walking with purpose through a rain-soaked Parisian street at golden hour, wearing a bold crimson double-breasted overcoat, umbrella casting dynamic shadows, cinematic depth showing blurred pedestrians rushing in background, GQ street style
-- A relaxed wide shot of a sophisticated man in his 40s with a well-groomed beard, reclining on a cream-colored modern sofa in a sunlit art gallery, wearing a charcoal linen suit with white sneakers, natural light streaming through floor-to-ceiling windows, medium format aesthetic, Esquire lifestyle
-- A confident low-angle shot of a powerful man in his 50s with silver-gray hair, standing in a commanding pose on a minimalist concrete rooftop at sunset, wearing a black tailored blazer with white t-shirt, dramatic sky with orange and purple hues, cinematic wide-angle lens distortion, luxury brand campaign aesthetic
+LIGHTING & COMPOSITION FOCUSED SCENARIOS:
 
-SETTING VARIATIONS:
-- A man in his 30s with a fade haircut and clean-shaven face, sitting in the driver's seat of a vintage 1960s Jaguar E-Type in British Racing Green, wearing a cream-colored Italian silk suit, positioned in a moody industrial warehouse with concrete floors, dramatic side lighting from large windows, close-up framing showing his contemplative expression, Dior Homme aesthetic
-- A man in his late 20s with shoulder-length wavy hair and light stubble, lying on lush green grass in a minimalist Japanese garden, wearing a relaxed beige linen shirt with rolled sleeves and white trousers, dappled sunlight filtering through cherry blossoms, shallow depth of field, Aesop store aesthetic
-- A man in his 40s with a full beard and short textured hair, walking through a modern art gallery with white walls and high ceilings, wearing a navy wool coat over a gray merino sweater, contemplative pose examining a large abstract painting, natural gallery lighting, medium format composition, Louis Vuitton menswear aesthetic
-- A man in his 30s with a fade and mustache, positioned in a luxury hotel lobby with marble floors and brass details, wearing a camel-colored overcoat with brown leather Chelsea boots, sitting in a modern armchair reading, warm ambient lighting, lifestyle photography, luxury brand campaign
+SOFT LIGHTING VARIATIONS:
+- A man in his 30s with no facial hair and textured hair, standing in soft morning light near a tall window, light gently illuminating his face and skin texture, wearing a navy crewneck sweater, shallow depth of field blurring the window frame, editorial close-up, Portra 400 color grading
+- A man in his 40s with a full beard and dark textured hair, leaning slightly forward on a balcony, camera angled upward to highlight his jawline and expression, wearing a charcoal wool coat, soft ambient sky light at dawn, medium format composition, luxury brand aesthetic
+- A man in his 20s with curly hair and clean-shaven, walking through a minimal architectural corridor, turning his head toward the camera mid-step, wearing a camel-colored overcoat, natural corridor light creating depth, cinematic 85mm lens, GQ editorial style
+- A man in his 40s with a goatee and dark wavy hair, sitting on a marble bench, gazing directly into the lens with calm intensity, wearing a dark green waxed cotton jacket, soft diffused light from above, shallow depth of field, Vogue portrait aesthetic
+- A man in his 30s with stubble beard and textured hair, standing in soft morning light near a tall window, light gently illuminating his face and skin texture, wearing a navy crewneck sweater, shallow depth of field blurring the window frame, editorial close-up, Portra 400 color grading
 
-LUXURY SETTING VARIATIONS (NO DARK STREETS):
-- A man in his 20s with curly black hair and stubble, positioned in a minimalist photo studio with seamless white background, wearing a black leather jacket with distressed jeans, dramatic key lighting creating strong shadows, high fashion editorial aesthetic, Dior Homme style
-- A man in his 40s with silver-flecked hair and a trimmed beard, standing on a luxury rooftop terrace at golden hour, wearing a navy blazer with white sneakers, city skyline in soft-focus background with bokeh lights, wide-angle composition, contemporary luxury aesthetic, Louis Vuitton campaign style
-- A man in his 30s with a modern fade and clean-shaven, positioned in a luxury hotel lobby with marble floors and brass details, wearing a dark green waxed cotton coat, sitting in a modern armchair, warm ambient lighting, lifestyle photography, Aesop store aesthetic
-- A man in his 30s with textured hair and light beard, in a modern art gallery with white walls and high ceilings, wearing a camel-colored overcoat, contemplative pose examining a large abstract painting, natural gallery lighting, medium format composition, luxury brand campaign aesthetic
+LUXURY INTERIOR SETTINGS:
+- A man in his 30s with a fade and no facial hair, framed by soft curtains in a luxury suite, light falling across half his face, wearing a white linen shirt, dramatic side lighting creating Rembrandt triangle, editorial close-up, cinematic color grading
+- A man in his 40s with a full beard and textured hair, standing in a sleek elevator with warm light above, casting a premium glow on his skin, wearing a navy blazer, elevator lighting creating sculptural shadows, medium shot, luxury brand campaign
+- A man in his 20s with wavy hair and goatee, sitting on crisp white bedding in a high-end hotel suite, looking straight at the camera with relaxed elegance, wearing a gray cashmere sweater, soft window light, shallow depth of field, Esquire lifestyle aesthetic
+- A man in his 30s with a modern undercut and full beard, in an upscale gallery room, art blurred behind him, face lit like a fashion portrait, wearing a black leather jacket, gallery track lighting creating dramatic contrast, editorial composition, Dior Homme style
+- A man in his 20s with a quiff and stubble beard, sitting on crisp white bedding in a high-end hotel suite, looking straight at the camera with relaxed elegance, wearing a gray cashmere sweater, soft window light, shallow depth of field, Esquire lifestyle aesthetic
 
-LIFESTYLE VARIATIONS:
-- A man in his 30s with a full beard and long hair in a bun, sitting in a minimalist artist's studio with high ceilings and large windows, wearing a paint-stained white shirt with black trousers, surrounded by canvases and art supplies, natural north light, creative professional aesthetic
-- A man in his 40s with a professional haircut and stubble, positioned in a modern co-working space with plants and natural wood, wearing a navy blazer with chinos, working on a laptop, natural daylight, contemporary businessman aesthetic
-- A man in his 20s with textured hair and light beard, at a sunrise beach location, wearing a white linen shirt with rolled sleeves and khaki shorts, contemplative pose facing the ocean, golden hour lighting, relaxed luxury aesthetic
-- A man in his 50s with distinguished gray hair and mustache, in a traditional library with floor-to-ceiling bookshelves, wearing a tweed blazer with corduroy trousers, reading in a leather armchair, warm ambient lighting, sophisticated intellectual aesthetic
+OUTDOOR & ARCHITECTURAL SETTINGS:
+- A man in his 40s with dark textured hair and no facial hair, standing in a garden pathway, greenery softly blurred behind him, face in crisp focus, wearing a beige linen shirt, dappled sunlight filtering through leaves, shallow depth of field at f/1.4, natural color grading
+- A man in his 30s with textured hair and goatee, resting one hand on a railing, looking over his shoulder with subtle golden hour light on his skin, wearing a camel-colored wool coat, warm sunset light creating rim lighting, medium shot, cinematic aesthetic
+- A man in his 20s with curly black hair and no facial hair, in a designer coat standing in the middle of an empty street at dawn, face illuminated by soft ambient sky light, wearing a dark navy overcoat, pre-dawn blue hour lighting, wide shot with shallow depth, luxury campaign aesthetic
+- A man in his 40s with a fade haircut and full beard, standing on wide stone steps, hands in pockets, face captured in a poised editorial angle, wearing a charcoal wool coat, soft morning light, low-angle composition, fashion editorial style
+- A man in his 30s with curly hair and stubble beard, standing in a garden pathway, greenery softly blurred behind him, face in crisp focus, wearing a beige linen shirt, dappled sunlight filtering through leaves, shallow depth of field at f/1.4, natural color grading
 
-FASHION/EDITORIAL VARIATIONS:
-- A man in his 30s with a modern undercut and beard, in a minimalist photo studio with white seamless background, wearing a bold red suit with black turtleneck, dramatic key lighting creating strong shadows, high fashion editorial aesthetic
-- A man in his 20s with curly hair and clean-shaven, on a rooftop with city view, wearing a cream-colored double-breasted blazer with white t-shirt, natural golden hour lighting, lifestyle fashion photography
-- A man in his 40s with a fade and trimmed beard, in an industrial loft with exposed brick, wearing a black leather jacket with white shirt, dramatic window light, contemporary menswear aesthetic
-- A man in his 30s with a textured quiff and stubble, in a luxury retail space with modern architecture, wearing a navy tailored suit with brown loafers, natural store lighting, brand campaign aesthetic
+MINIMALIST & CONTEMPORARY SPACES:
+- A man in his 30s with a fade and full beard, seated in a modern lounge chair, leaning slightly forward toward the camera for an editorial close-up, wearing a navy crewneck, soft natural window light, shallow depth of field, contemporary luxury aesthetic
+- A man in his 40s with a full beard and textured hair, in a minimalist concrete space, chin slightly raised, light creating sculptural shadows on his face, wearing a black turtleneck, dramatic side lighting, medium format composition, architectural photography aesthetic
+- A man in his 20s with wavy hair and clean-shaven, sitting at an outdoor café table, soft sunlight across his face while he looks directly at the viewer, wearing a white button-down shirt, natural café lighting, shallow depth of field, lifestyle photography
+- A man in his 30s with textured hair and no facial hair, standing in front of a luxury boutique window, reflections partially framing his face, wearing a camel-colored coat, window light creating premium glow, medium shot, brand campaign aesthetic
+- A man in his 40s with an undercut and stubble beard, seated in a modern lounge chair, leaning slightly forward toward the camera for an editorial close-up, wearing a navy crewneck, soft natural window light, shallow depth of field, contemporary luxury aesthetic
 
-SPECIFIC DETAILED EXAMPLES:
-- A close-up portrait of a man in his late 30s with Middle Eastern heritage, full beard with silver streaks, laughing genuinely with crinkled eyes, wearing a navy cashmere crewneck, positioned in a sunlit café with blurred background of Parisian street, shallow depth of field at f/1.4, natural window light, Portra 400 color grading, GQ editorial style
-- A medium shot of a man in his 20s with Asian heritage, textured black hair with side part, confident stride, wearing a camel-colored wool coat over a white button-down, walking through a modern Tokyo intersection at golden hour, blurred rush hour traffic creating motion blur, cinematic 85mm lens, street fashion aesthetic
-- A wide shot of a man in his 40s with European heritage, salt-and-pepper hair styled back, well-groomed beard, reclining pose, wearing a charcoal linen suit with white sneakers, positioned on a minimalist concrete bench in a modern art gallery, natural gallery lighting, medium format composition, luxury brand aesthetic
-- A low-angle shot of a man in his 50s with African heritage, silver-gray hair, clean-shaven, commanding presence, wearing a black tailored blazer with white t-shirt, standing on a rooftop at sunset, dramatic sky with orange and purple hues, cinematic wide-angle, luxury campaign aesthetic"""
+CINEMATIC & ATMOSPHERIC:
+- A man in his 40s with dark curly hair and full beard, surrounded by soft-focus city lights at night, face sharply lit with a cinematic glow, wearing a dark navy blazer, city lights creating bokeh background, shallow depth of field, cinematic portrait
+- A man in his 30s with a modern fade and full beard, posing on a rooftop edge during sunset, wind shaping his hair, face perfectly framed, wearing a black leather jacket, golden hour rim lighting, wide-angle composition, luxury brand aesthetic
+- A man in his 20s with curly hair and goatee, adjusting the collar of his coat with one hand, face fully visible and highlighted by side lighting, wearing a camel-colored wool coat, dramatic side lighting, close-up, fashion editorial style
+- A man in his 40s with a quiff haircut and goatee, standing in a minimalist desert scene, sunlight creating a clean, premium sheen across his face, wearing a light beige linen shirt, harsh desert light softened by diffusion, medium format, luxury campaign aesthetic
+- A man in his 20s with wavy hair and stubble beard, surrounded by soft-focus city lights at night, face sharply lit with a cinematic glow, wearing a dark navy blazer, city lights creating bokeh background, shallow depth of field, cinematic portrait
 
-            user_prompt = f"""You are a creative director at a luxury fashion agency (like Dior, Louis Vuitton, Aesop). Your task is to generate an EXTREMELY DETAILED, DIVERSE, FASHION-FORWARD creative scenario for a premium men's skincare brand campaign.
+ADDITIONAL VARIATIONS:
+- A man in his 30s with a fade and no facial hair, standing in a modern library with floor-to-ceiling windows, soft natural light illuminating his profile, wearing a navy crewneck, books blurred in background, shallow depth of field, intellectual luxury aesthetic
+- A man in his 40s with a full beard and textured hair, positioned in a minimalist photo studio with seamless gray background, dramatic key light creating strong facial definition, wearing a black turtleneck, studio lighting, close-up portrait, high fashion aesthetic
+- A man in his 20s with wavy hair and clean-shaven, sitting on a concrete bench in a modern plaza, morning light creating soft shadows, wearing a white t-shirt under a denim jacket, natural plaza lighting, medium shot, contemporary lifestyle aesthetic
+- A man in his 30s with an undercut and no facial hair, standing in a luxury hotel corridor, warm ambient lighting creating premium atmosphere, wearing a charcoal wool coat, corridor lighting, editorial composition, brand campaign aesthetic
+
+ADDITIONAL LIGHTING VARIATIONS:
+- A man in his 20s with an afro and stubble beard, positioned in a minimalist photo studio with soft key lighting, face illuminated with premium glow, wearing a dark navy crewneck, studio lighting creating sculptural definition, close-up portrait, high fashion aesthetic
+- A man in his 40s with slicked back hair and full beard, standing in a modern office space with floor-to-ceiling windows, natural morning light creating depth, wearing a charcoal wool coat, window light illuminating his profile, medium shot, luxury brand aesthetic
+- A man in his 30s with curly hair and goatee, sitting in a luxury car interior, soft dashboard lighting creating ambient glow on his face, wearing a camel-colored jacket, interior lighting, shallow depth of field, editorial lifestyle aesthetic
+- A man in his 20s with a quiff and no facial hair, positioned in a modern art museum, track lighting creating dramatic shadows, wearing a black turtleneck, gallery lighting, medium format composition, contemporary art aesthetic
+
+ADDITIONAL INTERIOR SETTINGS:
+- A man in his 40s with textured hair and stubble beard, standing in a luxury spa setting with soft ambient lighting, face highlighted by warm overhead lights, wearing a light beige linen shirt, spa lighting creating premium atmosphere, editorial close-up, wellness brand aesthetic
+- A man in his 30s with a fade and full beard, seated in a modern restaurant booth, warm restaurant lighting creating intimate atmosphere, wearing a navy blazer, ambient restaurant light, shallow depth of field, lifestyle photography
+- A man in his 20s with wavy hair and goatee, positioned in a high-end barbershop, professional lighting creating sharp definition, wearing a white button-down shirt, barbershop lighting, medium shot, grooming brand aesthetic
+- A man in his 40s with an undercut and no facial hair, standing in a luxury watch boutique, display lighting creating premium glow, wearing a dark green coat, boutique lighting, editorial composition, luxury retail aesthetic
+
+ADDITIONAL OUTDOOR VARIATIONS:
+- A man in his 30s with curly hair and stubble beard, standing on a modern rooftop terrace at blue hour, city lights creating bokeh background, face lit by ambient sky light, wearing a charcoal wool coat, blue hour lighting, wide shot, cinematic aesthetic
+- A man in his 20s with an afro and no facial hair, positioned in a modern park setting, soft natural light filtering through trees, wearing a navy crewneck, dappled sunlight, shallow depth of field, lifestyle photography
+- A man in his 40s with slicked back hair and full beard, standing in front of a modern architectural facade, morning light creating clean shadows, wearing a camel-colored overcoat, architectural lighting, medium format, contemporary design aesthetic
+- A man in his 30s with textured hair and goatee, sitting on a modern bench in a luxury plaza, soft afternoon light illuminating his face, wearing a black leather jacket, natural plaza lighting, medium shot, urban lifestyle aesthetic
+
+ADDITIONAL CINEMATIC VARIATIONS:
+- A man in his 20s with a quiff and stubble beard, positioned in a modern loft space, dramatic window light creating strong contrast, wearing a white t-shirt, natural loft lighting, close-up portrait, editorial aesthetic
+- A man in his 40s with wavy hair and full beard, standing in a minimalist warehouse space, industrial lighting creating atmospheric mood, wearing a dark navy blazer, warehouse lighting, wide shot, cinematic portrait
+- A man in his 30s with a fade and goatee, positioned in a modern airport lounge, soft ambient lighting creating premium atmosphere, wearing a charcoal coat, lounge lighting, shallow depth of field, travel brand aesthetic
+- A man in his 20s with curly hair and no facial hair, standing in a modern gym space, natural light from windows, wearing a gray crewneck, gym lighting, medium shot, athletic lifestyle aesthetic"""
+
+            user_prompt = f"""You are a creative director at a luxury fashion agency (like Dior, Louis Vuitton, Aesop). Your task is to generate an EXTREMELY DETAILED, DIVERSE, FASHION-FORWARD creative scenario for high-quality photoshoot-level lifestyle imagery.
 
 CRITICAL REQUIREMENTS:
-- This is NOT a standard skincare product photo - think luxury fashion brand campaigns (Dior, Louis Vuitton, Aesop, Vogue, GQ, Esquire)
-- Create a UNIQUE, CINEMATIC scenario that stands out dramatically from typical skincare ads
-- NO bathroom settings, NO selfie-style photos, NO standard product shots, NO generic portraits
+- Focus on generating high-quality photoshoot-looking images - think luxury fashion brand campaigns (Dior, Louis Vuitton, Aesop, Vogue, GQ, Esquire)
+- Create a UNIQUE, CINEMATIC scenario that stands out dramatically
+- CRITICAL EXCLUSIONS (ZERO TOLERANCE):
+  - NEVER include women, females, or female models - men only
+  - NEVER show products, product packaging, containers, or product-related items
+  - NEVER show product textures, material details, product close-ups, or product surfaces
+  - NEVER show product application, usage, hands interacting with products, or product in use
+  - NEVER show mirror reflections, bathroom mirrors, reflective surfaces, or mirror selfies
+  - NEVER show kids, children, or minors
+  - NEVER include futuristic elements, sci-fi aesthetics, futuristic technology, or future-looking designs
+  - NEVER include vintage elements, retro aesthetics, period-specific styling, or historical references
+  - NEVER include surreal elements, dreamlike imagery, unrealistic scenarios, or fantastical elements
+  - NO bathroom settings, NO selfie-style photos, NO standard product shots, NO generic portraits
 - NO dark street backgrounds, NO repetitive urban street scenes, NO generic city backgrounds
 - Think luxury fashion brand aesthetic: editorial, cinematic, sophisticated, aspirational
 - The scenario must be EXTREMELY DETAILED - specify pose, outfit details, background details, lighting, composition, everything
@@ -703,9 +786,9 @@ CHAIN-OF-THOUGHT PROCESS - Follow this reasoning:
 
 1. DIVERSITY ANALYSIS:
    - Current diversity focus: {diversity_focus}
-   - CRITICAL: Target American men ONLY (Caucasian, African American, Hispanic, Asian American, Native American, mixed heritage)
-   - NEVER include: Indian/South Asian men, turbans, traditional ethnic clothing
-   - Ensure representation: different American ethnicities, facial hair styles (clean-shaven, stubble, beard, mustache, goatee), hair types (short, long, curly, straight, wavy, textured, afro, braided), ages (20s, 30s, 40s, 50s), body types (athletic, lean, average, robust), lifestyles (athlete, artist, creative professional, entrepreneur, student)
+   - CRITICAL: Target specific ethnicities ONLY: white, African American, Japanese, Latino, mixed (African American and white)
+   - NEVER include: Indian/South Asian men, turbans, traditional ethnic clothing, long hair, gray hair, men over 50
+   - Ensure representation: specific ethnicities (white, African American, Japanese, Latino, mixed African American and white), facial hair styles (full beard, goatee, stubble beard, no facial hair), diverse short hairstyles (fade, undercut, textured, curly, wavy, afro, quiff, slicked back - NO long hair), ages (21-50 years old, NO gray hair), body types (athletic, lean, average, robust), lifestyles (athlete, artist, creative professional, entrepreneur, student)
    - AVOID: Formal suits, business attire, blazers, ties - prefer casual luxury, streetwear, athleisure, minimalist fashion
 
 2. SETTING SELECTION (CRITICAL - BACKGROUND DIVERSITY):
@@ -716,25 +799,29 @@ CHAIN-OF-THOUGHT PROCESS - Follow this reasoning:
    - Specify exact location details (city, type of space, architectural style, specific design elements)
 
 3. MOOD & EMOTION:
-   - Choose psychological trigger: aspiration, confidence, sophistication, contemplation, energy, relaxation
-   - Specify emotional state: genuine laugh, contemplative, confident stride, relaxed pose, dynamic movement
+   - Choose psychological trigger: aspiration, confidence, sophistication, contemplation, calm intensity, relaxed elegance
+   - Specify emotional state: calm intensity, relaxed elegance, poised confidence, contemplative gaze, direct eye contact
+   - Focus on facial expression: calm, confident, sophisticated, relaxed, poised
 
 4. TECHNICAL COMPOSITION:
-   - Camera angle: low angle (power), high angle (vulnerability), eye level (connection), Dutch angle (dynamism)
-   - Framing: extreme close-up, close-up, medium shot, wide shot, extreme wide
-   - Depth of field: shallow (f/1.2-1.8 for focus on subject), deep (f/8-11 for context)
-   - Movement: static pose, walking, dynamic movement, seated, reclining
-   - Magazine aesthetic: Vogue (high fashion), GQ (contemporary style), Esquire (sophisticated lifestyle)
+   - Camera angle: low angle (power, jawline emphasis), high angle (vulnerability), eye level (connection, direct gaze), upward angle (jawline and expression)
+   - Framing: extreme close-up (facial features, skin texture), close-up (face and expression), medium shot (face and upper body), wide shot (full context)
+   - Depth of field: shallow (f/1.2-1.8 for face in crisp focus, background blurred), medium (f/2.8-4 for context), deep (f/8-11 for full scene)
+   - Movement: static pose (standing, sitting, leaning), subtle movement (turning head, adjusting), walking (mid-step, turning toward camera)
+   - Focus on: facial features, skin texture, jawline, expression, direct eye contact, calm intensity
+   - Magazine aesthetic: Vogue (high fashion portraits), GQ (contemporary lifestyle), Esquire (sophisticated editorial)
 
 5. FASHION DETAILS:
    - CRITICAL: NO formal suits, NO business blazers, NO ties - use casual luxury, streetwear, athleisure
    - Specify exact outfit: type of garment (hoodie, crewneck, t-shirt, henley, bomber jacket, leather jacket, field jacket, denim jacket, jeans, chinos, shorts, sneakers), material (cashmere, wool, linen, leather, cotton), color (specific shades), fit (relaxed, fitted, oversized)
    - Include accessories: sneakers, boots, watch, minimal jewelry if relevant
 
-6. LIGHTING & COLOR:
-   - Lighting mood: dramatic (high contrast), soft (gentle), natural (window light), cinematic (movie-like)
-   - Time of day: golden hour, blue hour, midday, sunset, night
-   - Color palette: specific color scheme (warm tones, cool tones, monochromatic, complementary)
+6. LIGHTING & COLOR (CRITICAL - FOCUS ON FACIAL ILLUMINATION):
+   - Lighting types: soft morning light (gentle, illuminating face), golden hour light (warm, subtle on skin), ambient sky light (soft, premium glow), side lighting (sculptural shadows), window light (natural, diffused), studio lighting (dramatic, controlled)
+   - Lighting mood: soft and gentle (illuminating face and skin texture), dramatic (sculptural shadows), premium glow (luxury atmosphere), cinematic (movie-like quality)
+   - Time of day: soft morning light, golden hour, blue hour (dawn/dusk), midday (natural), sunset (warm), night (city lights, cinematic)
+   - Facial illumination: light gently illuminating face, light falling across half face, light creating sculptural shadows, premium glow on skin, soft ambient light on face
+   - Color palette: specific color scheme (warm tones, cool tones, monochromatic, complementary), premium color grading
 
 7. BRAND ALIGNMENT:
    - Ensure "calm confidence" aesthetic: refined, sophisticated, self-respecting, not trying too hard
@@ -743,10 +830,10 @@ CHAIN-OF-THOUGHT PROCESS - Follow this reasoning:
 {expanded_examples}
 
 DIVERSITY REQUIREMENTS (comprehensive):
-- Ethnicity diversity: Represent various ethnic backgrounds and cultural heritages
-- Facial hair diversity: Clean-shaven, light stubble, heavy stubble, full beard, mustache, goatee, handlebar mustache
-- Hair diversity: Short, medium, long; straight, wavy, curly, textured, afro, braided, locs, undercut, fade, quiff, slicked back
-- Age diversity: Men in their 20s, 30s, 40s, 50s (specify exact age range)
+- Ethnicity diversity: White, African American, Japanese, Latino, mixed (African American and white)
+- Facial hair diversity: Full beard, goatee, stubble beard, no facial hair
+- Hair diversity: Diverse short hairstyles only (fade, undercut, textured, curly, wavy, afro, quiff, slicked back) - NO long hair
+- Age diversity: Men between 21 and 50 years old, NO gray hair
 - Body type diversity: Athletic, lean, average build, robust, tall, average height
 - Lifestyle diversity: Athlete, artist, businessman, creative professional, entrepreneur, intellectual, traveler
 - Socioeconomic representation: Luxury accessible to all, not just one demographic
@@ -757,7 +844,13 @@ NEGATIVE EXAMPLES - DON'T CREATE SCENARIOS LIKE THESE:
 - "A man sitting in a car with a red suit" (too simple, no details)
 - "A man in a bathroom" (explicitly forbidden)
 - "A man taking a selfie" (forbidden)
-- "A man with a skincare product" (no products)
+- "A man with a skincare product" (no products - ZERO TOLERANCE)
+- "A man applying product" (no product application - ZERO TOLERANCE)
+- "A man looking in a mirror" (no mirrors - ZERO TOLERANCE)
+- "A man showing product texture" (no textures - ZERO TOLERANCE)
+- "A man in a futuristic setting" (no futuristic - ZERO TOLERANCE)
+- "A man in vintage clothing" (no vintage - ZERO TOLERANCE)
+- "A surreal dreamlike scene" (no surreal - ZERO TOLERANCE)
 - "A man on a dark street" (NO dark street backgrounds - use luxury settings instead)
 - "A man walking through a city street" (NO generic urban backgrounds - use specific luxury locations)
 - Generic portraits without specific details
@@ -774,17 +867,20 @@ VALIDATION CHECKLIST - Before finalizing, ensure:
 ✓ Is it cinematic and editorial in style (Dior/LV/Vogue/GQ/Esquire aesthetic)?
 ✓ Does it avoid bathroom/selfie/product shots?
 ✓ Does it avoid dark street backgrounds and generic urban scenes?
+✓ Does it avoid futuristic, vintage, and surreal elements?
 ✓ Does it follow contrast logic (if applicable)?
 ✓ Does it include psychological triggers?
 ✓ Does it specify technical composition details?
 ✓ Does it specify exact fashion details?
+✓ Is it contemporary and realistic (not futuristic, vintage, or surreal)?
 
 REASONING STEP:
 Before generating the scenario, explain why this scenario works for this brand:
 - How does it convey "calm confidence"?
 - What psychological triggers does it activate?
-- How does it differentiate from typical skincare ads?
+- How does it create high-quality photoshoot-level imagery?
 - What makes it luxury fashion brand-worthy?
+- CRITICAL: Does it avoid ALL exclusions (women, products, textures, applications, mirrors, futuristic, vintage, surreal)?
 
 STRUCTURED OUTPUT FORMAT:
 Return your response in this exact format:

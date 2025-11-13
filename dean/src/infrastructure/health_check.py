@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from datetime import datetime
 from enum import Enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -29,24 +29,18 @@ class HealthCheckResult:
     status: HealthStatus
     message: str
     response_time_ms: float = 0.0
-    details: Dict[str, Any] = None
-    timestamp: datetime = None
-    
-    def __post_init__(self):
-        if self.timestamp is None:
-            self.timestamp = datetime.now()
-        if self.details is None:
-            self.details = {}
+    details: Dict[str, Any] = field(default_factory=dict)
+    timestamp: datetime = field(default_factory=datetime.now)
 
 
 class HealthChecker:
     """Health check system."""
     
-    def __init__(self):
-        self.checks: Dict[str, callable] = {}
+    def __init__(self) -> None:
+        self.checks: Dict[str, Callable[[], HealthCheckResult | bool]] = {}
         self.last_results: Dict[str, HealthCheckResult] = {}
     
-    def register_check(self, name: str, check_func: callable):
+    def register_check(self, name: str, check_func: Callable[[], HealthCheckResult | bool]) -> None:
         """Register a health check function."""
         self.checks[name] = check_func
     

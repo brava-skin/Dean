@@ -121,7 +121,7 @@ class AdvancedRuleEngine:
       - Accessors for validation.engine and scaling.engine tunables (new)
     """
 
-    def __init__(self, cfg: Dict[str, Any], store: Optional[Any] = None):
+    def __init__(self, cfg: Dict[str, Any], store: Optional[Any] = None) -> None:
         self.cfg = cfg or {}
         self.store = store
         self._mem_counters: Dict[str, int] = {}

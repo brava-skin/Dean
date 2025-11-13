@@ -286,7 +286,7 @@ from integrations import notify, post_run_header_and_get_thread_ts, post_thread_
 from integrations import MetaClient, AccountAuth, ClientConfig
 from rules.rules import AdvancedRuleEngine as RuleEngine
 from stages.asc_plus import run_asc_plus_tick
-from infrastructure import now_local, getenv_f, getenv_i, getenv_b, cfg_or_env_f, cfg_or_env_i, cfg_or_env_b, cfg_or_env_list, safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name
+from infrastructure import now_local, getenv_f, getenv_i, getenv_b, cfg, cfg_or_env_f, cfg_or_env_i, cfg_or_env_b, cfg_or_env_list, safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name
 from infrastructure.utils import Timekit
 from infrastructure import start_background_scheduler, stop_background_scheduler, get_scheduler
 
@@ -1391,8 +1391,7 @@ def store_creative_data_in_supabase(supabase_client, meta_client, ad_id: str, st
         if validated_client:
             validated_client.upsert('creative_intelligence', creative_data, on_conflict='creative_id')
         else:
-            # Update ads table instead of creative_intelligence
-            supabase_client.table('ads').upsert(creative_data, on_conflict='ad_id').execute()
+            supabase_client.table('creative_intelligence').upsert(creative_data, on_conflict='creative_id').execute()
         notify(f"🎨 Creative data validated and stored for {ad_id}")
         
     except (KeyError, ValueError, TypeError, AttributeError) as e:
@@ -2121,15 +2120,6 @@ def main() -> None:
             """Deep merge two dictionaries, preserving base values when override has conflicting keys."""
             result = base.copy()
             for key, value in override.items():
-                # Special handling: merge asc_plus_atc into asc_plus
-                if key == "asc_plus_atc" and isinstance(value, dict):
-                    if "asc_plus" not in result:
-                        result["asc_plus"] = {}
-                    # Merge asc_plus_atc rules into asc_plus
-                    if isinstance(result["asc_plus"], dict):
-                        result["asc_plus"].update(value)
-                    continue
-                
                 if key in result and isinstance(result[key], dict) and isinstance(value, dict):
                     # Special handling for asc_plus to preserve settings values
                     if key == "asc_plus":
@@ -2223,13 +2213,13 @@ def main() -> None:
         api_version=os.getenv("FB_API_VERSION") or None,
     )
     # ClientConfig in meta_client.py does not accept attribution fields. Keep it minimal.
-    client_cfg = ClientConfig(
+    cfg = ClientConfig(
         timezone=tz_name
         # currency, budgets and switches are already defaulted inside ClientConfig
     )
     client = MetaClient(
         accounts=[account],
-        cfg=client_cfg,
+        cfg=cfg,
         store=store,
         dry_run=(effective_dry or shadow_mode),
         tenant_id=settings.get("branding_name", "default"),
@@ -2460,8 +2450,6 @@ def main() -> None:
     # Post consolidated run summary
     if not shadow_mode:
         time_str = local_now.strftime("%H:%M %Z")
-        # Check if any critical failures occurred
-        degraded_mode = failures_in_row > 0 or (overall.get("asc_plus", {}).get("health") == "WARNING")
         status = "DEGRADED" if degraded_mode else "OK"
         
         # Post the main run header and get thread timestamp

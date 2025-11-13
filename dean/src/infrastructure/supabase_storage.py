@@ -147,7 +147,7 @@ class SupabaseStorage:
     
     def record_ad_creation(self, ad_id: str, lifecycle_id: str, stage: str, 
                           created_at: Optional[datetime] = None) -> None:
-        """Record when an ad was created for time-based rules."""
+        """Record when an ad was created - updates ads table with created_at."""
         if created_at is None:
             created_at = datetime.now(timezone.utc)
         
@@ -160,80 +160,39 @@ class SupabaseStorage:
             # Ensure created_at is not too far in the past (not before 2020)
             min_date = datetime(2020, 1, 1, tzinfo=timezone.utc)
             if created_at < min_date:
-                created_at = now - timedelta(days=random.randint(1, 30))  # Random time in last 30 days
-                
-            # Use actual timestamp for created_at_epoch
-            epoch_id = int(created_at.timestamp())
-            
-            # Validate epoch timestamp is reasonable (not 123456 or other test values)
-            if epoch_id < 1577836800:  # Before 2020-01-01
                 created_at = now - timedelta(days=random.randint(1, 30))
-                epoch_id = int(created_at.timestamp())
-                
-            # Ensure lifecycle_id is properly formatted
-            # If lifecycle_id is None, empty string, or invalid, generate it from ad_id
-            if not lifecycle_id or (isinstance(lifecycle_id, str) and lifecycle_id.strip() == '') or lifecycle_id == 'lifecycle_001':
-                lifecycle_id = f'lifecycle_{ad_id}' if ad_id else ''
-            # Ensure it's not empty after generation
-            if not lifecycle_id and ad_id:
-                lifecycle_id = f'lifecycle_{ad_id}'
-                
+            
+            # Update ads table with created_at timestamp
+            # Only update if ad exists (don't create new ad record here)
             data = {
-                'ad_id': ad_id,
-                'lifecycle_id': lifecycle_id,
-                'stage': stage,
-                'created_at_epoch': epoch_id,  # Use actual timestamp
-                'created_at_iso': created_at.isoformat(),
+                'created_at': created_at.isoformat(),
                 'updated_at': now.isoformat(),
-                'created_at': created_at.isoformat()  # Add created_at field for consistency
             }
             
-            # Validate all timestamps in ad creation data
+            # Validate all timestamps
             data = validate_all_timestamps(data)
             
-            # Use upsert to handle duplicates with validation
+            # Update existing ad record (if it exists)
             try:
-                validated_client = get_validated_supabase_client(enable_validation=True)
-                if validated_client:
-                    validated_client.upsert('ad_creation_times', data, on_conflict='ad_id')
-                else:
-                    self.client.table('ad_creation_times').upsert(data, on_conflict='ad_id').execute()
-            except Exception:
-                self.client.table('ad_creation_times').upsert(data, on_conflict='ad_id').execute()
-            logger.debug(f"Recorded ad creation time for {ad_id} in Supabase")
+                self.client.table('ads').update(data).eq('ad_id', ad_id).execute()
+                logger.debug(f"Updated ad creation time for {ad_id} in ads table")
+            except Exception as e:
+                # Ad might not exist yet, that's okay - it will be created when ad is created
+                logger.debug(f"Ad {ad_id} not found in ads table yet (will be created later): {e}")
             
         except Exception as e:
             logger.error(f"Failed to record ad creation time for {ad_id}: {e}")
-            raise
+            # Don't raise - this is non-critical
     
     def get_ad_creation_time(self, ad_id: str) -> Optional[datetime]:
-        """Get when an ad was created."""
+        """Get when an ad was created from ads table."""
         try:
-            # Try to get from ad_creation_times table first
-            response = self.client.table('ad_creation_times').select('created_at_iso, created_at_epoch').eq(
+            # Get from ads table
+            response = self.client.table('ads').select('created_at').eq(
                 'ad_id', ad_id
             ).execute()
             
-            if response.data:
-                data = response.data[0]
-                # Prefer created_at_iso as it's more reliable
-                if 'created_at_iso' in data and data['created_at_iso']:
-                    try:
-                        return datetime.fromisoformat(data['created_at_iso'].replace('Z', '+00:00'))
-                    except:
-                        pass
-                
-                # Fallback to epoch if iso parsing fails
-                if 'created_at_epoch' in data and data['created_at_epoch']:
-                    epoch = data['created_at_epoch']
-                    return datetime.fromtimestamp(epoch, timezone.utc)
-            
-            # If not found in ad_creation_times, try ad_lifecycle table
-            response = self.client.table('ad_lifecycle').select('created_at').eq(
-                'ad_id', ad_id
-            ).order('created_at', desc=False).limit(1).execute()
-            
-            if response.data:
+            if response.data and response.data[0].get('created_at'):
                 created_at_str = response.data[0]['created_at']
                 try:
                     return datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
@@ -247,18 +206,28 @@ class SupabaseStorage:
             return None
     
     def cleanup_invalid_creation_times(self) -> None:
-        """Clean up invalid ad creation times with bad timestamps."""
+        """Clean up invalid ad creation times with bad timestamps - now uses ads table."""
         try:
-            # Get all records with invalid timestamps
-            invalid_records = self.client.table('ad_creation_times').select('*').execute()
+            # Get all ads with potentially invalid timestamps
+            all_ads = self.client.table('ads').select('ad_id, created_at').execute()
             
-            for record in invalid_records.data:
+            now = datetime.now(timezone.utc)
+            min_date = datetime(2020, 1, 1, tzinfo=timezone.utc)
+            
+            for record in (all_ads.data or []):
                 ad_id = record.get('ad_id')
-                epoch_id = record.get('created_at_epoch')
+                created_at_str = record.get('created_at')
                 
-                # Check if epoch timestamp is invalid (too small or future)
-                now_epoch = int(datetime.now(timezone.utc).timestamp())
-                if epoch_id < 1577836800 or epoch_id > now_epoch:  # Before 2020 or future
+                if not created_at_str:
+                    continue
+                
+                try:
+                    created_at = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
+                except:
+                    continue
+                
+                # Check if timestamp is invalid (too old or future)
+                if created_at < min_date or created_at > now:
                     # Update with current timestamp
                     self.record_ad_creation(
                         ad_id=ad_id,
@@ -283,87 +252,61 @@ class SupabaseStorage:
     def store_historical_data(self, ad_id: str, lifecycle_id: str, stage: str, 
                              metric_name: str, metric_value: float, 
                              timestamp: Optional[datetime] = None) -> None:
-        """Store historical metric data for an ad."""
-        if timestamp is None:
-            timestamp = datetime.now(timezone.utc)
-        
-        # Helper function to safely convert and bound numeric values with realistic limits
-        def safe_float(value, max_val=999999999.99):
-            try:
-                val = float(value or 0)
-                # Handle infinity and NaN
-                if not (val == val) or val == float('inf') or val == float('-inf'):
-                    return 0.0
-                
-                # Apply realistic bounds based on metric type
-                if metric_name == 'cpm':
-                    max_val = 1000.0  # CPM should be reasonable
-                elif metric_name == 'ctr':
-                    max_val = 100.0   # CTR as percentage
-                elif metric_name == 'cpa':
-                    max_val = 1000.0  # CPA should be reasonable
-                elif metric_name == 'roas':
-                    max_val = 100.0   # ROAS multiplier
-                elif metric_name in ['impressions', 'clicks', 'purchases', 'add_to_cart']:
-                    max_val = 1000000.0  # Count metrics can be higher
-                elif metric_name == 'spend':
-                    max_val = 100000.0   # Spend in dollars
-                
-                # Bound the value to prevent overflow
-                return min(max(val, 0.0), max_val)  # Most metrics shouldn't be negative
-            except (ValueError, TypeError):
-                return 0.0
-        
-        # Ensure timestamp is in the past (not future)
-        now = datetime.now(timezone.utc)
-        if timestamp > now:
-            timestamp = now - timedelta(minutes=random.randint(1, 60))  # Random time in last hour
-        
-        try:
-            data = {
-                'ad_id': ad_id,
-                'lifecycle_id': lifecycle_id or '',
-                'stage': stage,
-                'metric_name': metric_name,
-                'metric_value': safe_float(metric_value),
-                'ts_epoch': int(timestamp.timestamp()),
-                'ts_iso': timestamp.isoformat(),
-                'created_at': timestamp.isoformat(),
-                'recorded_at': now.isoformat()  # When we actually recorded it
-            }
-            
-            # Validate all timestamps in historical data
-            data = validate_all_timestamps(data)
-            
-            # Insert with validation
-            try:
-                validated_client = get_validated_supabase_client(enable_validation=True)
-                if validated_client:
-                    validated_client.insert('historical_data', data)
-                else:
-                    self.client.table('historical_data').insert(data).execute()
-            except Exception:
-                self.client.table('historical_data').insert(data).execute()
-            logger.debug(f"Stored historical data for {ad_id}: {metric_name}={metric_value}")
-            
-        except Exception as e:
-            logger.error(f"Failed to store historical data for {ad_id}: {e}")
-            raise
+        """Store historical metric data - now uses performance_metrics table."""
+        # Historical data is now tracked via performance_metrics table
+        # This method is kept for backward compatibility but does nothing
+        # Individual metric tracking is handled by performance_metrics aggregation
+        logger.debug(f"Historical data storage for {ad_id}:{metric_name} - now handled by performance_metrics table")
+        pass
     
     def get_historical_data(self, ad_id: str, metric_name: str, 
                            since_days: int = 7) -> List[Dict[str, Any]]:
-        """Get historical metric data for an ad within specified days."""
+        """Get historical metric data from performance_metrics table."""
         try:
-            # Calculate cutoff timestamp
-            cutoff_time = datetime.now(timezone.utc).timestamp() - (since_days * 86400)
+            # Get performance metrics for the ad within the date range
+            cutoff_date = (datetime.now(timezone.utc) - timedelta(days=since_days)).date()
             
-            response = self.client.table('historical_data').select(
-                'ts_epoch', 'metric_value', 'ts_iso'
-            ).eq('ad_id', ad_id).eq('metric_name', metric_name).gte(
-                'ts_epoch', int(cutoff_time)
-            ).order('ts_epoch', desc=False).execute()
+            # Map metric names to performance_metrics columns
+            metric_column_map = {
+                'ctr': 'ctr',
+                'cpc': 'cpc',
+                'cpm': 'cpm',
+                'roas': 'roas',
+                'cpa': 'cpa',
+                'atc_rate': 'atc_rate',
+                'purchase_rate': 'purchase_rate',
+                'spend': 'spend',
+                'impressions': 'impressions',
+                'clicks': 'clicks',
+                'purchases': 'purchases',
+                'add_to_cart': 'add_to_cart',
+            }
             
-            return response.data or []
+            column_name = metric_column_map.get(metric_name, 'impressions')
+            
+            response = self.client.table('performance_metrics').select(
+                'date_start', 'date_end', column_name
+            ).eq('ad_id', ad_id).gte('date_start', cutoff_date.isoformat()).order(
+                'date_start', desc=False
+            ).execute()
+            
+            # Convert to historical data format
+            result = []
+            for row in (response.data or []):
+                value = row.get(column_name, 0)
+                if value is not None:
+                    date_start = row.get('date_start', '')
+                    try:
+                        ts_epoch = int(datetime.fromisoformat(date_start.replace('Z', '+00:00')).timestamp())
+                    except:
+                        ts_epoch = 0
+                    result.append({
+                        'metric_value': float(value),
+                        'ts_iso': date_start,
+                        'ts_epoch': ts_epoch
+                    })
+            
+            return result
             
         except Exception as e:
             logger.error(f"Failed to get historical data for {ad_id}: {e}")
@@ -371,23 +314,39 @@ class SupabaseStorage:
     
     def get_historical_metrics(self, ad_id: str, metric_names: List[str], 
                               days_back: int = 30) -> Dict[str, List[Dict[str, Any]]]:
-        """Get comprehensive historical metrics for multiple metric names."""
+        """Get comprehensive historical metrics from performance_metrics table."""
         try:
-            # Calculate cutoff timestamp
-            cutoff_time = datetime.now(timezone.utc).timestamp() - (days_back * 86400)
+            cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days_back)).date()
             
-            response = self.client.table('historical_data').select(
-                'metric_name', 'ts_epoch', 'metric_value', 'ts_iso'
-            ).eq('ad_id', ad_id).in_('metric_name', metric_names).gte(
-                'ts_epoch', int(cutoff_time)
-            ).order('ts_epoch', desc=False).execute()
+            # Map metric names to performance_metrics columns
+            metric_column_map = {
+                'ctr': 'ctr', 'cpc': 'cpc', 'cpm': 'cpm', 'roas': 'roas', 'cpa': 'cpa',
+                'atc_rate': 'atc_rate', 'purchase_rate': 'purchase_rate',
+                'spend': 'spend', 'impressions': 'impressions', 'clicks': 'clicks',
+                'purchases': 'purchases', 'add_to_cart': 'add_to_cart',
+            }
+            
+            # Get all performance metrics for the ad
+            response = self.client.table('performance_metrics').select('*').eq(
+                'ad_id', ad_id
+            ).gte('date_start', cutoff_date.isoformat()).order('date_start', desc=False).execute()
             
             # Group by metric name
             result = {name: [] for name in metric_names}
             for row in (response.data or []):
-                metric_name = row['metric_name']
-                if metric_name in result:
-                    result[metric_name].append(row)
+                for metric_name in metric_names:
+                    column_name = metric_column_map.get(metric_name)
+                    if column_name and column_name in row and row[column_name] is not None:
+                        date_start = row.get('date_start', '')
+                        try:
+                            ts_epoch = int(datetime.fromisoformat(date_start.replace('Z', '+00:00')).timestamp())
+                        except:
+                            ts_epoch = 0
+                        result[metric_name].append({
+                            'metric_value': float(row[column_name]),
+                            'ts_iso': date_start,
+                            'ts_epoch': ts_epoch
+                        })
             
             return result
             
@@ -396,20 +355,19 @@ class SupabaseStorage:
             return {name: [] for name in metric_names}
     
     def cleanup_old_historical_data(self, days_to_keep: int = 90) -> int:
-        """Clean up old historical data to prevent database bloat."""
+        """Clean up old performance metrics to prevent database bloat."""
         try:
-            cutoff_time = datetime.now(timezone.utc).timestamp() - (days_to_keep * 86400)
+            cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days_to_keep)).date()
             
-            response = self.client.table('historical_data').delete().lt(
-                'ts_epoch', int(cutoff_time)
+            response = self.client.table('performance_metrics').delete().lt(
+                'date_start', cutoff_date.isoformat()
             ).execute()
             
-            # Supabase doesn't return count in delete response, so we estimate
-            logger.info(f"Cleaned up historical data older than {days_to_keep} days")
+            logger.info(f"Cleaned up performance metrics older than {days_to_keep} days")
             return 0  # Can't get exact count from Supabase delete
             
         except Exception as e:
-            logger.error(f"Failed to cleanup old historical data: {e}")
+            logger.error(f"Failed to cleanup old performance metrics: {e}")
             return 0
 
 
