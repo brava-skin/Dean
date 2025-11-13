@@ -367,10 +367,8 @@ def build_basic_blocks(title: str, lines: List[str], severity: str = "info", foo
 
 def format_run_header(status: str, time_str: str, profile: str, spend: float, purch: int, cpa: Optional[float], be: Optional[float], impressions: int = 0, clicks: int = 0, ctr: Optional[float] = None, cpc: Optional[float] = None, cpm: Optional[float] = None, atc: int = 0, ic: int = 0) -> str:
     """Format the main run header line."""
-    status_emoji = "✅" if status.upper() == "OK" else "⚠️"
     spend_str = _fmt_currency(spend)
     cpa_str = fmt_eur(cpa)
-    be_str = fmt_eur(be)
 
     def _fmt_int(value: int) -> str:
         return f"{value:,}"
@@ -379,13 +377,14 @@ def format_run_header(status: str, time_str: str, profile: str, spend: float, pu
     cpc_str = fmt_eur(cpc)
     cpm_str = fmt_eur(cpm)
 
+    # Simplified format: time Spend · ATC · IC · PUR CPA IMP · Clicks · CTR · CPC · CPM
     main_line = (
-        f"{status_emoji} {status.upper()} • {time_str}\n"
-        f"Spend {spend_str} · ATC {atc} · IC {ic} · PUR {purch}\n"
-        f"CPA {cpa_str} · BE {be_str} · IMP {_fmt_int(impressions)} · Clicks {_fmt_int(clicks)} · "
+        f"{time_str}"
+        f"Spend {spend_str} · ATC {atc} · IC {ic} · PUR {purch}"
+        f"CPA {cpa_str} IMP {_fmt_int(impressions)} · Clicks {_fmt_int(clicks)} · "
         f"CTR {ctr_str} · CPC {cpc_str} · CPM {cpm_str}"
     )
-    return main_line.strip()
+    return main_line
 
 def format_stage_line(stage: str, counts: Dict[str, any]) -> str:
     """Format a single stage summary line - only show non-zero actions."""
@@ -505,14 +504,20 @@ def post_run_header_and_get_thread_ts(
     """Post the main run header and return thread timestamp for replies."""
     header_text = format_run_header(status, time_str, profile, spend, purch, cpa, be, impressions, clicks, ctr, cpc, cpm, atc, ic)
     
-    # Add stage summaries
+    # Add stage summaries (only if there are actions)
     stage_lines = []
     for stage_data in stage_summaries:
         stage_name = stage_data.get("stage", "")
         counts = stage_data.get("counts", {})
-        stage_lines.append(format_stage_line(stage_name, counts))
+        stage_line = format_stage_line(stage_name, counts)
+        # Only include stage line if it has actual actions (not just "–")
+        if stage_line and not stage_line.endswith(": –"):
+            stage_lines.append(stage_line)
     
-    full_text = header_text + "\n" + "\n".join(stage_lines)
+    if stage_lines:
+        full_text = header_text + "\n" + "\n".join(stage_lines)
+    else:
+        full_text = header_text
     
     # Create a SlackMessage with the header
     msg = SlackMessage(

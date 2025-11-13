@@ -106,6 +106,8 @@ def _install_stdout_noise_filter() -> None:
                 "  max_active_ads:",
                 "  target_active_ads:",
                 "  optimization_goal:",
+                "# Fixed",
+                "# ATC optimization",
             )
 
         def write(self, data: str) -> int:  # type: ignore[override]
