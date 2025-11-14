@@ -92,7 +92,11 @@ def _purchase_and_atc_counts(row: Dict[str, Any]) -> Tuple[int, int]:
         v = safe_f(a.get("value"), 0.0)
         if t == "purchase":
             purch += int(v)
+        elif t == "omni_add_to_cart":
+            # All ATCs across destinations (Meta Shop + website) - preferred for ASC+
+            atc += int(v)
         elif t == "add_to_cart":
+            # Website-only ATCs (fallback if omni_add_to_cart not available)
             atc += int(v)
     return purch, atc
 
@@ -1736,7 +1740,11 @@ def _build_ad_metrics(
     for action in actions:
         action_type = action.get("action_type")
         value = safe_f(action.get("value"))
-        if action_type == "add_to_cart":
+        if action_type == "omni_add_to_cart":
+            # All ATCs across destinations (Meta Shop + website) - preferred for ASC+
+            add_to_cart = int(value)
+        elif action_type == "add_to_cart":
+            # Website-only ATCs (fallback if omni_add_to_cart not available)
             add_to_cart = int(value)
         elif action_type == "initiate_checkout":
             initiate_checkout = int(value)

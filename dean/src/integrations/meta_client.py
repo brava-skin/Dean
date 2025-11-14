@@ -1438,6 +1438,7 @@ class MetaClient:
                 "limit": max(1, min(1000, int(limit))),
                 "action_attribution_windows": action_attribution_windows
                 or [f"{self.cfg.attribution_click_days}d_click", f"{self.cfg.attribution_view_days}d_view"],
+                "action_breakdowns": "action_type",  # Required to see action_type breakdowns (omni_add_to_cart, etc.)
             }
             if breakdowns:
                 params["breakdowns"] = breakdowns

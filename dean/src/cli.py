@@ -1715,9 +1715,8 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
             link_clicks = all_clicks
         
         # Get ATCs from actions array
-        # Meta API: actions array contains website ATCs (action_type="add_to_cart")
-        # For "all ATCs" (Meta + website), the actions array should include all conversions
-        # based on the attribution windows configured (7d_click, 1d_view by default)
+        # Meta API: Use omni_add_to_cart for all ATCs (Meta + website) - best for ASC+ campaigns
+        # Fallback to add_to_cart (website-only) if omni_add_to_cart not available
         for r in rows:
             for a in (r.get("actions") or []):
                 action_type = a.get("action_type")
@@ -1725,7 +1724,11 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
                     value = float(a.get("value") or 0)
                     if action_type == "purchase":
                         purch += value
+                    elif action_type == "omni_add_to_cart":
+                        # All ATCs across destinations (Meta Shop + website) - preferred for ASC+
+                        atc += value
                     elif action_type == "add_to_cart":
+                        # Website-only ATCs (fallback if omni_add_to_cart not available)
                         atc += value
                     elif action_type == "initiate_checkout":
                         ic += value
