@@ -1094,7 +1094,11 @@ def collect_stage_ad_data(meta_client, settings: Dict[str, Any], stage: str) -> 
             for action in actions:
                 action_type = action.get("action_type")
                 value = float(action.get("value", 0) or 0)
-                if action_type == "add_to_cart":
+                if action_type == "omni_add_to_cart":
+                    # All ATCs across destinations (Meta Shop + website) - preferred for ASC+
+                    add_to_cart = int(value)
+                elif action_type == "add_to_cart":
+                    # Website-only ATCs (fallback if omni_add_to_cart not available)
                     add_to_cart = int(value)
                 elif action_type == "initiate_checkout":
                     initiate_checkout = int(value)
