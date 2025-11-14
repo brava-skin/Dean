@@ -895,30 +895,40 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
 
         # First, ensure ad exists in ads table before inserting performance_metrics
         # This prevents foreign key constraint violations
+        # Only update existing ads - don't create new ones with missing required fields
         creative_id = ad_data.get('creative_id') or ''
         campaign_id = ad_data.get('campaign_id') or ''
         adset_id = ad_data.get('adset_id') or ''
         
-        ads_record = {
-            'ad_id': ad_id,
-            'creative_id': creative_id,
-            'campaign_id': campaign_id,
-            'adset_id': adset_id,
-            'status': ad_data.get('status', 'active'),
-            'performance_score': quality_score,
-            'fatigue_index': fatigue_index,
-            'updated_at': datetime.now(timezone.utc).isoformat(),
-        }
+        # Normalize performance_score to 0-1 range (quality_score is 0-100)
+        normalized_performance_score = min(max(quality_score / 100.0, 0.0), 1.0) if quality_score is not None else None
         
-        # Only include created_at if this is a new ad
-        if not ad_data.get('created_at'):
-            ads_record['created_at'] = datetime.now(timezone.utc).isoformat()
-        
-        try:
-            validated_client.upsert('ads', ads_record, on_conflict='ad_id')
-        except Exception as e:
-            logger.warning(f"Failed to ensure ad exists in ads table: {e}")
-            # Continue anyway - the ad might already exist
+        # Only update if we have a valid creative_id and the ad likely exists
+        # Don't try to create new ads here - that should happen during ad creation
+        if creative_id and ad_id:
+            try:
+                # Check if ad exists first
+                existing = validated_client.client.table('ads').select('ad_id').eq('ad_id', ad_id).limit(1).execute()
+                if existing.data:
+                    # Update existing ad with performance data
+                    ads_update = {
+                        'ad_id': ad_id,
+                        'performance_score': normalized_performance_score,
+                        'fatigue_index': min(max(fatigue_index, 0.0), 1.0) if fatigue_index is not None else None,
+                        'updated_at': datetime.now(timezone.utc).isoformat(),
+                    }
+                    # Only include creative_id, campaign_id, adset_id if they're not empty
+                    if creative_id:
+                        ads_update['creative_id'] = creative_id
+                    if campaign_id:
+                        ads_update['campaign_id'] = campaign_id
+                    if adset_id:
+                        ads_update['adset_id'] = adset_id
+                    
+                    validated_client.client.table('ads').update(ads_update).eq('ad_id', ad_id).execute()
+            except Exception as e:
+                logger.debug(f"Failed to update existing ad in ads table: {e}")
+                # Continue anyway - the ad might not exist yet or validation might fail
         
         # Prepare performance_metrics data (only valid fields from consolidated schema)
         performance_data = {
@@ -957,201 +967,9 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
             notify(f"❌ Performance data validation/insertion failed: {e}")
             return
         
-        # Prepare creative intelligence data - validation will happen automatically
-        try:
-            # Skip if creative_intelligence already exists for this ad
-            existing_check = validated_client.select('creative_intelligence').eq(
-                'ad_id', ad_data.get('ad_id', '')
-            ).execute()
-            
-            if not existing_check.data:
-                creative_id = ad_data.get('creative_id') or f'creative_{ad_data.get("ad_id", "")}'
-                creative_type = ad_data.get('creative_type', 'image')
-                if creative_type not in ['image', 'video', 'carousel', 'collection', 'story', 'reels']:
-                    creative_type = 'image'  # Default to 'image' for ASC+ static image campaigns
-                
-                # Generate realistic creative details
-                import random
-                # Creative technical details for static images
-                duration_seconds = None  # Static images don't have duration
-                aspect_ratios = ['1:1', '4:5', '9:16', '16:9']  # Common ad image ratios
-                aspect_ratio = random.choice(aspect_ratios)
-                file_size_mb = round(random.uniform(0.5, 5.0), 2)  # Smaller for images
-                resolutions = ['1024x1024', '1080x1080', '1200x1500', '1080x1920', '1920x1080']
-                resolution = random.choice(resolutions)
-                
-                # Color palette (generate realistic colors)
-                color_palettes = [
-                    ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7'],
-                    ['#6C5CE7', '#A29BFE', '#FD79A8', '#FDCB6E', '#E17055'],
-                    ['#00B894', '#00CEC9', '#0984E3', '#6C5CE7', '#A29BFE'],
-                    ['#E84393', '#FDCB6E', '#00B894', '#0984E3', '#6C5CE7']
-                ]
-                color_palette = json.dumps(random.choice(color_palettes))
-                
-                # Creative content features for static images
-                text_overlay = True  # ASC+ creatives always have text overlay
-                music_present = False  # Static images don't have audio
-                voice_over = False  # Static images don't have audio
-                
-                # Load creative content from copy bank
-                try:
-                    copy_bank_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'copy_bank.json')
-                    with open(copy_bank_path, 'r') as f:
-                        copy_bank = json.load(f)
-                    
-                    # Get creative content from copy bank
-                    global_copy = copy_bank.get('global', {})
-                    descriptions = global_copy.get('descriptions', [])
-                    headlines = global_copy.get('headlines', [])
-                    primary_texts = global_copy.get('primary_texts', [])
-                    
-                    # Select content from copy bank
-                    description = random.choice(descriptions) if descriptions else "Premium quality product"
-                    headline = random.choice(headlines) if headlines else "Quality You Can Trust"
-                    primary_text = random.choice(primary_texts) if primary_texts else "Experience the difference with our premium selection."
-                    
-                except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
-                    logger.warning(f"Failed to load copy bank: {e}")
-                    # Fallback to basic content
-                    description = "Premium quality product"
-                    headline = "Quality You Can Trust"
-                    primary_text = "Experience the difference with our premium selection."
-                
-                # Calculate performance metrics based on ad data
-                # Clamp to NUMERIC(5,4) range (-9.9999 to 9.9999) to prevent database overflow
-                ctr = safe_float(ad_data.get('ctr', 0))
-                cpa = safe_float(ad_data.get('cpa', 0))
-                roas = safe_float(ad_data.get('roas', 0))
-                
-                # Clamp values to fit NUMERIC(5,4) database constraint
-                ctr = min(max(ctr, DB_NUMERIC_MIN), DB_NUMERIC_MAX)
-                cpa = min(max(cpa, DB_NUMERIC_MIN), DB_NUMERIC_MAX)
-                roas = min(max(roas, DB_NUMERIC_MIN), DB_NUMERIC_MAX)
-                
-                # Calculate performance score (0-1 scale)
-                performance_score = 0.5  # Base score
-                if ctr > 0:
-                    performance_score += min(ctr / 5.0, 0.3)  # CTR contribution (max 0.3)
-                if cpa > 0 and cpa < 50:
-                    performance_score += min((50 - cpa) / 50, 0.2)  # CPA contribution (max 0.2)
-                if roas > 0:
-                    performance_score += min(roas / 10.0, 0.2)  # ROAS contribution (max 0.2)
-                
-                performance_score = min(max(performance_score, 0.0), 1.0)
-                
-                # Calculate fatigue index (0-1 scale, higher = more fatigued)
-                fatigue_index = 0.0
-                if ctr < 1.0:
-                    fatigue_index += 0.3
-                if cpa > 30:
-                    fatigue_index += 0.3
-                if roas < 2.0:
-                    fatigue_index += 0.4
-                fatigue_index = min(fatigue_index, 1.0)
-                
-                # Generate similarity vector (384 dimensions to match validation)
-                similarity_vector = [random.uniform(-1, 1) for _ in range(384)]
-                
-                # Enhanced metadata
-                metadata = {
-                    'source': 'copy_bank',
-                    'created': datetime.now().isoformat(),
-                    'needs_review': False,  # Copy bank content is pre-approved
-                    'creative_quality': 'high',  # Copy bank content is curated
-                    'engagement_score': random.uniform(0.6, 1.0),  # Higher scores for copy bank content
-                    'brand_safety': 'safe',  # Copy bank content is brand-safe
-                    'content_category': 'skincare',  # Based on copy bank content
-                    'target_audience': '25-44',  # Based on copy bank content
-                    'copy_bank_version': '1.0',
-                    'campaign_id': ad_data.get('campaign_id', ''),
-                    'adset_id': ad_data.get('adset_id', ''),
-                    'campaign_name': ad_data.get('campaign_name', ''),
-                    'adset_name': ad_data.get('adset_name', '')
-                }
-                
-                creative_data = {
-                    'creative_id': creative_id,
-                    'ad_id': ad_data.get('ad_id', ''),
-                    'creative_type': creative_type,
-                    'duration_seconds': duration_seconds,
-                    'aspect_ratio': aspect_ratio,
-                    'file_size_mb': file_size_mb,
-                    'resolution': resolution,
-                    'color_palette': color_palette,
-                    'text_overlay': text_overlay,
-                    'music_present': music_present,
-                    'voice_over': voice_over,
-                    'avg_ctr': ctr,
-                    'avg_cpa': cpa,
-                    'avg_roas': roas,
-                    'performance_rank': random.randint(1, 100),
-                    'performance_score': round(performance_score, 4),
-                    'fatigue_index': round(fatigue_index, 4),
-                    'similarity_vector': similarity_vector,
-                    'description': description,
-                    'headline': headline,
-                    'primary_text': primary_text,
-                    'lifecycle_id': ad_data.get('lifecycle_id', ''),
-                    'stage': ad_data.get('stage', 'asc_plus'),
-                    'metadata': metadata
-                }
-                
-                # Validate all timestamps in creative intelligence data
-                creative_data = validate_all_timestamps(creative_data)
-                
-                # Ensure performance metrics are calculated if missing
-                if not creative_data.get('avg_ctr') or not creative_data.get('avg_cpa') or not creative_data.get('avg_roas'):
-                    try:
-                        from infrastructure.data_optimizer import CreativeIntelligenceOptimizer
-                        optimizer = CreativeIntelligenceOptimizer(supabase_client)
-                        metrics = optimizer.calculate_performance_metrics(
-                            creative_id,
-                            ad_data.get('ad_id', ''),
-                        )
-                        # Update with calculated metrics
-                        creative_data['avg_ctr'] = metrics.get('avg_ctr', creative_data.get('avg_ctr', 0.0))
-                        creative_data['avg_cpa'] = metrics.get('avg_cpa', creative_data.get('avg_cpa', 0.0))
-                        creative_data['avg_roas'] = metrics.get('avg_roas', creative_data.get('avg_roas', 0.0))
-                        creative_data['performance_score'] = metrics.get('performance_score', creative_data.get('performance_score', 0.0))
-                        creative_data['fatigue_index'] = metrics.get('fatigue_index', creative_data.get('fatigue_index', 0.0))
-                    except ImportError:
-                        pass  # Optimizer not available
-                    except Exception as e:
-                        logger.debug(f"Failed to calculate performance metrics: {e}")
-                
-                # Insert creative intelligence data with automatic validation
-                try:
-                    result = validated_client.insert('creative_intelligence', creative_data)
-                except ValidationError as ve:
-                    error_message = (
-                        f"creative_intelligence insert blocked for ad {ad_data.get('ad_id', '')} "
-                        f"({creative_id}): {ve}"
-                    )
-                    logger.error(error_message)
-                    notify(f"⚠️ {error_message}")
-                    return
-
-                if result:
-                    logger.info(
-                        "Creative intelligence validated and inserted: %s for ad %s",
-                        creative_id,
-                        ad_data.get('ad_id'),
-                    )
-
-                    # Schedule performance metrics update (async, non-blocking)
-                    try:
-                        from infrastructure.data_optimizer import CreativeIntelligenceOptimizer
-
-                        optimizer = CreativeIntelligenceOptimizer(supabase_client)
-                        # Update in background (will calculate from performance_metrics)
-                        optimizer.update_creative_performance(
-                            creative_id, ad_data.get('ad_id', '')
-                        )
-                    except Exception:
-                        pass  # Non-critical, continue
-        except (KeyError, ValueError, TypeError) as e:
-            logger.error(f"Failed to store creative intelligence for {ad_data.get('ad_id')}: {e}", exc_info=True)
+        # Creative intelligence data is now stored in ads table
+        # This is handled by _sync_creative_intelligence_records() in asc_plus.py
+        # No need to store it here - skip this section
         
         # Track creative performance (populates creative_performance table)
         try:
