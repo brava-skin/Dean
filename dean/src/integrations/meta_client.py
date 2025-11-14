@@ -167,6 +167,7 @@ class ClientConfig:
         "spend", "impressions", "clicks", "reach", "unique_clicks",
         "inline_link_clicks", "inline_link_click_ctr", "cost_per_inline_link_click",
         "cpc", "cpm",  # All-clicks CPC and CPM (includes Meta clicks)
+        "add_to_cart", "add_to_cart_value",  # All ATCs (Meta + website)
         "actions", "action_values", "purchase_roas",
     )
     breakdowns_default: Tuple[str, ...] = ()

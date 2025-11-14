@@ -1685,11 +1685,14 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
             fields=[
                 "spend",
                 "actions",
+                "add_to_cart",  # All ATCs (Meta + website)
+                "add_to_cart_value",
                 "impressions",
                 "clicks",
                 "inline_link_clicks",
                 "inline_link_click_ctr",
                 "cost_per_inline_link_click",
+                "cpc",  # All-clicks CPC
                 "cpm",
             ], 
             time_range={
@@ -1708,26 +1711,47 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
         )
         all_clicks = sum(_metric_to_float(r.get("clicks")) for r in rows)
         purch = 0.0
-        atc = 0.0  # Add to cart
+        atc = 0.0  # Add to cart (all ATCs: Meta + website)
         ic = 0.0   # Initiate checkout
 
         if link_clicks <= 0 and all_clicks > 0:
             link_clicks = all_clicks
         
-        for r in rows:
-            for a in (r.get("actions") or []):
-                action_type = a.get("action_type")
-                try:
-                    value = float(a.get("value") or 0)
-                    if action_type == "purchase":
-                        purch += value
-                    elif action_type == "add_to_cart":
-                        atc += value
-                    elif action_type == "initiate_checkout":
-                        ic += value
-                except (KeyError, TypeError, ValueError):
-                    # Skip invalid action entries
-                    continue
+        # First, try to get ATCs from Meta's direct "add_to_cart" field (includes all ATCs)
+        # This matches "Add to Cart (all)" from Meta Ads Manager
+        atc_values = [_metric_to_float(row.get("add_to_cart")) for row in rows if row.get("add_to_cart")]
+        if atc_values:
+            atc = sum(atc_values)
+        else:
+            # Fallback: count from actions array (website ATCs only)
+            for r in rows:
+                for a in (r.get("actions") or []):
+                    action_type = a.get("action_type")
+                    try:
+                        value = float(a.get("value") or 0)
+                        if action_type == "purchase":
+                            purch += value
+                        elif action_type == "add_to_cart":
+                            atc += value
+                        elif action_type == "initiate_checkout":
+                            ic += value
+                    except (KeyError, TypeError, ValueError):
+                        # Skip invalid action entries
+                        continue
+        
+        # If we got ATCs from direct field, still need to get purchases and IC from actions
+        if atc_values:
+            for r in rows:
+                for a in (r.get("actions") or []):
+                    action_type = a.get("action_type")
+                    try:
+                        value = float(a.get("value") or 0)
+                        if action_type == "purchase":
+                            purch += value
+                        elif action_type == "initiate_checkout":
+                            ic += value
+                    except (KeyError, TypeError, ValueError):
+                        continue
 
         # Calculate metrics
         link_clicks = max(link_clicks, 0.0)
