@@ -365,10 +365,11 @@ def build_basic_blocks(title: str, lines: List[str], severity: str = "info", foo
 
 # ---------- New messaging helpers ----------
 
-def format_run_header(status: str, time_str: str, profile: str, spend: float, purch: int, cpa: Optional[float], be: Optional[float], impressions: int = 0, clicks: int = 0, ctr: Optional[float] = None, cpc: Optional[float] = None, cpm: Optional[float] = None, atc: int = 0, ic: int = 0) -> str:
+def format_run_header(status: str, time_str: str, profile: str, spend: float, purch: int, cpa: Optional[float], be: Optional[float], impressions: int = 0, clicks: int = 0, ctr: Optional[float] = None, cpc: Optional[float] = None, cpm: Optional[float] = None, atc: int = 0, ic: int = 0, cost_per_atc: Optional[float] = None) -> str:
     """Format the main run header line."""
     spend_str = _fmt_currency(spend)
     cpa_str = fmt_eur(cpa)
+    cost_per_atc_str = fmt_eur(cost_per_atc)
 
     def _fmt_int(value: int) -> str:
         return f"{value:,}"
@@ -377,11 +378,11 @@ def format_run_header(status: str, time_str: str, profile: str, spend: float, pu
     cpc_str = fmt_eur(cpc)
     cpm_str = fmt_eur(cpm)
 
-    # Simplified format: time Spend · ATC · IC · PUR CPA IMP · Clicks · CTR · CPC · CPM
+    # Simplified format: time Spend · ATC · IC · PUR CPA CPATC IMP · Clicks · CTR · CPC · CPM
     main_line = (
         f"{time_str}"
         f"Spend {spend_str} · ATC {atc} · IC {ic} · PUR {purch}"
-        f"CPA {cpa_str} IMP {_fmt_int(impressions)} · Clicks {_fmt_int(clicks)} · "
+        f"CPA {cpa_str} CPATC {cost_per_atc_str} IMP {_fmt_int(impressions)} · Clicks {_fmt_int(clicks)} · "
         f"CTR {ctr_str} · CPC {cpc_str} · CPM {cpm_str}"
     )
     return main_line
@@ -499,10 +500,11 @@ def post_run_header_and_get_thread_ts(
     cpc: Optional[float] = None,
     cpm: Optional[float] = None,
     atc: int = 0,
-    ic: int = 0
+    ic: int = 0,
+    cost_per_atc: Optional[float] = None
 ) -> Optional[str]:
     """Post the main run header and return thread timestamp for replies."""
-    header_text = format_run_header(status, time_str, profile, spend, purch, cpa, be, impressions, clicks, ctr, cpc, cpm, atc, ic)
+    header_text = format_run_header(status, time_str, profile, spend, purch, cpa, be, impressions, clicks, ctr, cpc, cpm, atc, ic, cost_per_atc)
     
     # Add stage summaries (only if there are actions)
     stage_lines = []

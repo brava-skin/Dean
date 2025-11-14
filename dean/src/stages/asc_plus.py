@@ -1669,11 +1669,15 @@ def _build_ad_metrics(
     )
     ctr = ctr_row if ctr_row is not None else ((clicks_val / impressions_val) if impressions_val > 0 else None)
 
+    # Use Meta API 'cpc' field (all clicks) - this includes Meta clicks, not just link clicks
+    # This matches "CPC (all) (EUR)" from Meta Ads Manager
     raw_cpc = _float_or_none(row.get("cpc"))
+    if raw_cpc is None and clicks_val > 0:
+        # Fallback: calculate from spend / all clicks (includes Meta clicks)
+        raw_cpc = spend_val / clicks_val if clicks_val > 0 else None
+    # Only use cost_per_inline_link_click as last resort (link clicks only)
     if raw_cpc is None:
         raw_cpc = _float_or_none(row.get("cost_per_inline_link_click"))
-    if raw_cpc is None and clicks_val > 0:
-        raw_cpc = spend_val / clicks_val if clicks_val > 0 else None
     cpc = round(raw_cpc, 2) if raw_cpc is not None else None
 
     raw_cpm = _float_or_none(row.get("cpm"))
@@ -1682,6 +1686,9 @@ def _build_ad_metrics(
     cpm = round(raw_cpm, 2) if raw_cpm is not None else None
 
     cpa = (spend_val / purchases) if purchases > 0 else None
+    
+    # Cost per Add to Cart (includes all ATCs: Meta + website)
+    cost_per_atc = (spend_val / add_to_cart) if add_to_cart > 0 else None
 
     reach_val = safe_f(row.get("reach")) if row.get("reach") is not None else None
     frequency = _float_or_none(row.get("frequency"))
@@ -1738,6 +1745,7 @@ def _build_ad_metrics(
         "initiate_checkout": initiate_checkout,
         "roas": roas,
         "cpa": cpa,
+        "cost_per_atc": cost_per_atc,
         "revenue": revenue,
         "frequency": frequency,
         "dwell_time": dwell_time,

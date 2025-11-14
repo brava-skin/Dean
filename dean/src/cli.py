@@ -2469,7 +2469,8 @@ def main() -> None:
             cpc=account_info['cpc'],
             cpm=account_info['cpm'],
             atc=account_info['atc'],
-            ic=account_info['ic']
+            ic=account_info['ic'],
+            cost_per_atc=account_info.get('cost_per_atc')
         )
         
         # Collect ad insights and post as thread reply

@@ -166,6 +166,7 @@ class ClientConfig:
         "ad_id", "ad_name", "adset_id", "campaign_id",
         "spend", "impressions", "clicks", "reach", "unique_clicks",
         "inline_link_clicks", "inline_link_click_ctr", "cost_per_inline_link_click",
+        "cpc", "cpm",  # All-clicks CPC and CPM (includes Meta clicks)
         "actions", "action_values", "purchase_roas",
     )
     breakdowns_default: Tuple[str, ...] = ()
