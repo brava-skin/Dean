@@ -930,6 +930,22 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
                 logger.debug(f"Failed to update existing ad in ads table: {e}")
                 # Continue anyway - the ad might not exist yet or validation might fail
         
+        # Only insert performance_metrics if the ad exists in the ads table
+        # Check if ad exists to prevent foreign key constraint violations
+        ad_exists = False
+        if ad_id:
+            try:
+                existing = validated_client.client.table('ads').select('ad_id').eq('ad_id', ad_id).limit(1).execute()
+                ad_exists = bool(existing.data)
+            except Exception as e:
+                logger.debug(f"Failed to check if ad exists: {e}")
+                # If we can't check, skip inserting to avoid foreign key violations
+                ad_exists = False
+        
+        if not ad_exists:
+            logger.debug(f"Skipping performance_metrics insert for ad {ad_id} - ad does not exist in ads table")
+            return
+        
         # Prepare performance_metrics data (only valid fields from consolidated schema)
         performance_data = {
             'ad_id': ad_id,
@@ -954,7 +970,7 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         # Validate all timestamps in performance data
         performance_data = validate_all_timestamps(performance_data)
         
-        # Insert performance data with automatic validation
+        # Insert performance data with automatic validation (ad exists, so foreign key constraint will be satisfied)
         try:
             result = validated_client.upsert(
                 'performance_metrics',
