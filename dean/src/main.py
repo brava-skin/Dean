@@ -875,57 +875,70 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         cpm_val = ad_data.get('cpm')
         roas_val = ad_data.get('roas')
         cpa_val = ad_data.get('cpa')
-        dwell_time_val = ad_data.get('dwell_time')
-        frequency_val = ad_data.get('frequency')
+        impressions = int(ad_data.get('impressions', 0))
+        add_to_cart = int(ad_data.get('atc', 0))
+        purchases = int(ad_data.get('purchases', 0))
+        
+        # Calculate atc_rate and purchase_rate if missing
         atc_rate_val = ad_data.get('atc_rate')
-        ic_rate_val = ad_data.get('ic_rate')
+        if atc_rate_val is None and impressions > 0:
+            atc_rate_val = add_to_cart / impressions
+        
         purchase_rate_val = ad_data.get('purchase_rate')
-        atc_to_ic_rate_val = ad_data.get('atc_to_ic_rate')
-        ic_to_purchase_rate_val = ad_data.get('ic_to_purchase_rate')
+        if purchase_rate_val is None and impressions > 0:
+            purchase_rate_val = purchases / impressions
 
         def clamp_fraction(value: Optional[float]) -> Optional[float]:
             if value is None:
                 return None
             return max(0.0, min(1.0, safe_float(value, 1.0)))
 
+        # First, ensure ad exists in ads table before inserting performance_metrics
+        # This prevents foreign key constraint violations
+        creative_id = ad_data.get('creative_id') or ''
+        campaign_id = ad_data.get('campaign_id') or ''
+        adset_id = ad_data.get('adset_id') or ''
+        
+        ads_record = {
+            'ad_id': ad_id,
+            'creative_id': creative_id,
+            'campaign_id': campaign_id,
+            'adset_id': adset_id,
+            'status': ad_data.get('status', 'active'),
+            'performance_score': quality_score,
+            'fatigue_index': fatigue_index,
+            'updated_at': datetime.now(timezone.utc).isoformat(),
+        }
+        
+        # Only include created_at if this is a new ad
+        if not ad_data.get('created_at'):
+            ads_record['created_at'] = datetime.now(timezone.utc).isoformat()
+        
+        try:
+            validated_client.upsert('ads', ads_record, on_conflict='ad_id')
+        except Exception as e:
+            logger.warning(f"Failed to ensure ad exists in ads table: {e}")
+            # Continue anyway - the ad might already exist
+        
+        # Prepare performance_metrics data (only valid fields from consolidated schema)
         performance_data = {
             'ad_id': ad_id,
-            'lifecycle_id': lifecycle_id,
-            'stage': stage,  # Use the stage parameter passed to the function
             'window_type': '1d',
             'date_start': date_start,
-            'date_end': ad_data.get('date_end', ''),
-            'impressions': int(ad_data.get('impressions', 0)),
+            'date_end': ad_data.get('date_end', date_start),
+            'impressions': impressions,
             'clicks': int(ad_data.get('clicks', 0)),
             'spend': safe_float(ad_data.get('spend', 0), 999999.99),
-            'purchases': int(ad_data.get('purchases', 0)),
-            'add_to_cart': int(ad_data.get('atc', 0)),
+            'purchases': purchases,
+            'add_to_cart': add_to_cart,
             'initiate_checkout': int(ad_data.get('ic', 0)),
             'ctr': clamp_fraction(ctr_val),
             'cpc': safe_float(cpc_val, DB_CPC_MAX) if cpc_val is not None else None,
             'cpm': safe_float(cpm_val, DB_CPM_MAX) if cpm_val is not None else None,
             'roas': safe_float(roas_val, DB_ROAS_MAX) if roas_val is not None else None,
             'cpa': safe_float(cpa_val, DB_CPA_MAX) if cpa_val is not None else None,
-            'dwell_time': safe_float(dwell_time_val, DB_DWELL_TIME_MAX) if dwell_time_val is not None else None,
-            'frequency': safe_float(frequency_val, DB_FREQUENCY_MAX) if frequency_val is not None else None,
             'atc_rate': clamp_fraction(atc_rate_val),
-            'ic_rate': clamp_fraction(ic_rate_val),
             'purchase_rate': clamp_fraction(purchase_rate_val),
-            'atc_to_ic_rate': clamp_fraction(atc_to_ic_rate_val),
-            'ic_to_purchase_rate': clamp_fraction(ic_to_purchase_rate_val),
-            'performance_quality_score': quality_score,
-            'stability_score': stability_score,
-            'momentum_score': momentum_score,
-            'fatigue_index': fatigue_index,
-            'hour_of_day': hour_of_day,
-            'day_of_week': day_of_week,
-            'is_weekend': is_weekend,
-            'ad_age_days': int(ad_age_days) if ad_age_days else 0,
-            'next_stage': _get_next_stage(stage),
-            'stage_duration_hours': _calculate_stage_duration_hours(ad_id, stage),
-            'previous_stage': _get_previous_stage(ad_id, stage),
-            'stage_performance': _get_stage_performance(ad_data, stage),
-            'transition_reason': _get_transition_reason(ad_data, stage),
         }
         
         # Validate all timestamps in performance data
@@ -942,36 +955,6 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         except (KeyError, ValueError, TypeError, AttributeError) as e:
             logger.error(f"Performance data validation/insertion failed: {e}", exc_info=True)
             notify(f"❌ Performance data validation/insertion failed: {e}")
-            return
-        
-        # Prepare lifecycle data - validation will happen automatically
-        # For new ads, previous_stage should be None (not empty string)
-        lifecycle_data = {
-            'ad_id': ad_data.get('ad_id', ''),
-            'creative_id': ad_data.get('creative_id', ''),
-            'campaign_id': ad_data.get('campaign_id', ''),
-            'adset_id': ad_data.get('adset_id', ''),
-            'stage': stage,
-            'status': ad_data.get('status', 'active'),
-            'lifecycle_id': ad_data.get('lifecycle_id', ''),
-            'metadata': ad_data.get('metadata', {}),
-            'previous_stage': None,  # New ads have no previous stage
-            'next_stage': None,  # Will be set when transitioning
-            'stage_duration_hours': None,  # Will be calculated over time
-            'stage_performance': None,  # Will be populated with performance data
-            'transition_reason': None,  # No transition for new ads
-        }
-        
-        # Insert lifecycle data with automatic validation
-        try:
-            result = validated_client.upsert(
-                'ad_lifecycle',
-                lifecycle_data,
-                on_conflict='ad_id,stage'
-            )
-            notify(f"✅ Lifecycle data validated and inserted: {result}")
-        except Exception as e:
-            notify(f"❌ Lifecycle data validation/insertion failed: {e}")
             return
         
         # Prepare creative intelligence data - validation will happen automatically
@@ -2005,7 +1988,7 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
         return {
             "spend": None, "purchases": None, "cpa": None, "breakeven": None,
             "impressions": None, "clicks": None, "ctr": None, "cpc": None,
-            "cpm": None, "atc": None, "ic": None, "active_ads": None
+            "cpm": None, "atc": None, "ic": None, "cost_per_atc": None, "active_ads": None
         }
 
 

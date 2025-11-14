@@ -2082,22 +2082,28 @@ def _pause_ad(client: MetaClient, ad_id: str, reason: Optional[str] = None) -> b
 
 
 def _record_lifecycle_event(ad_id: str, status: str, reason: str) -> None:
+    """Record lifecycle event in ads table (consolidated from ad_lifecycle)."""
     try:
         from infrastructure.supabase_storage import get_validated_supabase_client
         client = get_validated_supabase_client()
         if not client:
             return
         lifecycle_status = _normalize_lifecycle_status(status)
+        
+        # Update ads table with status and kill_reason
         payload = {
             "ad_id": ad_id,
-            "stage": "asc_plus",
             "status": lifecycle_status,
-            "metadata": {"reason": reason, "raw_status": status},
-            "lifecycle_id": f"lifecycle_{ad_id}",
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "kill_reason": reason if lifecycle_status == "killed" else None,
+            "killed_at": datetime.now(timezone.utc).isoformat() if lifecycle_status == "killed" else None,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-        client.upsert("ad_lifecycle", payload, on_conflict="ad_id,stage")
+        # Only include kill_reason and killed_at if status is killed
+        if lifecycle_status != "killed":
+            payload.pop("kill_reason", None)
+            payload.pop("killed_at", None)
+        
+        client.upsert("ads", payload, on_conflict="ad_id")
     except Exception as exc:
         _asc_log(logging.DEBUG, "Lifecycle logging failed for %s: %s", ad_id, exc)
 
