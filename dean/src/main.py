@@ -1684,9 +1684,7 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
             level="ad", 
             fields=[
                 "spend",
-                "actions",
-                "add_to_cart",  # All ATCs (Meta + website)
-                "add_to_cart_value",
+                "actions",  # Contains website ATCs (action_type="add_to_cart")
                 "impressions",
                 "clicks",
                 "inline_link_clicks",
@@ -1717,41 +1715,24 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
         if link_clicks <= 0 and all_clicks > 0:
             link_clicks = all_clicks
         
-        # First, try to get ATCs from Meta's direct "add_to_cart" field (includes all ATCs)
-        # This matches "Add to Cart (all)" from Meta Ads Manager
-        atc_values = [_metric_to_float(row.get("add_to_cart")) for row in rows if row.get("add_to_cart")]
-        if atc_values:
-            atc = sum(atc_values)
-        else:
-            # Fallback: count from actions array (website ATCs only)
-            for r in rows:
-                for a in (r.get("actions") or []):
-                    action_type = a.get("action_type")
-                    try:
-                        value = float(a.get("value") or 0)
-                        if action_type == "purchase":
-                            purch += value
-                        elif action_type == "add_to_cart":
-                            atc += value
-                        elif action_type == "initiate_checkout":
-                            ic += value
-                    except (KeyError, TypeError, ValueError):
-                        # Skip invalid action entries
-                        continue
-        
-        # If we got ATCs from direct field, still need to get purchases and IC from actions
-        if atc_values:
-            for r in rows:
-                for a in (r.get("actions") or []):
-                    action_type = a.get("action_type")
-                    try:
-                        value = float(a.get("value") or 0)
-                        if action_type == "purchase":
-                            purch += value
-                        elif action_type == "initiate_checkout":
-                            ic += value
-                    except (KeyError, TypeError, ValueError):
-                        continue
+        # Get ATCs from actions array
+        # Meta API: actions array contains website ATCs (action_type="add_to_cart")
+        # For "all ATCs" (Meta + website), the actions array should include all conversions
+        # based on the attribution windows configured (7d_click, 1d_view by default)
+        for r in rows:
+            for a in (r.get("actions") or []):
+                action_type = a.get("action_type")
+                try:
+                    value = float(a.get("value") or 0)
+                    if action_type == "purchase":
+                        purch += value
+                    elif action_type == "add_to_cart":
+                        atc += value
+                    elif action_type == "initiate_checkout":
+                        ic += value
+                except (KeyError, TypeError, ValueError):
+                    # Skip invalid action entries
+                    continue
 
         # Calculate metrics
         link_clicks = max(link_clicks, 0.0)

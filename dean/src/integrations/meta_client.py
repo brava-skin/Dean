@@ -167,8 +167,10 @@ class ClientConfig:
         "spend", "impressions", "clicks", "reach", "unique_clicks",
         "inline_link_clicks", "inline_link_click_ctr", "cost_per_inline_link_click",
         "cpc", "cpm",  # All-clicks CPC and CPM (includes Meta clicks)
-        "add_to_cart", "add_to_cart_value",  # All ATCs (Meta + website)
         "actions", "action_values", "purchase_roas",
+        # Note: Meta API doesn't provide direct "add_to_cart" field
+        # ATCs come from "actions" array with action_type="add_to_cart" (website ATCs)
+        # For "all ATCs" (Meta + website), we need to sum actions + onsite_conversion if available
     )
     breakdowns_default: Tuple[str, ...] = ()
     stage_overrides: Dict[str, Dict[str, Any]] = field(default_factory=dict)
