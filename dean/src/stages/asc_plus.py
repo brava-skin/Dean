@@ -843,6 +843,8 @@ def _sync_creative_intelligence_records(
 
     existing_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
     storage_ids: set[str] = set()
+    ads_needing_creative_content: List[str] = []  # Track ads missing creative content
+    
     for row in existing_rows:
         creative_id = str(row.get("creative_id") or "")
         ad_id = str(row.get("ad_id") or "")
@@ -853,6 +855,10 @@ def _sync_creative_intelligence_records(
             if storage_id:
                 storage_ids.add(storage_id)
             storage_ids.add(creative_id)
+            
+            # Check if creative content is missing
+            if not row.get("headline") and not row.get("primary_text"):
+                ads_needing_creative_content.append(ad_id)
 
     # Include creative IDs from ads to fetch storage metadata
     for ad in ads:
@@ -1019,8 +1025,96 @@ def _sync_creative_intelligence_records(
         logger.error("Ads upsert blocked: %s", exc)
     except Exception as exc:
         logger.debug(f"Failed to upsert ads records: {exc}")
+    
+    # Fetch creative content from Meta API for ads missing it
+    if ads_needing_creative_content and client:
+        _fetch_and_update_creative_content(client, supabase_client, ads_needing_creative_content)
 
     return storage_map
+
+
+def _fetch_and_update_creative_content(
+    client: MetaClient,
+    supabase_client: Any,
+    ad_ids: List[str],
+) -> None:
+    """Fetch creative content (headline, primary_text, description) from Meta API and update ads table."""
+    if not ad_ids or not client or not supabase_client:
+        return
+    
+    try:
+        from facebook_business.adobjects.ad import Ad
+        from facebook_business.adobjects.adcreative import AdCreative
+        
+        USE_SDK = False
+        try:
+            from facebook_business.api import FacebookAdsApi
+            USE_SDK = True
+        except ImportError:
+            pass
+        
+        if not USE_SDK:
+            return
+        
+        client._init_sdk_if_needed()
+        
+        updates: List[Dict[str, Any]] = []
+        
+        for ad_id in ad_ids[:20]:  # Limit to 20 per call to avoid rate limits
+            try:
+                # Fetch ad details including creative
+                ad_obj = Ad(ad_id)
+                ad_data = ad_obj.api_get(fields=["id", "creative", "name"])
+                
+                creative_id = ad_data.get("creative", {}).get("id") if isinstance(ad_data.get("creative"), dict) else None
+                if not creative_id:
+                    creative_id = ad_data.get("creative")  # Sometimes it's just the ID string
+                
+                if not creative_id:
+                    continue
+                
+                # Fetch creative details
+                creative_obj = AdCreative(str(creative_id))
+                creative_data = creative_obj.api_get(fields=["object_story_spec", "name"])
+                
+                # Extract creative content from object_story_spec
+                oss = creative_data.get("object_story_spec", {})
+                link_data = oss.get("link_data", {})
+                
+                headline = link_data.get("name", "")
+                primary_text = link_data.get("message", "")
+                description = link_data.get("description", "")
+                
+                # Only update if we found content
+                if headline or primary_text or description:
+                    updates.append({
+                        "ad_id": ad_id,
+                        "headline": headline,
+                        "primary_text": primary_text,
+                        "description": description,
+                    })
+                    logger.debug(f"Fetched creative content for ad {ad_id}: headline={headline[:50]}...")
+                
+            except Exception as e:
+                logger.debug(f"Failed to fetch creative content for ad {ad_id}: {e}")
+                continue
+        
+        # Batch update ads table
+        if updates:
+            try:
+                supabase_client.table("ads").upsert(
+                    updates,
+                    on_conflict="ad_id",
+                ).execute()
+                logger.info(f"Updated creative content for {len(updates)} ads")
+            except Exception as e:
+                logger.warning(f"Failed to update creative content in ads table: {e}")
+    
+    except ImportError:
+        logger.debug("Facebook SDK not available for fetching creative content")
+    except Exception as e:
+        logger.debug(f"Error fetching creative content: {e}")
+
 
 def _sync_creative_storage_records(
     storage_map: Dict[str, Dict[str, Any]],
@@ -1175,6 +1269,7 @@ def _sync_performance_metrics_records(
             "cpm": cpm,
             "roas": roas,
             "cpa": cpa,
+            # Always include rate fields (None is valid when impressions=0 or no conversions)
             "atc_rate": atc_rate,
             "purchase_rate": purchase_rate,
             # Note: dwell_time, frequency, ic_rate, atc_to_ic_rate, ic_to_purchase_rate, revenue
@@ -2322,10 +2417,19 @@ def _create_creative_and_ad(
                         logger.debug(f"✅ Stored initial historical data for {ad_id}")
                     except Exception as e:
                         logger.debug(f"Failed to store initial historical data: {e}")
+                    # Extract creative content from ad_copy
+                    ad_copy_dict = creative_data.get("ad_copy") or {}
+                    if not isinstance(ad_copy_dict, dict):
+                        ad_copy_dict = {}
+                    
                     creative_intel_data = {
                         "creative_id": str(meta_creative_id),  # Use Meta's creative ID
                         "ad_id": ad_id,
                         "creative_type": "image",
+                        # Store creative content directly in ads table
+                        "headline": ad_copy_dict.get("headline", ""),
+                        "primary_text": ad_copy_dict.get("primary_text", ""),
+                        "description": ad_copy_dict.get("description", ""),
                         "metadata": {
                             "ad_copy": creative_data.get("ad_copy"),
                             "flux_request_id": creative_data.get("flux_request_id"),
@@ -2335,7 +2439,7 @@ def _create_creative_and_ad(
                     }
                     # Add optional fields if available
                     if creative_data.get("supabase_storage_url"):
-                        creative_intel_data["supabase_storage_url"] = creative_data.get("supabase_storage_url")
+                        creative_intel_data["storage_url"] = creative_data.get("supabase_storage_url")
                     if creative_data.get("image_prompt"):
                         creative_intel_data["image_prompt"] = creative_data.get("image_prompt")
                     if creative_data.get("text_overlay"):
