@@ -1757,26 +1757,27 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
         all_clicks = max(all_clicks, 0.0)
         cpa = (spend / purch) if purch > 0 else None
         ctr = (link_clicks / impressions) if impressions > 0 else None
-        cpc = (spend / link_clicks) if link_clicks > 0 else None
+        
+        # Use Meta API 'cpc' field (all clicks) - prefer this over calculated values
+        # This matches "CPC (all) (EUR)" from Meta Ads Manager
+        cpc = None
+        cpc_values = [_metric_to_float(row.get("cpc")) for row in rows if row.get("cpc")]
+        if cpc_values:
+            # Weighted average of CPC values from Meta API
+            cpc_weights = [all_clicks / len(rows) for _ in cpc_values]  # Equal weight per row
+            weighted_cpc = sum(c * w for c, w in zip(cpc_values, cpc_weights) if c)
+            total_weight = sum(w for w in cpc_weights)
+            if weighted_cpc and total_weight:
+                cpc = weighted_cpc / total_weight
+        
+        # Fallback: calculate from spend / all clicks (includes Meta clicks)
         if cpc is None and all_clicks > 0:
             cpc = spend / all_clicks
-        cpm = (spend * 1000 / impressions) if impressions > 0 else None
-        cost_per_atc = (spend / atc) if atc > 0 else None
         
-        # If Meta already returned cost-per-link metric, prefer it when available
-        if link_clicks > 0:
-            # Weighted average cost per link click using provided metric if present
-            cost_per_link_values = [
-                (
-                    _metric_to_float(row.get("cost_per_inline_link_click")),
-                    _metric_to_float(row.get("inline_link_clicks")) or _metric_to_float(row.get("link_clicks"))
-                )
-                for row in rows
-            ]
-            weighted_spend = sum(cost * clicks for cost, clicks in cost_per_link_values if clicks and cost)
-            total_weight = sum(clicks for _, clicks in cost_per_link_values if clicks)
-            if weighted_spend and total_weight:
-                cpc = weighted_spend / total_weight
+        cpm = (spend * 1000 / impressions) if impressions > 0 else None
+        
+        # Cost per Add to Cart (includes all ATCs: Meta + website)
+        cost_per_atc = (spend / atc) if atc > 0 else None
         
         be = float(
             os.getenv("BREAKEVEN_CPA")
