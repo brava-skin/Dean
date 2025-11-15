@@ -1,19 +1,10 @@
-"""
-Static Image Creative Generator with Advanced Prompt Engineering
-Uses FLUX for image generation, ChatGPT-5 for prompts and text,
-and ffmpeg for premium text overlay
-Integrates with ML system to learn from what works
-"""
-
 from __future__ import annotations
 
 import os
 import subprocess
-import tempfile
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple, List
-import requests
+from typing import Dict, Any, Optional, List
 import hashlib
 
 from integrations.flux_client import FluxClient, create_flux_client
@@ -21,7 +12,6 @@ from integrations.slack import notify
 
 logger = logging.getLogger(__name__)
 
-# ChatGPT-5 configuration
 try:
     from openai import OpenAI
 except ImportError:
@@ -29,12 +19,6 @@ except ImportError:
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 CHATGPT5_MODEL = "gpt-5"
-
-# Premium Lifestyle Photography Creative Direction:
-# - High-quality photoshoot-level lifestyle imagery
-# - Editorial, cinematic, sophisticated masculine lifestyle
-# - No products, no textures, no applications, no mirrors
-# - Consistent brand visual language
 
 CREATIVE_TEXT_OPTIONS = [
     "Elevate your presence.",
@@ -64,8 +48,6 @@ PRIMARY_TEXT_OPTIONS = [
 
 
 class PromptEngineer:
-    """Advanced prompt engineering using ChatGPT5 - inspired by prompt_engineer.py"""
-    
     def __init__(self, api_key: str):
         self.client = OpenAI(api_key=api_key) if OpenAI and api_key else None
         self.style_consistency_cache = {}
@@ -77,12 +59,9 @@ class PromptEngineer:
         brand_guidelines: Optional[Dict[str, Any]] = None,
         use_case: str = "ad",
     ) -> str:
-        """Generate advanced FLUX prompt using ChatGPT5 with ML insights"""
-        
         if not self.client:
             return self._create_fallback_prompt(description, brand_guidelines)
         
-        # Build system prompt with ML insights
         system_prompt = self._build_system_prompt(brand_guidelines, use_case, ml_insights)
         user_prompt = self._build_user_prompt(description, ml_insights, use_case)
         
@@ -93,7 +72,6 @@ class PromptEngineer:
                 input=full_prompt
             )
             
-            # Extract generated prompt
             generated_text = None
             if hasattr(response, 'output_text') and response.output_text:
                 generated_text = response.output_text
@@ -123,9 +101,6 @@ class PromptEngineer:
         use_case: str,
         ml_insights: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Build advanced system prompt with ML insights"""
-        
-        # Brand guidelines - Premium Lifestyle Photography Focus
         guidelines_text = ""
         if brand_guidelines:
             brand_name = brand_guidelines.get('brand_name', "Premium men's lifestyle")
@@ -153,7 +128,6 @@ Brand Guidelines - Premium Lifestyle Photography:
 - Focus: Premium masculine lifestyle photography - editorial, cinematic, sophisticated, contemporary realism
 """
         
-        # ML insights integration
         ml_guidance = ""
         if ml_insights:
             top_performers = ml_insights.get('top_performing_creatives', [])
@@ -270,8 +244,6 @@ Return ONLY the optimized prompt. No explanations, no additional text, just the 
         ml_insights: Optional[Dict[str, Any]] = None,
         use_case: str = "ad",
     ) -> str:
-        """Build user prompt with ML insights"""
-        
         prompt = f"Create a HYPERREALISTIC, CINEMATIC FLUX prompt for $1 million photoshoot-level photography: {description}"
         prompt += "\n\nSTRICT MANDATORY REQUIREMENTS - This image must be HYPERREALISTIC and CINEMATIC, indistinguishable from real photography:"
         prompt += "\n- HYPERREALISTIC: ABSOLUTELY INDISTINGUISHABLE from $1 million photographer's work - zero AI detection, zero artifacts"
@@ -309,7 +281,6 @@ Return ONLY the optimized prompt. No explanations, no additional text, just the 
         description: str,
         brand_guidelines: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Create advanced fallback prompt with HYPERREALISTIC and CINEMATIC requirements"""
         prompt_parts = [
             description,
             "HYPERREALISTIC, CINEMATIC, photorealistic, indistinguishable from real photography, zero AI artifacts, movie-grade quality",
@@ -326,8 +297,6 @@ Return ONLY the optimized prompt. No explanations, no additional text, just the 
 
 
 class ImageCreativeGenerator:
-    """Generates static image creatives with calm confidence messaging."""
-    
     def __init__(
         self,
         flux_client: Optional[FluxClient] = None,
@@ -338,11 +307,9 @@ class ImageCreativeGenerator:
         self.openai_api_key = openai_api_key or OPENAI_API_KEY
         self.ml_system = ml_system
         self.prompt_engineer = PromptEngineer(self.openai_api_key) if self.openai_api_key else None
-        # Track recently used scenarios to avoid repetition
         self.recent_scenarios: List[str] = []
         self.max_recent_scenarios = 10
-        self.scenario_bank: List[str] = []  # Bank of all generated scenarios
-        # Track recent text overlays and ad copy for diversity
+        self.scenario_bank: List[str] = []
         self._recent_text_overlays: List[str] = []
         self._recent_ad_copy: List[Dict[str, str]] = []
     
@@ -352,35 +319,19 @@ class ImageCreativeGenerator:
         creative_style: Optional[str] = None,
         advanced_ml: Optional[Any] = None,
     ) -> Optional[Dict[str, Any]]:
-        """
-        Generate a complete creative with image and text overlay.
-        Checks ML system for what works before generating.
-        
-        Args:
-            product_info: Dictionary with product information (name, description, features, etc.)
-            creative_style: Optional style identifier for creative variation
-            advanced_ml: Optional advanced ML system for optimization
-        
-        Returns:
-            Dictionary with creative data or None on failure
-        """
-        # Input validation
         if not product_info or not isinstance(product_info, dict):
             logger.error("Invalid product_info: must be a non-empty dictionary")
             return None
         
         try:
-            # Step 1: Get ML insights from what worked
             ml_insights = self._get_ml_insights()
             
-            # Step 2: Generate image prompt using advanced prompt engineering
             image_prompt = self._generate_image_prompt(
                 product_info,
                 creative_style,
                 ml_insights,
             )
             
-            # Step 2.5: Optimize prompt with RL if available
             if advanced_ml and advanced_ml.rl_prompt_optimizer:
                 try:
                     context = {
@@ -397,36 +348,29 @@ class ImageCreativeGenerator:
                 notify("❌ Failed to generate image prompt")
                 return None
             
-            # Step 3: Generate image using FLUX
-            # CRITICAL: Always use 1:1 aspect ratio for all creatives
             image_url, request_id = self.flux_client.create_image(
                 prompt=image_prompt,
-                aspect_ratio="1:1",  # Always 1:1 - square format required
-                output_format="png",  # Updated default to PNG per API spec
+                aspect_ratio="1:1",
+                output_format="png",
             )
             
             if not image_url:
                 notify(f"❌ Failed to generate FLUX image (request_id: {request_id})")
                 return None
             
-            # Step 4: Download image
             image_path = self.flux_client.download_image(image_url)
             if not image_path:
                 notify("❌ Failed to download generated image")
                 return None
             
-            # Step 4.5: Get scenario description from stored value (set during prompt generation)
             scenario_description = None
             if hasattr(self, '_last_scenario_description'):
                 scenario_description = self._last_scenario_description
             if not scenario_description:
-                # Fallback if scenario wasn't generated
                 scenario_description = "A man standing in soft morning light near a tall window, light gently illuminating his face and skin texture, calm confidence, editorial style"
             
-            # Step 5: Generate calm confidence ad copy (needed for text overlay context)
             ad_copy = self._generate_ad_copy(product_info, ml_insights, scenario_description)
             
-            # Ensure ad_copy is always a dict (never None)
             if not ad_copy or not isinstance(ad_copy, dict):
                 logger.warning("ad_copy generation returned invalid value, using fallback")
                 ad_copy = {
@@ -435,14 +379,12 @@ class ImageCreativeGenerator:
                     "description": ""
                 }
             
-            # Step 6: Generate intelligent text overlay (uses ad copy and scenario for context)
             overlay_text = self._select_creative_text(
                 ml_insights=ml_insights,
                 scenario_description=scenario_description,
                 ad_copy=ad_copy,
             )
             
-            # Step 7: Add premium text overlay to image using ffmpeg
             final_image_path = None
             if overlay_text:
                 final_image_path = self._add_text_overlay(image_path, overlay_text)
@@ -452,20 +394,16 @@ class ImageCreativeGenerator:
             else:
                 final_image_path = image_path
             
-            # Step 8: Upload to Supabase Storage
             supabase_storage_url = None
             storage_creative_id = None
             if final_image_path:
                 try:
-                    from infrastructure.creative_storage import create_creative_storage_manager
-                    from infrastructure.supabase_storage import get_validated_supabase_client
+                    from infrastructure.supabase_storage import get_validated_supabase_client, create_creative_storage_manager
                     
                     supabase_client = get_validated_supabase_client()
                     if supabase_client:
                         storage_manager = create_creative_storage_manager(supabase_client)
                         if storage_manager:
-                            # Generate creative_id from image hash for consistent storage tracking
-                            import hashlib
                             with open(final_image_path, "rb") as f:
                                 image_hash = hashlib.md5(f.read()).hexdigest()
                             storage_creative_id = f"creative_{image_hash[:12]}"
@@ -477,7 +415,7 @@ class ImageCreativeGenerator:
                                     "image_prompt": image_prompt,
                                     "text_overlay": overlay_text,
                                     "ad_copy": ad_copy,
-                                    "scenario_description": scenario_description,  # Include scenario for queue lookup
+                                    "scenario_description": scenario_description,
                                     "flux_request_id": request_id,
                                 }
                             )
@@ -485,23 +423,20 @@ class ImageCreativeGenerator:
                                 logger.info(f"✅ Uploaded creative to Supabase Storage: {supabase_storage_url}")
                 except Exception as e:
                     logger.warning(f"Failed to upload creative to Supabase Storage: {e}")
-                    # Continue even if upload fails
             
-            # scenario_description is already set above (line 4.5), use it for result
             result = {
                 "image_path": final_image_path,
                 "original_image_path": image_path,
                 "text_overlay": overlay_text,
                 "ad_copy": ad_copy,
                 "image_prompt": image_prompt,
-                "scenario_description": scenario_description,  # Store scenario for ML learning
+                "scenario_description": scenario_description,
                 "flux_request_id": request_id,
                 "ml_insights_used": ml_insights,
-                "supabase_storage_url": supabase_storage_url,  # Supabase Storage URL
-                "storage_creative_id": storage_creative_id,  # Internal creative ID for storage
+                "supabase_storage_url": supabase_storage_url,
+                "storage_creative_id": storage_creative_id,
             }
             
-            # Store prompt in library if available
             if advanced_ml and advanced_ml.prompt_library:
                 try:
                     advanced_ml.prompt_library.add_prompt(image_prompt or "")
@@ -512,33 +447,18 @@ class ImageCreativeGenerator:
             
         except Exception as e:
             notify(f"❌ Error generating creative: {e}")
-            # Add to dead letter queue
-            try:
-                from infrastructure.error_handling import dead_letter_queue
-                dead_letter_queue.add(
-                    operation="creative_generation",
-                    data={"product_info": product_info, "style": creative_style},
-                    error=e,
-                )
-            except Exception:
-                pass
             return None
     
     def _get_ml_insights(self) -> Dict[str, Any]:
-        """Get ML insights about what works and what doesn't from ASC+ campaign.
-        Uses insights from killed creatives to inform new generation."""
         if not self.ml_system:
             return {}
         
         try:
-            # Get comprehensive insights from ML system
-            # This includes best/worst performers, scenarios, text overlays, ad copy
             if hasattr(self.ml_system, 'get_creative_insights'):
                 insights = self.ml_system.get_creative_insights()
                 logger.info(f"✅ Retrieved ML insights: {len(insights.get('best_scenarios', []))} best scenarios, {len(insights.get('worst_scenarios', []))} worst scenarios")
                 return insights
             else:
-                # Fallback structure
                 return {
                     "top_performing_creatives": [],
                     "best_prompts": [],
@@ -559,19 +479,14 @@ class ImageCreativeGenerator:
         creative_style: Optional[str] = None,
         ml_insights: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
-        """Generate advanced image prompt using prompt engineer with diverse scenarios"""
-        
         if not self.prompt_engineer:
             return None
         
-        # Step 1: Generate diverse, fashion-forward scenario using ChatGPT
         scenario_description = self._generate_diverse_scenario(ml_insights)
         
         if not scenario_description:
-            # Fallback to generic if scenario generation fails
             scenario_description = "A man standing in soft morning light near a tall window, light gently illuminating his face and skin texture, calm confidence, editorial style"
         
-        # Store scenario description for inclusion in result (for ML tracking)
         self._last_scenario_description = scenario_description
         
         brand_guidelines = {
@@ -602,10 +517,7 @@ class ImageCreativeGenerator:
         )
     
     def _generate_diverse_scenario(self, ml_insights: Optional[Dict[str, Any]] = None) -> Optional[str]:
-        """Generate diverse, fashion-forward scenario using ChatGPT-5 with advanced constraints"""
-        
         if not self.openai_api_key:
-            # Fallback scenarios if ChatGPT not available
             import random
             fallback_scenarios = [
                 "A close-up portrait of a man laughing naturally, genuine expression, cinematic lighting",
@@ -621,19 +533,16 @@ class ImageCreativeGenerator:
             from datetime import datetime
             client = OpenAI(api_key=self.openai_api_key)
             
-            # Get recently used scenarios to avoid repetition
             recent_scenarios_text = ""
             if self.recent_scenarios:
                 recent_scenarios_text = "\n\nNEVER REPEAT - These scenarios were used recently (MUST AVOID):\n"
                 for i, scenario in enumerate(self.recent_scenarios[-10:], 1):
                     recent_scenarios_text += f"- {scenario[:100]}...\n"
             
-            # Analyze last scenario for "opposite day" and "contrast" logic
             contrast_logic = ""
             if self.recent_scenarios:
                 last_scenario = self.recent_scenarios[-1].lower()
                 
-                # CRITICAL: Background diversity enforcement - NO dark streets
                 if "street" in last_scenario or "urban" in last_scenario or ("city" in last_scenario and "rooftop" not in last_scenario) or "dark" in last_scenario:
                     contrast_logic += "\n- CRITICAL BACKGROUND REQUIREMENT: Last scenario had street/urban/dark background - this one MUST use a luxury setting (studio, gallery, hotel, café, library, rooftop terrace, beach, garden, retail, workspace, loft) - ABSOLUTELY NO streets, NO urban backgrounds, NO dark scenes\n"
                 elif "studio" in last_scenario:
@@ -652,7 +561,6 @@ class ImageCreativeGenerator:
                 elif "bold" in last_scenario or "vibrant" in last_scenario or "colorful" in last_scenario:
                     contrast_logic += "\n- CONTRAST REQUIREMENT: Last scenario was bold - this one MUST be minimalist, refined, or subtle\n"
             
-            # Get ML insights for scenario performance
             ml_guidance = ""
             top_performers = []
             if ml_insights:
@@ -667,7 +575,6 @@ class ImageCreativeGenerator:
                     for scenario in ml_insights["worst_scenarios"][:3]:
                         ml_guidance += f"- {scenario}\n"
             
-            # Determine diversity focus for this rotation
             diversity_focus = random.choice([
                 "ethnicity and cultural background",
                 "facial hair and grooming styles",
@@ -677,13 +584,11 @@ class ImageCreativeGenerator:
                 "lifestyle and profession",
             ])
             
-            # Determine batch requirements (if generating multiple)
             batch_requirements = ""
             current_count = len([s for s in self.recent_scenarios if "outdoor" in s.lower() or "street" in s.lower()])
             if current_count < 2:
                 batch_requirements += "\n- BATCH REQUIREMENT: This batch needs more outdoor/urban scenarios\n"
             
-            # Expanded examples - Premium Lifestyle Photography Direction
             expanded_examples = """EXAMPLES OF DIVERSE SCENARIOS (use as inspiration, create something NEW and EXTREMELY DETAILED):
 CRITICAL: Target American men (Caucasian, African American, Hispanic, Asian American, etc.) - NO Indian/South Asian men, NO formal suits/business attire
 FOCUS: High-quality photoshoot-level lifestyle imagery with emphasis on lighting, composition, and facial features
@@ -929,18 +834,14 @@ Now generate the scenario following ALL requirements above."""
                     output_text = response.output
             
             if output_text:
-                # Parse structured output
                 scenario_text = output_text.strip()
                 
-                # Extract scenario from structured output
                 if "SCENARIO:" in scenario_text:
                     scenario = scenario_text.split("SCENARIO:")[1].split("DIVERSITY NOTES:")[0].strip()
                 elif "scenario:" in scenario_text.lower():
                     scenario = scenario_text.split("scenario:")[1].split("diversity")[0].strip()
                 else:
-                    # Fallback: use entire text but clean it
                     scenario = scenario_text
-                    # Remove markdown formatting
                     if scenario.startswith("```"):
                         scenario = scenario.split("```")[1]
                         if scenario.startswith("scenario") or scenario.startswith("text"):
@@ -948,17 +849,14 @@ Now generate the scenario following ALL requirements above."""
                 
                 scenario = scenario.strip()
                 
-                # Remove any remaining prefixes/suffixes
                 if scenario.startswith("REASONING:"):
                     scenario = scenario.split("SCENARIO:")[1] if "SCENARIO:" in scenario else scenario.split("scenario:")[1] if "scenario:" in scenario else scenario
                 scenario = scenario.split("DIVERSITY NOTES:")[0].split("TECHNICAL NOTES:")[0].strip()
                 
-                # Ensure it's detailed enough (at least 50 words)
                 if len(scenario.split()) < 50:
                     logger.warning(f"Generated scenario too short ({len(scenario.split())} words), adding detail")
                     scenario += ", with cinematic lighting, editorial composition, luxury brand aesthetic"
                 
-                # Track this scenario
                 self.recent_scenarios.append(scenario)
                 if len(self.recent_scenarios) > self.max_recent_scenarios:
                     self.recent_scenarios.pop(0)
@@ -967,7 +865,6 @@ Now generate the scenario following ALL requirements above."""
                 
                 return scenario
             else:
-                # If no output text, return fallback
                 logger.warning("Failed to extract scenario from ChatGPT response, using fallback")
                 import random
                 fallback_scenarios = [
@@ -980,9 +877,6 @@ Now generate the scenario following ALL requirements above."""
             
         except Exception as e:
             logger.warning(f"Failed to generate diverse scenario with ChatGPT: {e}")
-            import traceback
-            logger.debug(f"Scenario generation error traceback: {traceback.format_exc()}")
-            # Fallback
             import random
             fallback_scenarios = [
                 "A close-up portrait of a man laughing naturally, genuine expression, cinematic lighting, diverse model",
@@ -998,26 +892,19 @@ Now generate the scenario following ALL requirements above."""
         scenario_description: Optional[str] = None,
         ad_copy: Optional[Dict[str, str]] = None,
     ) -> Optional[str]:
-        """
-        Intelligently select or generate creative text overlay using ML insights.
-        Uses ChatGPT-5 to generate contextually appropriate text that matches scenario and ad copy.
-        """
         import random
         
-        # If ChatGPT available, generate contextually appropriate text
         if self.openai_api_key:
             try:
                 from openai import OpenAI
                 client = OpenAI(api_key=self.openai_api_key)
                 
-                # Build context for text generation
                 context_parts = []
                 if scenario_description:
                     context_parts.append(f"Scenario: {scenario_description[:200]}...")
                 if ad_copy:
                     context_parts.append(f"Ad copy theme: {ad_copy.get('headline', '')}")
                 
-                # Get ML insights for best performing text patterns
                 ml_guidance = ""
                 best_patterns = []
                 worst_patterns = []
@@ -1030,7 +917,6 @@ Now generate the scenario following ALL requirements above."""
                             ml_guidance += f"{i}. {text}\n"
                             best_patterns.append(text)
                     
-                    # Get worst performers to avoid
                     if ml_insights.get("worst_text_overlays"):
                         worst_patterns = ml_insights.get("worst_text_overlays", [])
                         if worst_patterns:
@@ -1038,7 +924,6 @@ Now generate the scenario following ALL requirements above."""
                             for i, text in enumerate(worst_patterns[:3], 1):
                                 ml_guidance += f"{i}. {text}\n"
                 
-                # Check recently used to avoid repetition
                 recently_used = ""
                 if hasattr(self, '_recent_text_overlays'):
                     recent = getattr(self, '_recent_text_overlays', [])
@@ -1127,21 +1012,16 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
                     output_text = response.output_text
                 
                 if output_text:
-                    # Clean up the response
                     text = output_text.strip()
-                    # Remove quotes if present
                     if text.startswith('"') and text.endswith('"'):
                         text = text[1:-1]
                     if text.startswith("'") and text.endswith("'"):
                         text = text[1:-1]
-                    # Remove any prefixes
                     if ":" in text and len(text.split(":")[0]) < 20:
                         text = text.split(":", 1)[1].strip()
                     
-                    # Validate length - MAX 4 WORDS
                     word_count = len(text.split())
-                    if 1 <= word_count <= 4:  # Max 4 words
-                        # Track this text
+                    if 1 <= word_count <= 4:
                         if not hasattr(self, '_recent_text_overlays'):
                             self._recent_text_overlays = []
                         self._recent_text_overlays.append(text)
@@ -1155,24 +1035,19 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
             except Exception as e:
                 logger.warning(f"Failed to generate text overlay with ChatGPT: {e}")
         
-        # Fallback: ML-weighted selection from best performers
         if ml_insights and ml_insights.get("best_text_overlays"):
             best_texts = ml_insights["best_text_overlays"]
             if best_texts:
-                # Filter to only texts that hint at skincare
                 skincare_texts = [t for t in best_texts if any(word in t.lower() for word in ["skin", "skincare", "routine", "care", "face", "clear", "refined"])]
                 if skincare_texts:
-                    # Weight selection: 70% chance of best performer, 30% chance of others
                     if random.random() < 0.7 and len(skincare_texts) > 0:
-                        return skincare_texts[0]  # Top performer
+                        return skincare_texts[0]
                     else:
-                        return random.choice(skincare_texts)  # Random from best
+                        return random.choice(skincare_texts)
         
-        # Use calm confidence options with diversity tracking
         if not hasattr(self, '_recent_text_overlays'):
             self._recent_text_overlays = []
         
-        # Avoid recently used
         available_options = [t for t in CREATIVE_TEXT_OPTIONS if t not in self._recent_text_overlays[-5:]]
         if not available_options:
             available_options = CREATIVE_TEXT_OPTIONS
@@ -1190,13 +1065,7 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
         ml_insights: Optional[Dict[str, Any]] = None,
         scenario_description: Optional[str] = None,
     ) -> Dict[str, str]:
-        """
-        Generate advanced, ML-optimized ad copy using ChatGPT-5.
-        Integrates scenario context, performance data, and brand guidelines.
-        """
-        
         if not self.openai_api_key:
-            # Fallback to default options
             import random
             return {
                 "primary_text": random.choice(PRIMARY_TEXT_OPTIONS),
@@ -1209,14 +1078,12 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
             import random
             client = OpenAI(api_key=self.openai_api_key)
             
-            # Build comprehensive ML guidance
             ml_guidance = ""
             best_performers = []
             worst_performers = []
             performance_patterns = ""
             
             if ml_insights:
-                # Best performing ad copy
                 best_ad_copy = ml_insights.get("best_ad_copy", [])
                 if best_ad_copy:
                     ml_guidance += "\n\nML LEARNING - Top performing ad copy (analyze patterns and apply):\n"
@@ -1231,7 +1098,6 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
                             ml_guidance += f"{i}. {copy_item}\n"
                             best_performers.append(copy_item)
                     
-                    # Extract patterns
                     if best_performers:
                         patterns = []
                         if any("discipline" in str(p).lower() for p in best_performers):
@@ -1244,7 +1110,6 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
                         if patterns:
                             performance_patterns = "\n\nPERFORMANCE PATTERNS DETECTED:\n" + "\n".join(f"- {p}" for p in patterns)
                 
-                # Worst performers to avoid
                 if ml_insights.get("worst_ad_copy"):
                     worst_ad_copy = ml_insights.get("worst_ad_copy", [])
                     if worst_ad_copy:
@@ -1258,17 +1123,14 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
                                 ml_guidance += f"{i}. {copy_item}\n"
                             worst_performers.append(copy_item)
                 
-                # Scenario performance correlation
                 if ml_insights.get("best_scenarios") and scenario_description:
                     best_scenarios = ml_insights.get("best_scenarios", [])
-                    # Check if current scenario matches high-performing patterns
                     scenario_lower = scenario_description.lower()
                     matching_scenarios = [s for s in best_scenarios if any(word in s.lower() for word in scenario_lower.split()[:10])]
                     if matching_scenarios:
                         ml_guidance += f"\n\nSCENARIO CONTEXT: Current scenario matches high-performing patterns.\n"
                         ml_guidance += f"Generate copy that complements this scenario type effectively.\n"
             
-            # Check recently used to avoid repetition
             recently_used = ""
             if hasattr(self, '_recent_ad_copy'):
                 recent = getattr(self, '_recent_ad_copy', [])
@@ -1280,10 +1142,8 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
                         elif isinstance(copy_item, str):
                             recently_used += f"- {copy_item}\n"
             
-            # Build scenario context
             scenario_context = ""
             if scenario_description:
-                # Extract key elements from scenario for copy alignment
                 scenario_keywords = []
                 scenario_lower = scenario_description.lower()
                 if "luxury" in scenario_lower or "premium" in scenario_lower:
@@ -1426,7 +1286,6 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                 import json
                 try:
                     cleaned = output_text.strip()
-                    # Remove markdown code blocks
                     if cleaned.startswith("```"):
                         parts = cleaned.split("```")
                         if len(parts) > 1:
@@ -1437,19 +1296,15 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                     
                     ad_copy = json.loads(cleaned)
                     
-                    # Validate character limits
                     headline = ad_copy.get("headline", "").strip()
                     primary_text = ad_copy.get("primary_text", "").strip()
                     description = ad_copy.get("description", "").strip()
                     
-                    # Enforce character limits
                     if len(headline) > 60:
                         headline = headline[:57] + "..."
                         logger.warning(f"Headline truncated to 60 chars: {headline}")
                     
-                    # Remove "Brava Product" and em dashes
                     primary_text = primary_text.replace("Brava Product", "").replace("—", ",").replace("–", ",").strip()
-                    # Remove double spaces and clean up
                     import re
                     primary_text = re.sub(r'\s+', ' ', primary_text).strip()
                     
@@ -1467,7 +1322,6 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                         "description": description,
                     }
                     
-                    # Track this ad copy for diversity
                     if not hasattr(self, '_recent_ad_copy'):
                         self._recent_ad_copy = []
                     self._recent_ad_copy.append(result)
@@ -1478,12 +1332,10 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                     
                 except json.JSONDecodeError as e:
                     logger.warning(f"Failed to parse ad copy JSON: {e}")
-                    # Try to extract fields manually
                     headline_match = None
                     primary_match = None
                     desc_match = None
                     
-                    # Try to find fields in text
                     if '"headline"' in output_text or "'headline'" in output_text:
                         import re
                         headline_match = re.search(r'(?:headline["\']?\s*:\s*["\'])([^"\']+)', output_text, re.IGNORECASE)
@@ -1499,7 +1351,6 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                             "description": desc_match.group(1) if desc_match else "",
                         }
                         
-                        # Validate limits
                         if len(result["headline"]) > 60:
                             result["headline"] = result["headline"][:57] + "..."
                         if len(result["primary_text"]) > 300:
@@ -1507,7 +1358,6 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                         if result["description"] and len(result["description"]) > 150:
                             result["description"] = result["description"][:147] + "..."
                         
-                        # Track
                         if not hasattr(self, '_recent_ad_copy'):
                             self._recent_ad_copy = []
                         self._recent_ad_copy.append(result)
@@ -1516,14 +1366,11 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                         
                         return result
             
-            # Fallback: ML-weighted selection
             if ml_insights and ml_insights.get("best_ad_copy"):
                 best_copy = ml_insights.get("best_ad_copy", [])
                 if best_copy:
-                    # Prefer dict format, fallback to string
                     if isinstance(best_copy[0], dict):
                         selected = best_copy[0].copy()
-                        # Track
                         if not hasattr(self, '_recent_ad_copy'):
                             self._recent_ad_copy = []
                         self._recent_ad_copy.append(selected)
@@ -1531,7 +1378,6 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                             self._recent_ad_copy.pop(0)
                         return selected
                     else:
-                        # String format - convert to dict
                         import random
                         return {
                             "primary_text": random.choice(PRIMARY_TEXT_OPTIONS),
@@ -1539,7 +1385,6 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                             "description": "",
                         }
             
-            # Final fallback - ensure we always return a valid dict
             import random
             try:
                 return {
@@ -1559,7 +1404,6 @@ Ensure all text meets character limits and maintains calm confidence tone."""
         except Exception as e:
             logger.error(f"Error generating ad copy: {e}")
             notify(f"❌ Error generating ad copy: {e}")
-            # Fallback
             import random
             return {
                 "primary_text": random.choice(PRIMARY_TEXT_OPTIONS),
@@ -1573,13 +1417,7 @@ Ensure all text meets character limits and maintains calm confidence tone."""
         text: str,
         output_path: Optional[str] = None,
     ) -> Optional[str]:
-        """
-        Add premium text overlay to image using ffmpeg.
-        Poppins font (or system sans-serif fallback), proper wrapping, bottom positioning with margins.
-        """
         try:
-            # Check if ffmpeg is available (REQUIRED - not optional)
-            # Check common installation paths (macOS Homebrew, Linux, etc.)
             ffmpeg_paths = [
                 "/opt/homebrew/bin/ffmpeg",  # macOS Homebrew (Apple Silicon)
                 "/usr/local/bin/ffmpeg",     # macOS Homebrew (Intel) or Linux
@@ -1610,13 +1448,8 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                 input_path = Path(image_path)
                 output_path = str(input_path.parent / f"{input_path.stem}_overlay{input_path.suffix}")
             
-            # Properly escape text for ffmpeg (escape single quotes, backslashes, colons, etc.)
             escaped_text = text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("[", "\\[").replace("]", "\\]")
             
-            # Poppins font paths (try multiple options for different systems)
-            # Ubuntu/Linux: Poppins from Google Fonts or system
-            # macOS: Poppins from Google Fonts or system
-            # Windows: Poppins from Google Fonts or system
             font_paths = [
                 "/usr/share/fonts/truetype/poppins/Poppins-Bold.ttf",  # Ubuntu/Linux - Poppins
                 "/usr/share/fonts/truetype/Poppins-Bold.ttf",  # Ubuntu/Linux alternative path
@@ -1627,14 +1460,12 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                 "C:/Windows/Fonts/Poppins-Bold.ttf",  # Windows
                 "C:/Users/*/AppData/Local/Microsoft/Windows/Fonts/Poppins-Bold.ttf",  # Windows user fonts
                 # Fallback to system sans-serif if Poppins not found
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",  # Ubuntu/Linux fallback
-                "/System/Library/Fonts/Supplemental/Helvetica-Bold.ttf",  # macOS fallback
-                "C:/Windows/Fonts/arialbd.ttf",  # Windows fallback
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                "/System/Library/Fonts/Supplemental/Helvetica-Bold.ttf",
+                "C:/Windows/Fonts/arialbd.ttf",
             ]
             
-            # Try to find Poppins Bold font (preferred for increased weight) or regular Poppins, then fallback to system sans-serif
             font_path = None
-            # First try to find Poppins Bold variants
             bold_font_paths = [
                 "/System/Library/Fonts/Supplemental/Poppins-Bold.ttf",
                 "/usr/share/fonts/truetype/poppins/Poppins-Bold.ttf",
@@ -1649,7 +1480,6 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                     logger.info(f"Using Poppins Bold font: {font_path}")
                     break
             
-            # If no bold variant found, try regular Poppins
             if not font_path:
                 for fp in font_paths:
                     expanded_path = Path(fp).expanduser()
@@ -1658,8 +1488,6 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                         logger.info(f"Using Poppins font: {font_path}")
                         break
             
-            # Calculate appropriate font size based on text length and image dimensions
-            # Get image dimensions first
             try:
                 probe_cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", image_path]
                 probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=5)
@@ -1667,7 +1495,6 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                     dimensions = probe_result.stdout.strip().split("x")
                     if len(dimensions) == 2:
                         img_width = int(dimensions[0])
-                        # Font size: ~4% of image width, but min 36, max 56
                         base_fontsize = max(36, min(56, int(img_width * 0.04)))
                     else:
                         base_fontsize = 42
@@ -1676,7 +1503,6 @@ Ensure all text meets character limits and maintains calm confidence tone."""
             except Exception:
                 base_fontsize = 42
             
-            # Adjust font size based on text length (shorter text = slightly larger)
             text_length = len(text)
             if text_length < 30:
                 fontsize = base_fontsize + 4
@@ -1685,11 +1511,8 @@ Ensure all text meets character limits and maintains calm confidence tone."""
             else:
                 fontsize = base_fontsize - 4
             
-            # Ensure text fits within image width (wrap long text)
-            # Calculate max characters per line (rough estimate: ~60% of image width)
             max_chars_per_line = max(30, int(base_fontsize * 1.2))
             
-            # Wrap text if needed
             if len(text) > max_chars_per_line:
                 words = text.split()
                 wrapped_lines = []
@@ -1707,38 +1530,27 @@ Ensure all text meets character limits and maintains calm confidence tone."""
             else:
                 wrapped_text = text
             
-            # Escape the wrapped text
             escaped_wrapped = wrapped_text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:")
             
-            # Position: bottom center with generous margins
-            # Bottom margin: 80px (more generous), side margins: 60px each
             bottom_margin = 80
             side_margin = 60
             
-            # Build drawtext filter with premium styling and increased font weight
-            # Use elegant shadows for depth and readability (no background box)
-            # Font weight: Using bold font file for premium, luxury feel (ffmpeg doesn't support fontweight parameter)
-            # Add text outline/stroke for additional weight if bold font not available
             drawtext_filter = (
                 f"drawtext=text='{escaped_wrapped}'"
                 f":fontsize={fontsize}"
                 f":fontcolor=white"
-                f":borderw=1"  # Add subtle border for increased weight
-                f":bordercolor=black@0.3"  # Subtle border color
-                f":x=(w-text_w)/2"  # Center horizontally
-                f":y=h-th-{bottom_margin}"  # Bottom with margin
-                # Premium shadow for depth and readability (soft, elegant)
+                f":borderw=1"
+                f":bordercolor=black@0.3"
+                f":x=(w-text_w)/2"
+                f":y=h-th-{bottom_margin}"
                 f":shadowcolor=black@0.8"
                 f":shadowx=2"
                 f":shadowy=2"
-                # No background box - clean, minimal luxury aesthetic
             )
             
-            # Add font path if available
             if font_path:
                 drawtext_filter += f":fontfile={font_path}"
             
-            # Ensure 1:1 aspect ratio is preserved
             vf_filter = (
                 f"scale=iw:iw:force_original_aspect_ratio=decrease,"
                 f"pad=iw:iw:0:0:color=black@0,"
@@ -1764,20 +1576,18 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                 notify(f"✅ Premium text overlay added: {text[:50]}...")
                 return output_path
             else:
-                # Fallback: Try without font path (system default) with simpler styling
                 logger.warning(f"First attempt failed, trying fallback: {result.stderr[:200]}")
                 drawtext_fallback = (
                     f"drawtext=text='{escaped_wrapped}'"
                     f":fontsize={fontsize}"
                     f":fontcolor=white"
-                    f":borderw=1"  # Add subtle border for increased weight
-                    f":bordercolor=black@0.3"  # Subtle border color
+                    f":borderw=1"
+                    f":bordercolor=black@0.3"
                     f":x=(w-text_w)/2"
                     f":y=h-th-{bottom_margin}"
                     f":shadowcolor=black@0.8"
                     f":shadowx=2"
                     f":shadowy=2"
-                    # No background box - clean, minimal luxury aesthetic
                 )
                 
                 vf_fallback = (
@@ -1814,7 +1624,6 @@ def create_image_generator(
     openai_api_key: Optional[str] = None,
     ml_system: Optional[Any] = None,
 ) -> ImageCreativeGenerator:
-    """Create an image creative generator instance."""
     flux_client = create_flux_client(flux_api_key) if flux_api_key else None
     return ImageCreativeGenerator(
         flux_client=flux_client,

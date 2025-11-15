@@ -1,15 +1,4 @@
 #!/usr/bin/env python3
-"""
-Database Maintenance Utilities
-Combined utilities for Meta insights ingestion and failed insert repair.
-
-Usage:
-    # Ingest Meta insights
-    python -m dean.src.scripts.database_maintenance ingest --start-date 2024-10-01 --end-date 2024-10-05
-    
-    # Repair failed inserts
-    python -m dean.src.scripts.database_maintenance repair --start 2025-10-01T00:00:00Z --end 2025-10-02T00:00:00Z
-"""
 
 from __future__ import annotations
 
@@ -33,13 +22,10 @@ except Exception:
 from analytics.metrics import Metrics, metrics_from_row
 from integrations.meta_client import AccountAuth, ClientConfig, MetaClient
 from integrations.slack import notify
-from infrastructure.supabase_storage import get_validated_supabase_client
+from .supabase_storage import get_validated_supabase_client
 
 logger = logging.getLogger(__name__)
 
-# =====================================================
-# INSIGHTS INGESTION
-# =====================================================
 
 def _load_settings(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as fh:
@@ -248,7 +234,6 @@ def ingest_day(
 
 
 def cmd_ingest(args) -> None:
-    """Command: Ingest Meta ad insights into Supabase."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
@@ -302,10 +287,6 @@ def cmd_ingest(args) -> None:
         total_upserts,
     )
 
-
-# =====================================================
-# INSERT REPAIR
-# =====================================================
 
 DEFAULT_ERROR_TABLE = os.getenv("SUPABASE_INSERT_ERROR_TABLE", "insert_failures")
 DEFAULT_BATCH_SIZE = int(os.getenv("INSERT_REPAIR_BATCH_SIZE", "50"))
@@ -440,7 +421,6 @@ def replay_failed_inserts(
 
 
 def cmd_repair(args) -> None:
-    """Command: Replay failed Supabase inserts."""
     repaired, skipped, total = replay_failed_inserts(
         args.start,
         args.end,
@@ -458,10 +438,6 @@ def cmd_repair(args) -> None:
         )
     )
 
-
-# =====================================================
-# MAIN ENTRY POINT
-# =====================================================
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -500,3 +476,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

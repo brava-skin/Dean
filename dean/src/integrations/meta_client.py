@@ -1,4 +1,3 @@
-# meta_client.py
 from __future__ import annotations
 
 import hashlib
@@ -8,45 +7,29 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
-from collections import defaultdict, deque
+from collections import defaultdict, deque, Counter
 from threading import Lock
 import json
+import logging
+import requests
+from datetime import datetime, timedelta, timezone
+
+from .slack import notify
+from infrastructure.error_handling import circuit_breaker_manager
+
+logger = logging.getLogger(__name__)
 
 
 class InsightsDataLimitError(RuntimeError):
-    """Raised when Meta limits insights request by data volume."""
+    pass
 
 
 class ReachBreakdownThrottled(RuntimeError):
-    """Raised when reach-related breakdowns are temporarily throttled."""
-
-import logging
-import requests
-from collections import Counter
-from datetime import datetime, timedelta, timezone
-
-# Import moved to avoid circular dependency - will import locally when needed
-from .slack import notify
-
-logger = logging.getLogger(__name__)
-# ---------------------------------------------------------------------------
-# Logging helpers
-# ---------------------------------------------------------------------------
+    pass
 
 
 def _meta_log(level: int, message: str, *args) -> None:
     logger.log(level, f"[META] {message}", *args)
-
-
-from infrastructure.error_handling import (
-    retry_with_backoff,
-    enhanced_retry_with_backoff,
-    with_circuit_breaker,
-    circuit_breaker_manager,
-)
-
-# Note: Local RateLimitManager class is used (defined below)
-# Infrastructure rate_limit_manager is not used
 
 USE_SDK = False
 try:
@@ -58,64 +41,52 @@ try:
     from facebook_business.adobjects.campaign import Campaign
     from facebook_business.exceptions import FacebookRequestError
     USE_SDK = True
-except Exception:  # pragma: no cover
+except Exception:
     USE_SDK = False
-
-
-# -------------------------
-# Environment & guards
-# -------------------------
-META_RETRY_MAX          = int(os.getenv("META_RETRY_MAX", "6") or 6)
-META_BACKOFF_BASE       = float(os.getenv("META_BACKOFF_BASE", "1.0") or 1.0)
-META_TIMEOUT            = float(os.getenv("META_TIMEOUT", "30") or 30)
+META_RETRY_MAX = int(os.getenv("META_RETRY_MAX", "6") or 6)
+META_BACKOFF_BASE = float(os.getenv("META_BACKOFF_BASE", "1.0") or 1.0)
+META_TIMEOUT = float(os.getenv("META_TIMEOUT", "30") or 30)
 META_WRITE_COOLDOWN_SEC = int(os.getenv("META_WRITE_COOLDOWN_SEC", "10") or 10)
 
-BUDGET_MIN          = float(os.getenv("BUDGET_MIN", "5") or 5.0)
-BUDGET_MAX          = float(os.getenv("BUDGET_MAX", "50000") or 50000.0)
+BUDGET_MIN = float(os.getenv("BUDGET_MIN", "5") or 5.0)
+BUDGET_MAX = float(os.getenv("BUDGET_MAX", "50000") or 50000.0)
 BUDGET_MAX_STEP_PCT = float(os.getenv("BUDGET_MAX_STEP_PCT", "200") or 200.0)
 
-# Circuit breaker
-CB_FAILS     = int(os.getenv("META_CB_FAILS", "5") or 5)
+CB_FAILS = int(os.getenv("META_CB_FAILS", "5") or 5)
 CB_RESET_SEC = int(os.getenv("META_CB_RESET_SEC", "120") or 120)
 
-# Rate limiting - Enhanced for UI compatibility
-META_REQUEST_DELAY = float(os.getenv("META_REQUEST_DELAY", "0.8") or 0.8)  # Increased delay
-META_REQUEST_JITTER = 0.3  # Random jitter to avoid burst alignment
-META_MAX_CONCURRENT_INSIGHTS = int(os.getenv("META_MAX_CONCURRENT_INSIGHTS", "3") or 3)  # Hard concurrency cap
-META_USAGE_THRESHOLD = 0.8  # Pause when usage > 80%
+META_REQUEST_DELAY = float(os.getenv("META_REQUEST_DELAY", "0.8") or 0.8)
+META_REQUEST_JITTER = 0.3
+META_MAX_CONCURRENT_INSIGHTS = int(os.getenv("META_MAX_CONCURRENT_INSIGHTS", "3") or 3)
+META_USAGE_THRESHOLD = 0.8
 
-# Enhanced rate limiting configuration
-META_API_TIER = os.getenv("META_API_TIER", "development")  # "development" or "standard"
-META_MAX_SCORE_DEV = 60  # Development tier max score
-META_MAX_SCORE_STANDARD = 9000  # Standard tier max score
-META_SCORE_DECAY_SEC = 300  # Score decay rate in seconds
-META_BLOCK_DURATION_DEV = 300  # Block duration for dev tier
-META_BLOCK_DURATION_STANDARD = 60  # Block duration for standard tier
+META_API_TIER = os.getenv("META_API_TIER", "development")
+META_MAX_SCORE_DEV = 60
+META_MAX_SCORE_STANDARD = 9000
+META_SCORE_DECAY_SEC = 300
+META_BLOCK_DURATION_DEV = 300
+META_BLOCK_DURATION_STANDARD = 60
 
-# Business Use Case (BUC) rate limits
 META_BUC_ENABLED = os.getenv("META_BUC_ENABLED", "true").lower() == "true"
 META_BUC_HEADERS = {
     "ads_management": "X-Business-Use-Case: ads_management",
-    "custom_audience": "X-Business-Use-Case: custom_audience", 
+    "custom_audience": "X-Business-Use-Case: custom_audience",
     "ads_insights": "X-Business-Use-Case: ads_insights",
     "catalog_management": "X-Business-Use-Case: catalog_management",
     "catalog_batch": "X-Business-Use-Case: catalog_batch"
 }
 
-# Naming & compliance
 CAMPAIGN_NAME_RE = re.compile(r"^\[ASC\+\]\s+Brava\s+-\s+(ABO|CBO)\s+-\s+US Men$")
-ADSET_NAME_RE    = re.compile(r"^\[ASC\+\]\s+.+$")
-AD_NAME_RE       = re.compile(r"^\[ASC\+\]\s+.+$")
-FORBIDDEN_TERMS  = tuple(x.strip().lower() for x in os.getenv("FORBIDDEN_TERMS", "cures,miracle,guaranteed").split(","))
+ADSET_NAME_RE = re.compile(r"^\[ASC\+\]\s+.+$")
+AD_NAME_RE = re.compile(r"^\[ASC\+\]\s+.+$")
+FORBIDDEN_TERMS = tuple(x.strip().lower() for x in os.getenv("FORBIDDEN_TERMS", "cures,miracle,guaranteed").split(","))
 
 HUMAN_CONFIRM_JUMP_PCT = float(os.getenv("HUMAN_CONFIRM_JUMP_PCT", "200") or 200.0)
 
-# Account metadata (new: Amsterdam/EUR)
-ACCOUNT_TIMEZONE  = os.getenv("ACCOUNT_TZ") or os.getenv("ACCOUNT_TIMEZONE") or "Europe/Amsterdam"
-ACCOUNT_CURRENCY  = os.getenv("ACCOUNT_CURRENCY", "EUR")
-ACCOUNT_CCY_SYM   = os.getenv("ACCOUNT_CURRENCY_SYMBOL", "€")
+ACCOUNT_TIMEZONE = os.getenv("ACCOUNT_TZ") or os.getenv("ACCOUNT_TIMEZONE") or "Europe/Amsterdam"
+ACCOUNT_CURRENCY = os.getenv("ACCOUNT_CURRENCY", "EUR")
+ACCOUNT_CCY_SYM = os.getenv("ACCOUNT_CURRENCY_SYMBOL", "€")
 
-# Endpoints that require account-scoped URLs (prefixed with act_<account_id>)
 ACCOUNT_SCOPED_ENDPOINTS = {
     "ads",
     "adsets",
@@ -133,28 +104,21 @@ ACCOUNT_SCOPED_ENDPOINTS = {
     "adsetsbatch",
     "adcreativesbatch",
 }
-
-
-# -------------------------
-# Config dataclasses
-# -------------------------
 @dataclass
 class AccountAuth:
-    account_id: str                # can be "act_123" or "123"
+    account_id: str
     access_token: str
     app_id: str
     app_secret: str
-    api_version: Optional[str] = None  # defaulted below
+    api_version: Optional[str] = None
 
 
 @dataclass
 class ClientConfig:
-    # changed default timezone to Europe/Amsterdam
     timezone: str = ACCOUNT_TIMEZONE
     attribution_click_days: int = 7
     attribution_view_days: int = 1
     roas_source: str = "computed"
-    # added currency for clarity
     currency: str = ACCOUNT_CURRENCY
     currency_symbol: str = ACCOUNT_CCY_SYM
 
@@ -162,31 +126,21 @@ class ClientConfig:
         "ad_id", "ad_name", "adset_id", "campaign_id",
         "spend", "impressions", "clicks", "reach", "unique_clicks",
         "inline_link_clicks", "inline_link_click_ctr", "cost_per_inline_link_click",
-        "cpc", "cpm",  # All-clicks CPC and CPM (includes Meta clicks)
+        "cpc", "cpm",
         "actions", "action_values", "purchase_roas",
-        # Note: Meta API doesn't provide direct "add_to_cart" field
-        # ATCs come from "actions" array with action_type="add_to_cart" (website ATCs)
-        # For "all ATCs" (Meta + website), we need to sum actions + onsite_conversion if available
     )
     breakdowns_default: Tuple[str, ...] = ()
     stage_overrides: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
-    # feature flags
     enable_creative_uploads: bool = True
     enable_duplication: bool = True
     enable_budget_updates: bool = True
     require_name_compliance: bool = True
 
-    # safety & pacing
     write_cooldown_sec: int = META_WRITE_COOLDOWN_SEC
     budget_min: float = BUDGET_MIN
     budget_max: float = BUDGET_MAX
     budget_step_cap_pct: float = BUDGET_MAX_STEP_PCT
-
-
-# -------------------------
-# Helpers
-# -------------------------
 def _hash_idempotency(*parts: str) -> str:
     h = hashlib.sha256()
     for p in parts:
@@ -242,7 +196,6 @@ def _clean_story_link(link_url: Optional[str], utm_params: Optional[str]) -> str
 
 
 def _normalize_account_id(account_id: str) -> Tuple[str, str]:
-    """Returns (numeric_id, act_prefixed_id). Accepts either '123' or 'act_123'."""
     aid = (account_id or "").strip()
     num = aid[4:] if aid.startswith("act_") else aid
     return num, f"act_{num}"
@@ -259,44 +212,31 @@ def _maybe_call(v: Any) -> Any:
         return None
 
 
-# -------------------------
-# Rate Limiting Manager
-# -------------------------
 class RateLimitManager:
-    """
-    Comprehensive rate limiting manager for Meta Marketing API.
-    Handles all rate limiting types: API-level, Business Use Case, Insights Platform, etc.
-    """
     
     def __init__(self, api_tier: str = "development", store: Optional[Any] = None) -> None:
         self.api_tier = api_tier.lower()
         self.store = store
         self.lock = Lock()
         
-        # API-level scoring (reads=1pt, writes=3pts)
         self.current_score = 0
         self.max_score = META_MAX_SCORE_DEV if self.api_tier == "development" else META_MAX_SCORE_STANDARD
         self.block_duration = META_BLOCK_DURATION_DEV if self.api_tier == "development" else META_BLOCK_DURATION_STANDARD
         self.blocked_until = 0
         
-        # Score tracking with decay
-        self.score_history = deque(maxlen=1000)  # Keep last 1000 requests
+        self.score_history = deque(maxlen=1000)
         
-        # Business Use Case tracking
-        self.buc_usage = defaultdict(int)  # BUC -> usage count
-        self.buc_reset_times = defaultdict(float)  # BUC -> next reset time
+        self.buc_usage = defaultdict(int)
+        self.buc_reset_times = defaultdict(float)
         
-        # Ad account level limits
-        self.adset_budget_changes = defaultdict(list)  # adset_id -> list of change timestamps
-        self.account_spend_changes = []  # List of spend change timestamps
+        self.adset_budget_changes = defaultdict(list)
+        self.account_spend_changes = []
         
-        # App-level limits (for Insights Platform)
         self.app_level_blocked_until = 0
         
-        # Usage monitoring for UI compatibility
         self.insights_throttle_usage = 0.0
-        self.buc_usage_percent = defaultdict(float)  # BUC -> usage percentage
-        self.ad_account_usage_percent = defaultdict(float)  # Ad account -> usage percentage
+        self.buc_usage_percent = defaultdict(float)
+        self.ad_account_usage_percent = defaultdict(float)
         self.app_usage_percent = 0.0
         self.reach_usage_percent = defaultdict(float)
         self.reach_app_usage_percent = 0.0
@@ -310,50 +250,39 @@ class RateLimitManager:
             "count": 0,
         }
         
-        # Error tracking
         self.error_counts = defaultdict(int)
         self.last_error_reset = time.time()
-        
+    
     def _cleanup_old_scores(self):
-        """Remove scores older than decay period."""
         cutoff = time.time() - META_SCORE_DECAY_SEC
         while self.score_history and self.score_history[0][0] < cutoff:
             old_score = self.score_history.popleft()[1]
             self.current_score = max(0, self.current_score - old_score)
     
     def _cleanup_buc_usage(self):
-        """Reset BUC usage counters when reset time is reached."""
         current_time = time.time()
         for buc, reset_time in list(self.buc_reset_times.items()):
             if current_time >= reset_time:
                 self.buc_usage[buc] = 0
-                self.buc_reset_times[buc] = current_time + 3600  # Reset every hour
+                self.buc_reset_times[buc] = current_time + 3600
     
     def can_make_request(self, request_type: str = "read", buc_type: Optional[str] = None) -> Tuple[bool, str]:
-        """
-        Check if a request can be made based on all rate limiting rules.
-        Returns (can_make, reason_if_blocked)
-        """
         with self.lock:
             current_time = time.time()
             
-            # Clean up old data
             self._cleanup_old_scores()
             self._cleanup_buc_usage()
             
-            # Check if currently blocked
             if current_time < self.blocked_until:
                 return False, f"API-level blocked until {self.blocked_until - current_time:.1f}s"
             
             if current_time < self.app_level_blocked_until:
                 return False, f"App-level blocked until {self.app_level_blocked_until - current_time:.1f}s"
             
-            # Check API-level scoring
             request_score = 3 if request_type == "write" else 1
             if self.current_score + request_score > self.max_score:
                 return False, f"API score limit exceeded ({self.current_score}/{self.max_score})"
             
-            # Check BUC limits if applicable
             if buc_type and META_BUC_ENABLED:
                 buc_limit = self._get_buc_limit(buc_type)
                 if self.buc_usage[buc_type] >= buc_limit:
@@ -363,22 +292,18 @@ class RateLimitManager:
             return True, ""
     
     def record_request(self, request_type: str = "read", buc_type: Optional[str] = None, endpoint: str = ""):
-        """Record a request and update all relevant counters."""
         with self.lock:
             current_time = time.time()
             
-            # Update API-level scoring
             request_score = 3 if request_type == "write" else 1
             self.score_history.append((current_time, request_score))
             self.current_score += request_score
             
-            # Update BUC usage
             if buc_type and META_BUC_ENABLED:
                 self.buc_usage[buc_type] += 1
                 if buc_type not in self.buc_reset_times:
-                    self.buc_reset_times[buc_type] = current_time + 3600  # Reset every hour
+                    self.buc_reset_times[buc_type] = current_time + 3600
             
-            # Log to store if available
             if self.store:
                 try:
                     self.store.log("rate_limit", "request_recorded", {
@@ -393,7 +318,6 @@ class RateLimitManager:
                     pass
     
     def _time_until_score_allows(self, request_type: str) -> float:
-        """Calculate how long to wait before next request based on API score."""
         request_score = 3 if request_type == "write" else 1
         current_time = time.time()
         if self.current_score + request_score <= self.max_score:
@@ -410,9 +334,8 @@ class RateLimitManager:
             wait_until = max(wait_until, expiry - current_time)
             if cumulative >= needed:
                 break
-        if wait_until == 0.0:
-            # Fallback to decay window if we couldn't compute precise wait
-            wait_until = max(0.0, META_SCORE_DECAY_SEC - (current_time - self.score_history[0][0])) if self.score_history else META_SCORE_DECAY_SEC
+            if wait_until == 0.0:
+                wait_until = max(0.0, META_SCORE_DECAY_SEC - (current_time - self.score_history[0][0])) if self.score_history else META_SCORE_DECAY_SEC
         return max(wait_until, 0.0)
     
     def _time_until_buc_allows(self, buc_type: Optional[str]) -> float:
@@ -425,9 +348,6 @@ class RateLimitManager:
         return max(0.0, reset_time - current_time)
     
     def wait_for_request_slot(self, request_type: str = "read", buc_type: Optional[str] = None) -> float:
-        """
-        Block until a request slot is available. Returns total time waited.
-        """
         total_wait = 0.0
         while True:
             can_make, _ = self.can_make_request(request_type, buc_type)
@@ -445,13 +365,11 @@ class RateLimitManager:
                 wait_time = max(waits)
                 if wait_time <= 0:
                     wait_time = 1.0
-            # Cap wait to reasonable bounds and add jitter
             wait_time = min(max(wait_time, 1.0), 120.0)
             time.sleep(wait_time)
             total_wait += wait_time
     
     def acquire_insights_slot(self):
-        """Ensure no more than META_MAX_CONCURRENT_INSIGHTS run simultaneously."""
         while True:
             with self.lock:
                 if self.insights_inflight < META_MAX_CONCURRENT_INSIGHTS:
@@ -578,88 +496,79 @@ class RateLimitManager:
             return 0.0
 
     def handle_rate_limit_error(self, error_data: Dict[str, Any], endpoint: str) -> float:
-        """
-        Handle rate limit errors and return wait time.
-        Returns the number of seconds to wait before retry.
-        """
         with self.lock:
             code = error_data.get("error", {}).get("code")
             subcode = error_data.get("error", {}).get("error_subcode")
             message = error_data.get("error", {}).get("message", "")
             current_time = time.time()
             
-            # Reset error counts every hour
             if current_time - self.last_error_reset > 3600:
                 self.error_counts.clear()
                 self.last_error_reset = current_time
             
             self.error_counts[f"{code}_{subcode}"] += 1
             
-            # Handle different rate limit error types with enhanced backoff
-            if code == 4:  # Application request limit reached
-                if subcode == 1504022:  # Ads Insights Platform rate limit (UI interference)
-                    wait_time = 120.0  # Increased from 60s to 120s
+            if code == 4:
+                if subcode == 1504022:
+                    wait_time = 120.0
                     self.app_level_blocked_until = current_time + wait_time
                     notify(f"⏳ Ads Insights Platform rate limit hit (UI interference). Blocked for {wait_time:.1f}s")
                     return wait_time
-                elif subcode == 1504039:  # General app-level rate limit
-                    wait_time = 90.0  # Increased from 30s to 90s
+                elif subcode == 1504039:
+                    wait_time = 90.0
                     self.app_level_blocked_until = current_time + wait_time
                     notify(f"⏳ App-level rate limit hit. Blocked for {wait_time:.1f}s")
                     return wait_time
-                else:  # General application rate limit
+                else:
                     wait_time = min(60.0, META_BACKOFF_BASE * 8)
                     self.blocked_until = current_time + wait_time
                     notify(f"⏳ Application rate limit hit. Blocked for {wait_time:.1f}s")
                     return wait_time
             
-            elif code == 17:  # User request limit reached
-                if subcode == 2446079:  # Ad account level API limit
+            elif code == 17:
+                if subcode == 2446079:
                     wait_time = self.block_duration
                     self.blocked_until = current_time + wait_time
                     notify(f"⏳ Ad account API limit reached. Blocked for {wait_time:.1f}s")
                     return wait_time
-                elif subcode == 1885172:  # Spend limit changes (10/day)
-                    wait_time = 3600.0  # Wait 1 hour
+                elif subcode == 1885172:
+                    wait_time = 3600.0
                     notify(f"⏳ Spend limit change limit reached (10/day). Wait 1 hour.")
                     return wait_time
             
-            elif code == 613:  # Ad account level limits
-                if subcode == 1487742:  # Too many calls from ad account
+            elif code == 613:
+                if subcode == 1487742:
                     wait_time = 60.0
                     self.blocked_until = current_time + wait_time
                     notify(f"⏳ Too many calls from ad account. Blocked for {wait_time:.1f}s")
                     return wait_time
-                elif subcode == 1487632:  # Ad set budget change limit (4/hour)
-                    wait_time = 3600.0  # Wait 1 hour
+                elif subcode == 1487632:
+                    wait_time = 3600.0
                     notify(f"⏳ Ad set budget change limit reached (4/hour). Wait 1 hour.")
                     return wait_time
-                elif subcode == 1487225:  # Ad creation limit
+                elif subcode == 1487225:
                     wait_time = 60.0
                     notify(f"⏳ Ad creation limit reached. Wait {wait_time:.1f}s")
                     return wait_time
-                else:  # General ad account limit
+                else:
                     wait_time = 60.0
                     self.blocked_until = current_time + wait_time
                     notify(f"⏳ Ad account limit reached. Blocked for {wait_time:.1f}s")
                     return wait_time
             
-            elif code in (80000, 80003, 80004, 80014):  # Business Use Case rate limits
+            elif code in (80000, 80003, 80004, 80014):
                 wait_time = 60.0
                 notify(f"⏳ Business Use Case rate limit hit. Wait {wait_time:.1f}s")
                 return wait_time
             
-            # Default handling for rate limit related errors
             if "rate" in message.lower() or "limit" in message.lower():
                 wait_time = min(30.0, META_BACKOFF_BASE * 4)
                 notify(f"⏳ Rate limit error detected. Wait {wait_time:.1f}s")
                 return wait_time
             
-            # No specific rate limit detected
             return 0.0
     
     def _get_buc_limit(self, buc_type: str) -> int:
-        """Get the rate limit for a specific Business Use Case."""
         if self.api_tier == "development":
             limits = {
                 "ads_management": 300,
@@ -677,15 +586,13 @@ class RateLimitManager:
                 "catalog_batch": 200
             }
         
-        return limits.get(buc_type, 1000)  # Default limit
+        return limits.get(buc_type, 1000)
     
     def can_change_budget(self, adset_id: str) -> bool:
-        """Check if ad set budget can be changed (4 times per hour limit)."""
         with self.lock:
             current_time = time.time()
-            cutoff = current_time - 3600  # 1 hour ago
+            cutoff = current_time - 3600
             
-            # Clean old changes
             self.adset_budget_changes[adset_id] = [
                 ts for ts in self.adset_budget_changes[adset_id] if ts > cutoff
             ]
@@ -693,17 +600,14 @@ class RateLimitManager:
             return len(self.adset_budget_changes[adset_id]) < 4
     
     def record_budget_change(self, adset_id: str):
-        """Record an ad set budget change."""
         with self.lock:
             self.adset_budget_changes[adset_id].append(time.time())
     
     def can_change_spend_limit(self) -> bool:
-        """Check if account spend limit can be changed (10 times per day limit)."""
         with self.lock:
             current_time = time.time()
-            cutoff = current_time - 86400  # 24 hours ago
+            cutoff = current_time - 86400
             
-            # Clean old changes
             self.account_spend_changes = [
                 ts for ts in self.account_spend_changes if ts > cutoff
             ]
@@ -711,12 +615,10 @@ class RateLimitManager:
             return len(self.account_spend_changes) < 10
     
     def record_spend_limit_change(self):
-        """Record an account spend limit change."""
         with self.lock:
             self.account_spend_changes.append(time.time())
     
     def get_status(self) -> Dict[str, Any]:
-        """Get current rate limiting status."""
         with self.lock:
             current_time = time.time()
             self._cleanup_old_scores()
@@ -735,16 +637,7 @@ class RateLimitManager:
             }
 
 
-# -------------------------
-# MetaClient
-# -------------------------
 class MetaClient:
-    """
-    Reads can use SDK. Writes (creatives/ads) are HTTP-first to avoid flaky SDK paths.
-
-    Budgets in this client are expressed in the **ad account currency** (now EUR),
-    and sent to Graph as integer "cents" of that currency, as Meta expects.
-    """
 
     def __init__(
         self,
@@ -769,7 +662,6 @@ class MetaClient:
             if not acc.api_version:
                 acc.api_version = "v23.0"
 
-        # normalize & cache account ids per index
         self._acct_num: Dict[int, str] = {}
         self._acct_act: Dict[int, str] = {}
         for i, acc in enumerate(self.accounts):
@@ -783,7 +675,6 @@ class MetaClient:
         self._cb_open_until: Dict[str, float] = {}
         self._last_write_ts = 0.0
 
-        # Initialize rate limiting manager
         self.rate_limit_manager = RateLimitManager(
             api_tier=META_API_TIER,
             store=self.store
@@ -791,10 +682,8 @@ class MetaClient:
 
         self._init_sdk_if_needed()
 
-        # Cache for Instagram actor lookups (page_id -> ig_actor_id or None)
         self._instagram_actor_cache: Dict[str, Optional[str]] = {}
 
-    # ------------- SDK init / failover -------------
     @property
     def account(self) -> AccountAuth:
         return self.accounts[self._active_idx]
@@ -805,7 +694,7 @@ class MetaClient:
 
     @property
     def ad_account_id_act(self) -> str:
-        return self._acct_act[self._active_idx]  # 'act_<id>'
+        return self._acct_act[self._active_idx]
 
     def _init_sdk_if_needed(self):
         if self.dry_run or not USE_SDK:
@@ -823,7 +712,6 @@ class MetaClient:
         self._init_sdk_if_needed()
         return True
 
-    # ------------- Circuit breaker / retry -------------
     def _cb_open(self, key: str) -> bool:
         until = self._cb_open_until.get(key)
         return bool(until and time.time() < until)
@@ -885,7 +773,6 @@ class MetaClient:
                     if message and "reach-related metric breakdowns" in message.lower():
                         raise ReachBreakdownThrottled(message)
                     
-                    # Handle rate limit errors specifically using the rate limit manager
                     if code in (4, 17, 613) or (code >= 80000 and code <= 80014):
                         error_data = {"error": {"code": code, "error_subcode": subcode, "message": str(e)}}
                         wait_time = self.rate_limit_manager.handle_rate_limit_error(error_data, key)
@@ -909,11 +796,9 @@ class MetaClient:
             try:
                 self.store.log("account", self.ad_account_id_act, "META_API_ERROR", f"{key}", level="error", stage="ACCOUNT", reason=str(last_exc)[:300] if last_exc else key)
             except (AttributeError, TypeError, ValueError):
-                # Store logging failed - non-critical
                 pass
         raise last_exc if last_exc else RuntimeError("Meta API error")
 
-    # ------------- Cooldown/pacing for writes -------------
     def _cooldown(self):
         delta = time.time() - self._last_write_ts
         need = max(0.0, self.cfg.write_cooldown_sec - delta)
@@ -921,12 +806,10 @@ class MetaClient:
             time.sleep(need)
         self._last_write_ts = time.time()
 
-    # ------------- HTTP helpers -------------
     def _graph_url(self, endpoint: str) -> str:
         ver = self.account.api_version or "v23.0"
         endpoint = (endpoint or "").lstrip("/")
         first_segment = endpoint.split("/", 1)[0]
-        # Detect if endpoint already contains an account prefix or explicit object id
         if (
             endpoint.startswith("act_")
             or endpoint.startswith(self.ad_account_id_act)
@@ -940,28 +823,24 @@ class MetaClient:
         return f"https://graph.facebook.com/{ver}/{path}"
 
     def _handle_rate_limit_error(self, error_data: Dict[str, Any], endpoint: str) -> None:
-        """Handle Facebook API rate limit errors with appropriate retry logic."""
         wait_time = self.rate_limit_manager.handle_rate_limit_error(error_data, endpoint)
         if wait_time > 0:
             time.sleep(wait_time)
 
     def _request_delay(self) -> None:
-        """Add delay between API requests to prevent rate limiting with jitter."""
         if META_REQUEST_DELAY > 0:
             import random
             jitter = random.uniform(-META_REQUEST_JITTER, META_REQUEST_JITTER)
-            delay = max(0.1, META_REQUEST_DELAY + jitter)  # Minimum 0.1s
+            delay = max(0.1, META_REQUEST_DELAY + jitter)
             time.sleep(delay)
 
     def _graph_post(self, endpoint: str, payload: Dict[str, Any], buc_type: str = "ads_management") -> Dict[str, Any]:
-        # Block until a write slot is available
         self.rate_limit_manager.wait_for_request_slot("write", buc_type)
-        self._request_delay()  # Add delay to prevent rate limiting
+        self._request_delay()
         url = self._graph_url(endpoint)
         data = _sanitize(payload)
         data["access_token"] = self.account.access_token
         
-        # Add BUC header if enabled
         headers = {}
         if META_BUC_ENABLED and buc_type in META_BUC_HEADERS:
             header_line = META_BUC_HEADERS[buc_type]
@@ -973,7 +852,6 @@ class MetaClient:
             try:
                 r = requests.post(url, json=data, headers=headers, timeout=META_TIMEOUT)
                 
-                # Record the request
                 self.rate_limit_manager.record_request("write", buc_type, endpoint)
                 self.rate_limit_manager.handle_general_headers(r.headers, buc_type, self.ad_account_id_act)
                 if endpoint.endswith("insights"):
@@ -985,7 +863,6 @@ class MetaClient:
                     except Exception:
                         err = {"error": {"message": r.text}}
                     
-                    # Check for rate limit errors
                     code = err.get("error", {}).get("code")
                     subcode = err.get("error", {}).get("error_subcode")
                     message = err.get("error", {}).get("message", "")
@@ -994,7 +871,6 @@ class MetaClient:
                     if "Reach-related metric breakdowns" in message:
                         raise ReachBreakdownThrottled(message)
                     
-                    # Handle rate limit errors
                     if code in (4, 17, 613) or (code >= 80000 and code <= 80014):
                         if attempt < META_RETRY_MAX:
                             self._handle_rate_limit_error(err, endpoint)
@@ -1021,16 +897,13 @@ class MetaClient:
                 raise e
 
     def _graph_get_object(self, object_path: str, params: Optional[Dict[str, Any]] = None, buc_type: str = "ads_management") -> Dict[str, Any]:
-        """GET for absolute objects like '/{id}' or '/{id}/thumbnails' (not under ad account path)."""
-        # Block until a read slot is available
         self.rate_limit_manager.wait_for_request_slot("read", buc_type)
-        self._request_delay()  # Add delay to prevent rate limiting
+        self._request_delay()
         ver = self.account.api_version or "v23.0"
         url = f"https://graph.facebook.com/{ver}/{object_path.lstrip('/')}"
         qp = dict(params or {})
         qp["access_token"] = self.account.access_token
         
-        # Add BUC header if enabled
         headers = {}
         if META_BUC_ENABLED and buc_type in META_BUC_HEADERS:
             header_line = META_BUC_HEADERS[buc_type]
@@ -1042,7 +915,6 @@ class MetaClient:
             try:
                 r = requests.get(url, params=qp, headers=headers, timeout=META_TIMEOUT)
                 
-                # Record the request
                 self.rate_limit_manager.record_request("read", buc_type, object_path)
                 self.rate_limit_manager.handle_general_headers(r.headers, buc_type, self.ad_account_id_act)
                 if object_path.endswith("insights"):
@@ -1054,7 +926,6 @@ class MetaClient:
                     except Exception:
                         err = {"error": {"message": r.text}}
                     
-                    # Check for rate limit errors
                     code = err.get("error", {}).get("code")
                     subcode = err.get("error", {}).get("error_subcode")
                     message = err.get("error", {}).get("message", "")
@@ -1063,7 +934,6 @@ class MetaClient:
                     if "Reach-related metric breakdowns" in message:
                         raise ReachBreakdownThrottled(message)
                     
-                    # Handle rate limit errors
                     if code in (4, 17, 613) or (code >= 80000 and code <= 80014):
                         if attempt < META_RETRY_MAX:
                             self._handle_rate_limit_error(err, object_path)
@@ -1080,15 +950,7 @@ class MetaClient:
                     continue
                 raise e
 
-    # ------------- Instagram helpers -------------
     def get_instagram_actor_id(self, page_id: Optional[str], *, force_refresh: bool = False) -> Optional[str]:
-        """
-        Resolve the Instagram actor ID linked to the provided Page.
-
-        Meta requires instagram_actor_id to be present on creatives/ads to enable IG placements.
-        We first look at the IG_ACTOR_ID env var for backwards compatibility. When absent, this
-        helper automatically fetches the currently connected Instagram business account.
-        """
         if not page_id:
             return None
 
@@ -1127,7 +989,6 @@ class MetaClient:
                                 break
                 except Exception as search_exc:
                     logger.debug("Secondary instagram account lookup failed for page %s: %s", page_id, search_exc)
-            # Fallback: inspect business assets associated with the token to locate a matching IG business account
             if not ig_actor_id:
                 try:
                     business_fields = (
@@ -1140,13 +1001,11 @@ class MetaClient:
                         sole_candidate: Optional[str] = None
                         instagram_ids_seen: set[str] = set()
                         for biz in data_list:
-                            # Track IG accounts on this business
                             ig_accounts = ((biz.get("instagram_business_accounts") or {}).get("data")) or []
                             ig_ids = [acct.get("id") for acct in ig_accounts if acct.get("id")]
                             if not ig_ids:
                                 continue
                             instagram_ids_seen.update(ig_ids)
-                            # Collect all page IDs the business controls (owned, client, pages)
                             related_pages = set()
                             for edge_key in ("owned_pages", "client_pages", "pages"):
                                 edge = biz.get(edge_key) or {}
@@ -1176,25 +1035,24 @@ class MetaClient:
             self._instagram_actor_cache[page_id] = None
             return None
 
-        if not ig_actor_id:
-            logger.info(
-                "No Instagram actor linked to page %s. Set IG_ACTOR_ID or connect the page to an Instagram business account.",
-                page_id,
-            )
-        else:
-            ig_actor_id = str(ig_actor_id).strip()
-            if not ig_actor_id.isdigit():
-                logger.warning(
-                    "Instagram actor lookup returned non-numeric id %s for page %s; ignoring",
-                    ig_actor_id,
+            if not ig_actor_id:
+                logger.info(
+                    "No Instagram actor linked to page %s. Set IG_ACTOR_ID or connect the page to an Instagram business account.",
                     page_id,
                 )
-                ig_actor_id = None
+            else:
+                ig_actor_id = str(ig_actor_id).strip()
+                if not ig_actor_id.isdigit():
+                    logger.warning(
+                        "Instagram actor lookup returned non-numeric id %s for page %s; ignoring",
+                        ig_actor_id,
+                        page_id,
+                    )
+                    ig_actor_id = None
 
         self._instagram_actor_cache[page_id] = ig_actor_id
         return ig_actor_id
 
-    # ------------- Compliance & idempotency -------------
     def _check_names(self, *, campaign: Optional[str] = None, adset: Optional[str] = None, ad: Optional[str] = None):
         if not self.cfg.require_name_compliance:
             return
@@ -1217,7 +1075,6 @@ class MetaClient:
             return True
         return True
 
-    # ------------- Insights (READ) -------------
     def _estimate_time_range_days(self, time_range: Optional[Dict[str, str]], normalized_preset: Optional[str]) -> Optional[int]:
         if time_range:
             try:
@@ -1242,7 +1099,7 @@ class MetaClient:
         if normalized_preset in preset_days:
             return preset_days[normalized_preset]
         if normalized_preset in ("maximum", "all_available"):
-            return 400  # treat as >13 months
+            return 400
         return None
 
     def _split_time_range(self, time_range: Dict[str, str], max_days: int = 30) -> List[Dict[str, str]]:
@@ -1281,7 +1138,7 @@ class MetaClient:
         use_fields = list(fields)
         needs_async = False
 
-        if range_days and range_days > 395:  # > 13 months
+        if range_days and range_days > 395:
             if self.rate_limit_manager.can_use_reach_async():
                 needs_async = True
             else:
@@ -1355,24 +1212,16 @@ class MetaClient:
         action_attribution_windows: Optional[List[str]] = None,
         paginate: bool = True,
         stage: Optional[str] = None,
-        date_preset: Optional[str] = None,  # accepts presets; "lifetime" will be mapped to "maximum"
+        date_preset: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Fetch insights. If `date_preset` is provided (e.g., "maximum", "today", "yesterday",
-        "last_7d", "last_30d"), it is sent to the API and `time_range` is ignored.
-        Some API versions do NOT accept "lifetime"; we auto-map "lifetime" -> "maximum".
-        """
-        # Normalize preset for API versions that don't accept "lifetime"
         normalized_preset = (date_preset or "").strip().lower() or None
         if normalized_preset == "lifetime":
             normalized_preset = "maximum"
 
-        # Import locally to avoid circular dependency
         from infrastructure.utils import today_ymd, yesterday_ymd
         tr = None if normalized_preset else (time_range or {"since": yesterday_ymd(), "until": today_ymd()})
 
         if self.dry_run or not USE_SDK:
-            # dev mock (values are in EUR conceptually, but numbers are examples)
             def mock_row(idx, stage_, spend, clicks, imps, purchases, revenue):
                 return {
                     "ad_id": f"AD_{stage_}_{idx}",
@@ -1434,18 +1283,12 @@ class MetaClient:
                 "limit": max(1, min(1000, int(limit))),
                 "action_attribution_windows": action_attribution_windows
                 or [f"{self.cfg.attribution_click_days}d_click", f"{self.cfg.attribution_view_days}d_view"],
-                "action_breakdowns": ["action_type"],  # Required to see action_type breakdowns (omni_add_to_cart, etc.)
+                "action_breakdowns": ["action_type"],
             }
             if breakdowns:
                 params["breakdowns"] = breakdowns
 
-            # choose between time_range and date_preset
-            # Use SDK enum if available, otherwise pass as string (SDK will handle conversion)
             if normalized_preset:
-                # Valid date_preset values: "today", "yesterday", "this_week", "last_week", 
-                # "this_month", "last_month", "this_quarter", "last_quarter", "this_year", 
-                # "last_year", "lifetime", "maximum", "last_7d", "last_14d", "last_28d", "last_30d", "last_90d"
-                # The SDK expects these as strings, but some versions want enum - we'll let SDK handle it
                 params["date_preset"] = normalized_preset
             else:
                 params["time_range"] = tr
@@ -1523,7 +1366,6 @@ class MetaClient:
                         try:
                             cursor = self._retry("insights", _get, after)
                         except InsightsDataLimitError:
-                            # Split the remainder of range for pagination
                             if normalized_preset or not tr:
                                 raise
                             remaining_ranges = self._split_time_range(tr, max_days=14)
@@ -1579,7 +1421,6 @@ class MetaClient:
                 self.rate_limit_manager.release_insights_slot()
 
     def list_ads_in_adset(self, adset_id: str) -> List[Dict[str, Any]]:
-        """List all ads in an adset with proper pagination."""
         if self.dry_run or not USE_SDK:
             now_iso = datetime.now(timezone.utc).isoformat()
             return [
@@ -1614,10 +1455,8 @@ class MetaClient:
             )
         try:
             cursor = self._retry("list_ads", _fetch)
-            # Handle pagination properly - iterate through all pages
             page_count = 0
             for a in cursor:
-                # Get status from effective_status if available (more accurate), otherwise use status
                 status = a.get("effective_status") or a.get("status", "")
                 creative = a.get("creative") or {}
                 creative_id = None
@@ -1640,18 +1479,16 @@ class MetaClient:
             logger.debug(f"Listed {len(ads)} ads from adset {adset_id} (processed {page_count} items)")
         except Exception as e:
             logger.warning(f"Error listing ads in adset {adset_id}: {e}")
-            # Fallback: try Graph API directly with pagination
             try:
                 all_ads = []
                 next_url = None
                 page = 0
-                while page < 10:  # Limit to 10 pages (5000 ads max)
+                while page < 10:
                     params = {
                         "fields": "id,name,status,effective_status,created_time,updated_time,adset_id,campaign_id,creative{id}",
                         "limit": 500,
                     }
                     if next_url:
-                        # Extract cursor from next URL if available
                         if "after=" in next_url:
                             after = next_url.split("after=")[1].split("&")[0]
                             params["after"] = after
@@ -1678,7 +1515,6 @@ class MetaClient:
                                 }
                             )
                     
-                    # Check for next page
                     paging = response.get("paging", {})
                     next_url = paging.get("next")
                     if not next_url:
@@ -1692,7 +1528,6 @@ class MetaClient:
         return ads
     
     def list_ads_in_campaign(self, campaign_id: str) -> List[Dict[str, Any]]:
-        """List all ads in a campaign (more comprehensive than adset-level)."""
         if self.dry_run or not USE_SDK:
             return []
         self._init_sdk_if_needed()
@@ -1713,12 +1548,11 @@ class MetaClient:
             logger.debug(f"Listed {len(ads)} ads from campaign {campaign_id}")
         except Exception as e:
             logger.warning(f"Error listing ads in campaign {campaign_id}: {e}")
-            # Fallback: try Graph API directly
             try:
                 all_ads = []
                 next_url = None
                 page = 0
-                while page < 10:  # Limit to 10 pages
+                while page < 10:
                     params = {
                         "fields": "id,name,status,effective_status,adset_id",
                         "limit": 500
@@ -1752,7 +1586,6 @@ class MetaClient:
         return ads
     
     def _count_active_from_creative_storage(self) -> Optional[int]:
-        """Count active ads from creative_storage table in Supabase (fallback method)."""
         try:
             from infrastructure.supabase_storage import get_validated_supabase_client
             
@@ -1760,13 +1593,11 @@ class MetaClient:
             if not supabase_client:
                 return None
             
-            # Count rows where status = 'active'
             response = supabase_client.table('creative_storage').select(
                 'creative_id', 
                 count='exact'
             ).eq('status', 'active').execute()
             
-            # Get count from response
             count = response.count if hasattr(response, 'count') else len(response.data) if response.data else 0
             
             logger.debug(f"Active ads from creative_storage: {count}")
@@ -1776,12 +1607,10 @@ class MetaClient:
             return None
     
     def count_active_ads_in_adset(self, adset_id: str, campaign_id: Optional[str] = None) -> int:
-        """Count active ads in an adset using multiple methods for accuracy."""
         counts = {}
         allowed_statuses = {"ACTIVE", "ELIGIBLE"}
         
         try:
-            # Method 1: Direct API call from adset - count only ACTIVE ads
             ads = self.list_ads_in_adset(adset_id)
             direct_count = sum(
                 1 for a in ads if str(a.get("status", "")).upper() in allowed_statuses
@@ -1789,17 +1618,14 @@ class MetaClient:
             counts['adset_direct'] = direct_count
             active_count = direct_count
             
-            # Method 1b: Also query by campaign (more comprehensive, catches all ads)
             if campaign_id:
                 try:
                     campaign_ads = self.list_ads_in_campaign(campaign_id)
-                    # Filter to ads in this specific adset
                     adset_ads = [a for a in campaign_ads if a.get("adset_id") == adset_id]
                     campaign_count = sum(
                         1 for a in adset_ads if str(a.get("status", "")).upper() in allowed_statuses
                     )
                     counts['campaign_direct'] = campaign_count
-                    # Use the higher count (campaign query is more comprehensive)
                     active_count = max(active_count, campaign_count)
                     _meta_log(
                         logging.INFO,
@@ -1810,7 +1636,6 @@ class MetaClient:
                 except Exception as e:
                     _meta_log(logging.WARNING, "Campaign-level query failed (non-critical): %s", e)
             
-            # Method 2: Use insights API to verify (ads with recent data are definitely active)
             try:
                 insight_rows = self.get_recent_ad_insights(adset_id=adset_id, campaign_id=campaign_id)
                 insights_active = {
@@ -1822,23 +1647,19 @@ class MetaClient:
             except Exception as e:
                 _meta_log(logging.DEBUG, "Insights verification failed (non-critical): %s", e)
             
-            # Method 3: Fallback to creative_storage table
             storage_count = self._count_active_from_creative_storage()
             if storage_count is not None:
                 counts['storage'] = storage_count
 
-            # Majority vote with tie-breakers
             final_count = self._resolve_active_count(counts)
             _meta_log(logging.INFO, "Active ads counts consensus %s => %s", counts, final_count)
             return final_count
         except Exception as e:
             _meta_log(logging.ERROR, "Error counting active ads in adset %s: %s", adset_id, e)
-            # Fallback to creative_storage if available
             storage_count = self._count_active_from_creative_storage()
             if storage_count is not None:
                 _meta_log(logging.INFO, "Using creative_storage fallback count: %s", storage_count)
                 return storage_count
-            # Final fallback to basic count
             ads = self.list_ads_in_adset(adset_id)
             return sum(
                 1 for a in ads if str(a.get("status", "")).upper() in allowed_statuses
@@ -1869,10 +1690,6 @@ class MetaClient:
             return max(non_zero_candidates)
         return max(candidates)
 
-    # ------------------------------------------------------------------
-    # Enhanced insights helpers
-    # ------------------------------------------------------------------
-
     def get_recent_ad_insights(
         self,
         adset_id: Optional[str] = None,
@@ -1880,8 +1697,6 @@ class MetaClient:
         days_back: int = 3,
         limit: int = 500,
     ) -> List[Dict[str, Any]]:
-        """Fetch insights using a two-pass strategy (today + trailing window)."""
-
         filters: List[Dict[str, Any]] = []
         if adset_id:
             filters.append({"field": "adset.id", "operator": "EQUAL", "value": adset_id})
@@ -1929,7 +1744,6 @@ class MetaClient:
                 return 0.0
             return 0.0
 
-        # Pass 1: today
         today_rows = self.get_ad_insights(
             level="ad",
             date_preset="today",
@@ -1941,7 +1755,6 @@ class MetaClient:
             if row.get("ad_id"):
                 insight_rows[row["ad_id"]] = row
 
-        # Pass 2: trailing window
         now = datetime.now(timezone.utc)
         since = (now - timedelta(days=days_back)).date().isoformat()
         until = now.date().isoformat()
@@ -1961,7 +1774,6 @@ class MetaClient:
             if not existing:
                 insight_rows[ad_id] = row
                 continue
-            # Merge by preserving today's data; only fill gaps with trailing values
             for key in ("impressions", "clicks", "inline_link_clicks"):
                 if _metric_value(existing.get(key)) <= 0 and _metric_value(row.get(key)) > 0:
                     existing[key] = row.get(key)
@@ -1981,11 +1793,7 @@ class MetaClient:
         _meta_log(logging.DEBUG, "Fetched %s insight rows after two-pass strategy", len(insight_rows))
         return list(insight_rows.values())
 
-    # ----- Helper: get current ad set budget (account currency, e.g., EUR) -----
     def get_adset_budget(self, adset_id: str) -> Optional[float]:
-        """
-        Returns the daily budget in account currency (EUR for this account).
-        """
         if self.dry_run or not USE_SDK:
             return 100.0
         self._init_sdk_if_needed()
@@ -2003,11 +1811,9 @@ class MetaClient:
         except Exception:
             return None
 
-    # Back-compat alias (was USD; now account currency)
     def get_adset_budget_usd(self, adset_id: str) -> Optional[float]:
         return self.get_adset_budget(adset_id)
 
-    # ----- Update budget (account currency, e.g., EUR) -----
     def update_adset_budget(
         self,
         adset_id: str,
@@ -2016,10 +1822,6 @@ class MetaClient:
         current_budget: Optional[float] = None,
         human_confirm: bool = False
     ):
-        """
-        Update daily budget in account currency (EUR). Automatically caps step size.
-        """
-        # Check rate limits for budget changes
         if not self.rate_limit_manager.can_change_budget(adset_id):
             raise RuntimeError(f"Ad set budget change limit reached (4/hour) for adset {adset_id}")
         
@@ -2038,14 +1840,12 @@ class MetaClient:
         self._init_sdk_if_needed()
         self._cooldown()
         
-        # Record the budget change attempt
         self.rate_limit_manager.record_budget_change(adset_id)
         
         def _update():
             return AdSet(adset_id).api_update(params={"daily_budget": int(b * 100)})
         return self._retry("update_budget", _update)
 
-    # Back-compat wrapper (USD naming retained)
     def update_adset_budget_usd(
         self,
         adset_id: str,
@@ -2060,8 +1860,6 @@ class MetaClient:
             current_budget=current_budget_usd,
             human_confirm=human_confirm,
         )
-
-    # ------------- Ensure (campaign/adset) -------------
     def ensure_campaign(self, name: str, objective: str = "LINK_CLICKS", buying_type: str = "AUCTION") -> Dict[str, Any]:
         self._check_names(campaign=name)
         if self.dry_run or not USE_SDK:
@@ -2091,23 +1889,18 @@ class MetaClient:
         self,
         campaign_id: str,
         name: str,
-        daily_budget: float,  # in account currency (EUR)
+        daily_budget: float,
         *,
         optimization_goal: str = "OFFSITE_CONVERSIONS",
         billing_event: str = "IMPRESSIONS",
         bid_strategy: str = "LOWEST_COST_WITHOUT_CAP",
         targeting: Optional[Dict[str, Any]] = None,
         attribution_spec: Optional[List[Dict[str, Any]]] = None,
-        placements: Optional[List[str]] = None,   # ✅ NEW
+        placements: Optional[List[str]] = None,
         status: str = "PAUSED",
     ) -> Dict[str, Any]:
-        """
-        Creates (or returns existing) ad set. Set Instagram/Facebook placements via `placements`,
-        e.g. placements=["facebook","instagram"].
-        """
         self._check_names(adset=name)
         if self.dry_run or not USE_SDK:
-            # simulate targeting with placements applied
             targ = targeting or {"age_min": 18, "genders": [1], "geo_locations": {"countries": ["US"]}}
             if placements:
                 targ = dict(targ)
@@ -2166,15 +1959,14 @@ class MetaClient:
         except (TypeError, FacebookRequestError):
             return self._graph_post("adsets", params)
 
-    # ------------- Creatives & Ads -------------
     def create_image_creative(
         self,
         page_id: Optional[str],
         name: str,
         *,
         image_url: Optional[str] = None,
-        image_path: Optional[str] = None,  # Local file path - will use Supabase Storage
-        supabase_storage_url: Optional[str] = None,  # Supabase Storage URL (preferred)
+        image_path: Optional[str] = None,
+        supabase_storage_url: Optional[str] = None,
         primary_text: str,
         headline: str,
         description: str = "",
@@ -2183,12 +1975,8 @@ class MetaClient:
         utm_params: Optional[str] = None,
         instagram_actor_id: Optional[str] = None,
         use_env_instagram_actor: bool = True,
-        creative_id: Optional[str] = None,  # Creative ID for tracking
+        creative_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """
-        Creates a static image creative for Meta Ads.
-        Uses Supabase Storage URL if provided, otherwise falls back to local upload.
-        """
         self._check_names(ad=_s(name))
         bad = _contains_forbidden([primary_text, headline, description])
         if bad:
@@ -2198,15 +1986,12 @@ class MetaClient:
         if not pid:
             raise ValueError("Page ID is required (set FB_PAGE_ID or pass page_id).")
 
-        # Priority: supabase_storage_url > image_url > image_path
         final_image_url = _s(supabase_storage_url or image_url).strip()
         
         if not final_image_url and image_path:
-            # Try to get Supabase Storage URL for this creative
             if creative_id:
                 try:
-                    from infrastructure.creative_storage import create_creative_storage_manager
-                    from infrastructure.supabase_storage import get_validated_supabase_client
+                    from infrastructure.supabase_storage import get_validated_supabase_client, create_creative_storage_manager
                     
                     supabase_client = get_validated_supabase_client()
                     if supabase_client:
@@ -2215,10 +2000,8 @@ class MetaClient:
                             storage_url = storage_manager.get_creative_url(creative_id)
                             if storage_url:
                                 final_image_url = storage_url
-                                # Update usage
                                 storage_manager.update_usage(creative_id)
                             else:
-                                # Upload if not in storage
                                 final_image_url = storage_manager.upload_creative(
                                     creative_id=creative_id,
                                     image_path=image_path,
@@ -2227,7 +2010,6 @@ class MetaClient:
                     import logging
                     logging.getLogger(__name__).warning(f"Failed to get/create Supabase Storage URL: {e}")
             
-            # Fallback: upload to Meta's ad image library (legacy)
             if not final_image_url:
                 try:
                     uploaded_image = self._upload_ad_image(image_path, name)
@@ -2249,13 +2031,10 @@ class MetaClient:
             ig_id = os.getenv("IG_ACTOR_ID") or None
         else:
             ig_id = None
-        # Only use instagram_actor_id if it's a valid non-empty string
-        # CRITICAL: If the ID is invalid (causes API errors), don't use it
         if ig_id:
             ig_id = str(ig_id).strip()
             if not ig_id:
                 ig_id = None
-            # Validate it's a numeric string (Instagram IDs are numeric)
             elif not ig_id.isdigit():
                 logger.warning(f"Invalid Instagram actor ID format (not numeric): {ig_id} - skipping")
                 ig_id = None
@@ -2278,41 +2057,31 @@ class MetaClient:
         self._cooldown()
 
         image_data: Dict[str, Any] = {
-            "message": _s(primary_text),  # Primary text (main ad copy)
-            "link": _s(final_link) if final_link else os.getenv("SHOPIFY_STORE_URL", "https://brava-skin.com"),  # REQUIRED: link field
+            "message": _s(primary_text),
+            "link": _s(final_link) if final_link else os.getenv("SHOPIFY_STORE_URL", "https://brava-skin.com"),
         }
         
-        # CRITICAL: Meta API doesn't accept image_url in link_data for single image creatives
-        # We must upload the image to Meta's Ad Image library first and use image_hash
         if final_image_url.startswith("http"):
-            # Upload image to Meta's Ad Image library
             try:
                 import requests
                 import tempfile
                 
                 logger.info(f"Uploading image to Meta Ad Image library: {final_image_url}")
                 
-                # Download image from URL
                 img_response = requests.get(final_image_url, timeout=30)
                 img_response.raise_for_status()
                 
-                # Create temp file
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
                     tmp_path = tmp_file.name
                     tmp_file.write(img_response.content)
                 
                 try:
-                    # Upload to Meta
-                    # Get API version from account or default to v23.0
                     api_version = getattr(self.account, 'api_version', 'v23.0') if hasattr(self, 'account') else 'v23.0'
-                    # Remove 'v' prefix if present
                     api_version = api_version.replace('v', '') if api_version.startswith('v') else api_version
                     upload_url = f"https://graph.facebook.com/v{api_version}/act_{self.ad_account_id_act.replace('act_', '')}/adimages"
                     files = {"source": open(tmp_path, "rb")}
-                    # Get access token from account
                     access_token = getattr(self.account, 'access_token', None) if hasattr(self, 'account') else None
                     if not access_token:
-                        # Fallback: try to get from environment or config
                         access_token = os.getenv("FB_ACCESS_TOKEN") or os.getenv("FACEBOOK_ACCESS_TOKEN")
                     if not access_token:
                         raise RuntimeError("No access token available for image upload")
@@ -2329,9 +2098,7 @@ class MetaClient:
                     result = upload_response.json()
                     images = result.get("images", {})
                     if images:
-                        # Get first hash - the key is the hash
                         image_hash = list(images.keys())[0]
-                        # Also verify the hash value inside
                         hash_data = images[image_hash]
                         actual_hash = hash_data.get("hash", image_hash)
                         logger.info(f"✅ Uploaded image to Meta, hash: {actual_hash}")
@@ -2339,26 +2106,20 @@ class MetaClient:
                     else:
                         raise ValueError(f"No image hash in upload response: {result}")
                 finally:
-                    # Clean up temp file
                     if os.path.exists(tmp_path):
                         os.unlink(tmp_path)
             except Exception as e:
                 logger.error(f"Failed to upload image to Meta: {e}, falling back to image_url (may fail)")
-                # Fallback to image_url (will likely fail, but try anyway)
                 image_data["image_url"] = _s(final_image_url)
         else:
-            # Already a hash
             image_data["image_hash"] = _s(final_image_url)
         
-        # Headline goes in "name" field for single image creatives
         if headline:
             image_data["name"] = _s(headline)[:100]
         
-        # Description (optional)
         if description:
             image_data["description"] = _s(description)[:150]
         
-        # "Shop now" CTA
         if final_link:
             image_data["call_to_action"] = {"type": _s(call_to_action or "SHOP_NOW"), "value": {"link": _s(final_link)}}
 
@@ -2371,7 +2132,6 @@ class MetaClient:
             "object_story_spec": story_spec,
         }
 
-        # HTTP-first; SDK fallback
         try:
             creative = self._graph_post("adcreatives", params)
         except Exception:
@@ -2382,10 +2142,6 @@ class MetaClient:
         return creative
 
     def _upload_ad_image(self, image_path: str, name: str) -> Dict[str, Any]:
-        """
-        Upload an image to Meta's Ad Image library.
-        Returns the uploaded image hash or URL.
-        """
         if self.dry_run or not USE_SDK:
             return {"hash": f"MOCK_{abs(hash(image_path)) % 10_000_000}", "mock": True}
 
@@ -2393,11 +2149,9 @@ class MetaClient:
         self._cooldown()
 
         try:
-            # Read image file
             with open(image_path, "rb") as f:
                 image_data = f.read()
 
-            # Upload using AdAccount.create_ad_image
             def _upload():
                 return AdAccount(self.ad_account_id_act).create_ad_image(
                     files={"file": image_data},
@@ -2419,28 +2173,25 @@ class MetaClient:
         status: str = "PAUSED", 
         *, 
         original_ad_id: Optional[str] = None,
-        instagram_actor_id: Optional[str] = None,  # Instagram account at ad level (alternative approach)
-        tracking_specs: Optional[List[Dict[str, Any]]] = None,  # For shop destination/conversion tracking
+        instagram_actor_id: Optional[str] = None,
+        tracking_specs: Optional[List[Dict[str, Any]]] = None,
         use_env_instagram_actor: bool = True,
     ) -> Dict[str, Any]:
         self._check_names(ad=_s(name))
 
-        # Validate required fields before creating payload
         if not adset_id or not creative_id:
             raise ValueError(f"Missing required fields: adset_id={bool(adset_id)}, creative_id={bool(creative_id)}")
         
-        # Validate creative_id format (should be numeric string)
         if not str(creative_id).strip().isdigit():
             logger.warning(f"Invalid creative_id format: {creative_id} (expected numeric string)")
         
         payload = {
             "name": _s(name),
             "adset_id": _s(adset_id),
-            "creative": {"creative_id": str(creative_id).strip()},  # Ensure string format
+            "creative": {"creative_id": str(creative_id).strip()},
             "status": _s(status),
         }
         
-        # Add Instagram actor ID at ad level (alternative approach if creative level doesn't work)
         if instagram_actor_id is not None:
             ig_id = instagram_actor_id
         elif use_env_instagram_actor:
@@ -2449,35 +2200,25 @@ class MetaClient:
             ig_id = None
         if ig_id:
             ig_id = str(ig_id).strip()
-            if ig_id and ig_id.isdigit() and ig_id != "17841477094913251":  # Valid Instagram ID
+            if ig_id and ig_id.isdigit() and ig_id != "17841477094913251":
                 payload["instagram_actor_id"] = ig_id
                 logger.info(f"Adding Instagram actor ID at ad level: {ig_id}")
             else:
                 logger.warning(f"Invalid Instagram actor ID format: {ig_id} - skipping")
         
-        # Note: For Advantage+ Shopping Campaigns, tracking is handled at ad set/campaign level
-        # Do NOT add tracking_specs at ad level - it causes 500 errors
-        # Pixel tracking is configured at ad set level via attribution_spec
-        # Shop destination is controlled by catalog_id and conversion_location at ad set level
-        # Only add tracking_specs if explicitly provided and not for ASC+ campaigns
         if tracking_specs:
-            # Only add if not an ASC+ campaign (ASC+ handles tracking differently)
             payload["tracking_specs"] = tracking_specs
             logger.info(f"Adding tracking specs for shop destination: {tracking_specs}")
-        # Removed automatic tracking_specs addition - causes 500 errors for ASC+ campaigns
 
         if self.dry_run or not self.cfg.enable_creative_uploads:
-            # Use original_ad_id if provided for ID continuity, otherwise generate new ID
             ad_id = original_ad_id if original_ad_id else f"AD_{abs(hash(_s(name))) % 10_000_000}"
             return {"id": ad_id, "name": _s(name), "mock": True, "status": status, **payload}
 
         self._cooldown()
         try:
-            # Try graph API first
             result = self._graph_post("ads", payload)
             return result
         except RuntimeError as e:
-            # If graph API fails with 500, try SDK as fallback
             error_str = str(e)
             if "500" in error_str or "unknown error" in error_str.lower():
                 logger.warning(f"Graph API returned 500 error, trying SDK fallback: {e}")
@@ -2493,10 +2234,8 @@ class MetaClient:
                 else:
                     raise
             else:
-                # Re-raise non-500 errors
                 raise
         except Exception as e:
-            # For other exceptions, try SDK if available
             if not USE_SDK:
                 raise
             logger.warning(f"Graph API failed, trying SDK fallback: {e}")
@@ -2505,7 +2244,6 @@ class MetaClient:
                 return AdAccount(self.ad_account_id_act).create_ad(fields=[], params=_sanitize(payload))
             return dict(self._retry("create_ad", _create_sdk))
 
-    # ------------- Convenience (budgets in EUR now) -------------
     def create_validation_adset(self, campaign_id: str, creative_label: str, daily_budget: float = 40.0, *, placements: Optional[List[str]] = None) -> Dict[str, Any]:
         return self.ensure_adset(_s(campaign_id), f"[ASC+] {_s(creative_label)}", daily_budget, placements=placements)
 
@@ -2513,10 +2251,6 @@ class MetaClient:
         return self.ensure_adset(_s(campaign_id), f"[ASC+] {_s(creative_label)}", daily_budget, placements=placements)
 
     def check_account_health(self) -> Dict[str, Any]:
-        """
-        Comprehensive ad account health check including account restrictions.
-        Returns detailed health information for monitoring and alerting.
-        """
         if self.dry_run or not USE_SDK:
             return {"ok": True, "dry_run": True, "health_details": {}}
         
@@ -2525,7 +2259,6 @@ class MetaClient:
         warnings = []
         
         try:
-            # Get comprehensive account information
             def _get_account_info():
                 return AdAccount(self.ad_account_id_act).api_get(fields=[
                     "account_id", "currency", "timezone_name", "account_status", 
@@ -2536,21 +2269,19 @@ class MetaClient:
             account_info = self._retry("account_health", _get_account_info)
             health_details["account_info"] = account_info
             
-            # Check account status
             account_status = str(account_info.get("account_status", ""))
-            if account_status not in ("1", "2"):  # 1=Active, 2=Active (Limited)
+            if account_status not in ("1", "2"):
                 critical_issues.append(f"Account status is {account_status} (not active)")
                 health_details["account_status"] = "inactive"
             else:
                 health_details["account_status"] = "active"
             
-            # Check account balance and spending limits
             balance = account_info.get("balance")
             spend_cap = account_info.get("spend_cap")
             amount_spent = account_info.get("amount_spent")
             
             if balance is not None:
-                health_details["balance"] = float(balance) / 100.0  # Convert from cents
+                health_details["balance"] = float(balance) / 100.0
                 if float(balance) <= 0:
                     warnings.append("Account balance is zero or negative")
             
@@ -2560,10 +2291,9 @@ class MetaClient:
                 if amount_spent is not None:
                     spent_amount = float(amount_spent) / 100.0
                     health_details["amount_spent"] = spent_amount
-                    if spend_cap_float > 0 and spent_amount >= spend_cap_float * 0.9:  # 90% of spend cap
+                    if spend_cap_float > 0 and spent_amount >= spend_cap_float * 0.9:
                         warnings.append(f"Account has spent {spent_amount:.2f} of {spend_cap_float:.2f} spend cap")
             
-            # Check for business verification issues
             business_name = account_info.get("business_name")
             business_country = account_info.get("business_country_code")
             business_zip = account_info.get("business_zip")
@@ -2585,7 +2315,6 @@ class MetaClient:
             critical_issues.append(f"Account health check failed: {str(e)}")
             health_details["error"] = str(e)
         
-        # Determine overall health status
         if critical_issues:
             health_details["overall_status"] = "critical"
         elif warnings:
@@ -2604,9 +2333,6 @@ class MetaClient:
         }
     
     def get_rate_limit_status(self) -> Dict[str, Any]:
-        """
-        Get comprehensive rate limiting status information.
-        """
         return self.rate_limit_manager.get_status()
 
 

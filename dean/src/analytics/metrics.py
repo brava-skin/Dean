@@ -5,12 +5,10 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import math
 import os
 
-# -------------------- Configuration --------------------
-
 @dataclass(frozen=True)
 class MetricsConfig:
-    action_aliases: Mapping[str, Tuple[str, ...]] = None  # type: ignore[assignment]
-    value_aliases: Mapping[str, Tuple[str, ...]] = None  # type: ignore[assignment]
+    action_aliases: Mapping[str, Tuple[str, ...]] = None
+    value_aliases: Mapping[str, Tuple[str, ...]] = None
     window_keys: Tuple[str, ...] = ("actions", "conversions")
     value_keys: Tuple[str, ...] = ("action_values",)
     purchase_roas_index: int = 0
@@ -20,11 +18,8 @@ class MetricsConfig:
     beta_prior_cvr: Tuple[float, float] = (1.0, 50.0)
     beta_prior_atc_rate: Tuple[float, float] = (1.0, 50.0)
     ci_z: float = 1.96
-
-    # Currency defaults (EUR account, Meta returns all values in EUR)
     account_currency: str = (os.getenv("ACCOUNT_CURRENCY") or "EUR").upper()
     product_currency: str = (os.getenv("PRODUCT_CURRENCY") or "EUR").upper()
-    # Note: Currency conversion removed - Meta returns everything in EUR
 
     def __post_init__(self) -> None:
         if self.action_aliases is None:
@@ -64,8 +59,6 @@ class MetricsConfig:
         if self.purchase_roas_index < 0:
             raise ValueError("purchase_roas_index must be >= 0")
 
-
-# -------------------- Types & math helpers --------------------
 
 Number = Union[int, float]
 
@@ -130,7 +123,6 @@ def _wilson_ci(successes: float, trials: float, z: float) -> Tuple[Optional[floa
     p = successes / trials
     denom = 1 + z * z / trials
     centre = p + z * z / (2 * trials)
-    # Ensure the value under sqrt is non-negative to avoid math domain error
     sqrt_arg = (p * (1 - p) + z * z / (4 * trials)) / trials
     adj = z * math.sqrt(max(0.0, sqrt_arg))
     lo = (centre - adj) / denom
@@ -138,20 +130,9 @@ def _wilson_ci(successes: float, trials: float, z: float) -> Tuple[Optional[floa
     return (max(0.0, lo), min(1.0, hi))
 
 
-# -------------------- Currency helpers --------------------
-
 def tripwire_threshold_account(product_price: float, multiple: float = 2.0, cfg: Optional[MetricsConfig] = None) -> float:
-    """
-    For rules like: 'Instant tripwire: spend ≥ 2× product price & 0 purchases'
-    Returns threshold in account currency (EUR).
-    
-    Note: Meta returns all values in EUR, so no conversion needed.
-    Product price should be set in EUR to match Meta's currency.
-    """
     return product_price * multiple
 
-
-# -------------------- Data models --------------------
 
 @dataclass
 class Metrics:
@@ -165,13 +146,10 @@ class Metrics:
     add_to_cart: float = 0.0
     initiate_checkout: float = 0.0
     revenue: float = 0.0
-    # Video metrics removed - not applicable for static image creatives
-
     ctr: Optional[float] = None
     ctr_wilson_lo: Optional[float] = None
     ctr_wilson_hi: Optional[float] = None
     ctr_smoothed: Optional[float] = None
-
     unique_ctr: Optional[float] = None
     cpc: Optional[float] = None
     cpm: Optional[float] = None
@@ -179,17 +157,13 @@ class Metrics:
     cvr_wilson_lo: Optional[float] = None
     cvr_wilson_hi: Optional[float] = None
     cvr_smoothed: Optional[float] = None
-
     atc_rate: Optional[float] = None
     atc_rate_wilson_lo: Optional[float] = None
     atc_rate_wilson_hi: Optional[float] = None
     atc_rate_smoothed: Optional[float] = None
-
     aov: Optional[float] = None
     cpa: Optional[float] = None
     roas: Optional[float] = None
-    # thumbstop_rate removed - not applicable for static image creatives
-
     profit: Optional[float] = None
     poas: Optional[float] = None
 
@@ -205,8 +179,6 @@ class Diagnostics:
     anomalies: Tuple[str, ...] = ()
 
 
-# -------------------- Row → Metrics --------------------
-
 def metrics_from_row(
     row: Dict[str, Any],
     cfg: Optional[MetricsConfig] = None,
@@ -216,7 +188,6 @@ def metrics_from_row(
     compute_diagnostics: bool = False,
 ) -> Union[Metrics, Tuple[Metrics, Diagnostics]]:
     cfg = cfg or MetricsConfig()
-    eps = cfg.smoothing_epsilon if smoothing_epsilon is None else smoothing_epsilon
 
     spend = _to_float(row.get("spend"))
     imps = _to_float(row.get("impressions"))
@@ -249,24 +220,18 @@ def metrics_from_row(
                 used_val.setdefault("purchase", c)
                 break
 
-    # Video metrics removed - not applicable for static image creatives
-    # three_sec_views, video_3_sec_views, video_play_actions are not available for static images
-
-    denom_imps = imps if imps > 0 else None
-    denom_clicks = clicks if clicks > 0 else None
-    
     ctr = _safe_div(clicks, imps, None) if clicks >= 0 else None
     ctr_lo, ctr_hi = _wilson_ci(clicks, imps, cfg.ci_z)
     ctr_sm = _beta_smooth(clicks, imps, *cfg.beta_prior_ctr)
 
     unique_ctr = _safe_div((uniq_clicks or 0.0), (reach or 0.0), None) if (uniq_clicks is not None and reach) else None
-    cpc = _safe_div(spend, denom_clicks, None)
+    cpc = _safe_div(spend, clicks, None) if clicks > 0 else None
     cpm = _safe_div(spend * 1000.0, imps, None)
-    cvr = _safe_div(purchases, denom_clicks, None)
+    cvr = _safe_div(purchases, clicks, None) if clicks > 0 else None
     cvr_lo, cvr_hi = _wilson_ci(purchases, clicks, cfg.ci_z) if clicks > 0 else (None, None)
     cvr_sm = _beta_smooth(purchases, clicks, *cfg.beta_prior_cvr)
 
-    atc_rate = _safe_div(atc, denom_clicks, None)
+    atc_rate = _safe_div(atc, clicks, None) if clicks > 0 else None
     atc_lo, atc_hi = _wilson_ci(atc, clicks, cfg.ci_z) if clicks > 0 else (None, None)
     atc_sm = _beta_smooth(atc, clicks, *cfg.beta_prior_atc_rate)
 
@@ -286,8 +251,6 @@ def metrics_from_row(
             if roas_field > 0:
                 roas = roas_field
 
-    # thumbstop_rate removed - not applicable for static image creatives
-
     profit = poas = None
     if cogs_per_purchase is not None:
         profit = revenue - (cogs_per_purchase * purchases) - spend
@@ -303,7 +266,6 @@ def metrics_from_row(
         purchases=purchases,
         add_to_cart=atc,
         revenue=revenue,
-        # three_sec_views removed - not applicable for static images
         ctr=ctr,
         ctr_wilson_lo=ctr_lo,
         ctr_wilson_hi=ctr_hi,
@@ -322,7 +284,6 @@ def metrics_from_row(
         aov=aov,
         cpa=cpa,
         roas=roas,
-        # thumbstop_rate removed - not applicable for static images
         profit=profit,
         poas=poas,
     )
@@ -348,8 +309,6 @@ def metrics_from_row(
     return m, d
 
 
-# -------------------- Aggregations --------------------
-
 def aggregate_rows(
     rows: Iterable[Dict[str, Any]],
     cfg: Optional[MetricsConfig] = None,
@@ -361,13 +320,13 @@ def aggregate_rows(
     eps = cfg.smoothing_epsilon if smoothing_epsilon is None else smoothing_epsilon
 
     spend = imps = clicks = purchases = atc = revenue = 0.0
-    uniq_clicks_sum = reach_sum = three_sec_sum = 0.0
+    uniq_clicks_sum = reach_sum = 0.0
     ctr_clicks_sum = ctr_imps_sum = 0.0
     cvr_purch_sum = cvr_clicks_sum = 0.0
     atc_sum = atc_clicks_sum = 0.0
 
     for r in rows:
-        m = metrics_from_row(r, cfg, cogs_per_purchase=None, smoothing_epsilon=eps)  # type: ignore[assignment]
+        m = metrics_from_row(r, cfg, cogs_per_purchase=None, smoothing_epsilon=eps)
         spend += m.spend
         imps += m.impressions
         clicks += m.clicks
@@ -376,7 +335,6 @@ def aggregate_rows(
         revenue += m.revenue
         uniq_clicks_sum += (m.unique_clicks or 0.0)
         reach_sum += (m.reach or 0.0)
-        # three_sec_sum removed - video metrics not applicable for static images
         ctr_clicks_sum += m.clicks
         ctr_imps_sum += m.impressions
         cvr_purch_sum += m.purchases
@@ -384,15 +342,12 @@ def aggregate_rows(
         atc_sum += m.add_to_cart
         atc_clicks_sum += m.clicks
 
-    denom_imps = imps if imps > 0 else None
-    denom_clicks = clicks if clicks > 0 else None
-
     ctr = _safe_div(clicks, imps, None) if clicks >= 0 else None
     ctr_lo, ctr_hi = _wilson_ci(ctr_clicks_sum, ctr_imps_sum, cfg.ci_z)
     ctr_sm = _beta_smooth(ctr_clicks_sum, ctr_imps_sum, *cfg.beta_prior_ctr)
 
     unique_ctr = _safe_div(uniq_clicks_sum, reach_sum, None) if reach_sum > 0 else None
-    cpc = _safe_div(spend, denom_clicks, None)
+    cpc = _safe_div(spend, clicks, None) if clicks > 0 else None
     cpm = _safe_div(spend * 1000.0, imps, None)
     cvr = _safe_div(cvr_purch_sum, cvr_clicks_sum if cvr_clicks_sum > 0 else None, None)
     cvr_lo, cvr_hi = _wilson_ci(cvr_purch_sum, cvr_clicks_sum, cfg.ci_z) if cvr_clicks_sum > 0 else (None, None)
@@ -405,7 +360,6 @@ def aggregate_rows(
     aov = _safe_div(revenue, purchases, None) if purchases > 0 else None
     cpa = _safe_div(spend, purchases, None) if purchases > 0 else None
     roas = _safe_div(revenue, spend, None) if spend > 0 else None
-    # thumb/thumbstop_rate removed - video metrics not applicable for static images
 
     profit = poas = None
     if cogs_per_purchase is not None:
@@ -422,7 +376,6 @@ def aggregate_rows(
         purchases=purchases,
         add_to_cart=atc,
         revenue=revenue,
-        # three_sec_views removed - not applicable for static images
         ctr=ctr,
         ctr_wilson_lo=ctr_lo,
         ctr_wilson_hi=ctr_hi,
@@ -441,7 +394,6 @@ def aggregate_rows(
         aov=aov,
         cpa=cpa,
         roas=roas,
-        # thumbstop_rate removed - not applicable for static images
         profit=profit,
         poas=poas,
     )

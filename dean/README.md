@@ -105,11 +105,9 @@ dean/
 │   └── analytics/         # Analytics
 │       └── metrics.py     # Metrics collection
 ├── config/                # Configuration files
-│   ├── production.yaml
 │   ├── rules.yaml
 │   └── settings.yaml
 ├── data/                  # Runtime data
-├── scripts/               # Utility scripts
 ├── requirements.txt       # Dependencies
 ├── setup.py               # Package setup
 ├── pyproject.toml          # Modern Python config
@@ -211,7 +209,6 @@ make clean
 
 Configuration is managed through YAML files in `config/`:
 
-- `production.yaml` - Production settings
 - `rules.yaml` - Business rules and thresholds
 - `settings.yaml` - General settings
 

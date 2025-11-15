@@ -1,8 +1,3 @@
-"""
-Caching Infrastructure
-Redis and in-memory caching for performance
-"""
-
 from __future__ import annotations
 
 import logging
@@ -17,7 +12,6 @@ T = TypeVar('T')
 
 logger = logging.getLogger(__name__)
 
-# Try to import Redis
 try:
     import redis
     REDIS_AVAILABLE = True
@@ -27,15 +21,12 @@ except ImportError:
 
 
 class InMemoryCache:
-    """Simple in-memory cache."""
-    
     def __init__(self, max_size: int = 1000, ttl_seconds: int = 3600):
         self.cache: Dict[str, tuple[Any, datetime]] = {}
         self.max_size = max_size
         self.ttl_seconds = ttl_seconds
     
     def get(self, key: str) -> Optional[Any]:
-        """Get value from cache."""
         if key not in self.cache:
             return None
         
@@ -48,29 +39,21 @@ class InMemoryCache:
         return value
     
     def set(self, key: str, value: Any, ttl_seconds: Optional[int] = None):
-        """Set value in cache."""
         ttl = ttl_seconds or self.ttl_seconds
         expiry = datetime.now() + timedelta(seconds=ttl)
-        
-        # Evict if cache is full
         if len(self.cache) >= self.max_size:
-            # Remove oldest entry
             oldest_key = min(self.cache.keys(), key=lambda k: self.cache[k][1])
             del self.cache[oldest_key]
-        
         self.cache[key] = (value, expiry)
     
     def delete(self, key: str):
-        """Delete key from cache."""
         if key in self.cache:
             del self.cache[key]
     
     def clear(self):
-        """Clear all cache."""
         self.cache.clear()
     
     def cleanup_expired(self):
-        """Remove expired entries."""
         now = datetime.now()
         expired_keys = [
             k for k, (_, expiry) in self.cache.items()
@@ -81,8 +64,6 @@ class InMemoryCache:
 
 
 class RedisCache:
-    """Redis-based cache."""
-    
     def __init__(self, redis_client=None, default_ttl: int = 3600):
         if not REDIS_AVAILABLE:
             raise ImportError("Redis not available")
@@ -91,22 +72,18 @@ class RedisCache:
             host='localhost',
             port=6379,
             db=0,
-            decode_responses=False,  # We'll handle encoding
-            socket_connect_timeout=2,  # Fast timeout for connection check
+            decode_responses=False,
+            socket_connect_timeout=2,
             socket_timeout=2,
         )
         self.default_ttl = default_ttl
-        
-        # Test connection immediately
         try:
             self.client.ping()
         except Exception:
-            # Connection failed, mark as unavailable
             self.client = None
             raise ConnectionError("Redis connection failed")
     
     def get(self, key: str) -> Optional[Any]:
-        """Get value from Redis."""
         if self.client is None:
             return None
         try:
@@ -122,11 +99,9 @@ class RedisCache:
             return None
     
     def set(self, key: str, value: Any, ttl_seconds: Optional[int] = None):
-        """Set value in Redis."""
         if self.client is None:
             return
         try:
-            # Convert non-picklable types to picklable ones
             value = self._make_picklable(value)
             data = pickle.dumps(value)
             ttl = ttl_seconds or self.default_ttl
@@ -137,11 +112,8 @@ class RedisCache:
             logger.debug(f"Redis set error: {e}")
     
     def _make_picklable(self, value: Any) -> Any:
-        """Convert non-picklable objects to picklable ones."""
-        # Handle dict_values, dict_keys, and other non-picklable types
         if isinstance(value, (dict.values, dict.keys, dict.items)):
             return list(value)
-        # Check for dict_values and dict_keys types by comparing type
         value_type = type(value)
         if value_type in (type({}.values()), type({}.keys()), type({}.items())):
             return list(value)
@@ -154,14 +126,12 @@ class RedisCache:
         return value
     
     def delete(self, key: str):
-        """Delete key from Redis."""
         try:
             self.client.delete(key)
         except Exception as e:
             logger.error(f"Redis delete error: {e}")
     
     def clear_pattern(self, pattern: str):
-        """Clear all keys matching pattern."""
         if self.client is None:
             return
         try:
@@ -175,8 +145,6 @@ class RedisCache:
 
 
 class CacheManager:
-    """Unified cache manager."""
-    
     def __init__(self, use_redis: bool = True):
         self.redis_cache = None
         self.memory_cache = InMemoryCache()
@@ -193,16 +161,11 @@ class CacheManager:
                 self.redis_cache = None
     
     def get(self, key: str, namespace: str = "default") -> Optional[Any]:
-        """Get value from cache (tries Redis first, then memory)."""
         full_key = f"{namespace}:{key}"
-        
-        # Try Redis first
         if self.redis_cache:
             value = self.redis_cache.get(full_key)
             if value is not None:
                 return value
-        
-        # Fallback to memory
         return self.memory_cache.get(full_key)
     
     def set(
@@ -212,34 +175,23 @@ class CacheManager:
         ttl_seconds: Optional[int] = None,
         namespace: str = "default",
     ):
-        """Set value in cache (both Redis and memory)."""
         full_key = f"{namespace}:{key}"
-        
-        # Set in Redis
         if self.redis_cache:
             try:
                 self.redis_cache.set(full_key, value, ttl_seconds)
             except Exception:
-                pass  # Fallback to memory only
-        
-        # Always set in memory as backup
+                pass
         self.memory_cache.set(full_key, value, ttl_seconds)
     
     def delete(self, key: str, namespace: str = "default"):
-        """Delete key from cache."""
         full_key = f"{namespace}:{key}"
-        
         if self.redis_cache:
             self.redis_cache.delete(full_key)
-        
         self.memory_cache.delete(full_key)
     
     def clear_namespace(self, namespace: str):
-        """Clear all keys in a namespace."""
         if self.redis_cache:
             self.redis_cache.clear_pattern(f"{namespace}:*")
-        
-        # Clear from memory cache
         keys_to_delete = [
             k for k in self.memory_cache.cache.keys()
             if k.startswith(f"{namespace}:")
@@ -248,7 +200,6 @@ class CacheManager:
             self.memory_cache.delete(key)
 
 
-# Global cache manager
 cache_manager = CacheManager()
 
 
@@ -257,15 +208,12 @@ def cached(
     namespace: str = "default",
     key_func: Optional[Callable] = None,
 ):
-    """Decorator for caching function results."""
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @functools.wraps(func)
         def wrapper(*args, **kwargs) -> T:
-            # Generate cache key
             if key_func:
                 cache_key = key_func(*args, **kwargs)
             else:
-                # Default key generation
                 key_data = {
                     "func": func.__name__,
                     "args": str(args),
@@ -274,32 +222,19 @@ def cached(
                 cache_key = hashlib.md5(
                     json.dumps(key_data, sort_keys=True).encode()
                 ).hexdigest()
-            
-            # Try cache
             cached_value = cache_manager.get(cache_key, namespace)
             if cached_value is not None:
                 logger.debug(f"Cache hit for {func.__name__}")
                 return cached_value
-            
-            # Execute function
             result = func(*args, **kwargs)
-            
-            # Store in cache
             cache_manager.set(cache_key, result, ttl_seconds, namespace)
-            
             return result
-        
         return wrapper
     return decorator
 
 
 def invalidate_cache(pattern: str, namespace: str = "default"):
-    """Invalidate cache entries matching pattern."""
     cache_manager.clear_namespace(namespace)
-
-
-# Global cache manager
-cache_manager = CacheManager()
 
 
 __all__ = [

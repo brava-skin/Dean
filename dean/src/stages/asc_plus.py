@@ -1,18 +1,12 @@
-"""
-ASC+ Campaign Stage Handler
-Manages a single Advantage+ Shopping Campaign with 5 creatives
-"""
-
 from __future__ import annotations
 
 import logging
 import os
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Iterable, Set
 import math
 
-import pandas as pd
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -21,20 +15,18 @@ logger = logging.getLogger(__name__)
 def _asc_log(level: int, message: str, *args: Any) -> None:
     logger.log(level, f"[ASC] {message}", *args)
 
-from integrations.slack import notify, alert_kill, alert_error
+from integrations.slack import notify, alert_error
 from integrations import fmt_eur, fmt_int, fmt_pct
 from integrations.meta_client import MetaClient
 from infrastructure.utils import (
-    getenv_f, getenv_i, getenv_b, cfg, cfg_or_env_f, cfg_or_env_i, cfg_or_env_b, cfg_or_env_list,
-    safe_f, today_str, daily_key, ad_day_flag_key, now_minute_key, clean_text_token, prettify_ad_name, Timekit
+    cfg, cfg_or_env_f,
+    safe_f, today_str, Timekit
 )
 from creative.image_generator import create_image_generator, ImageCreativeGenerator
 from config import (
     ASC_PLUS_BUDGET_MIN,
     ASC_PLUS_BUDGET_MAX,
     ASC_PLUS_MIN_BUDGET_PER_CREATIVE,
-    MAX_STAGE_DURATION_HOURS,
-    DB_NUMERIC_MAX,
     CREATIVE_PERFORMANCE_STAGE_VALUE,
     validate_asc_plus_config
 )
@@ -44,16 +36,6 @@ from infrastructure.data_validation import (
     ValidationError,
     validate_and_sanitize_data,
 )
-
-# Import advanced ML systems
-try:
-    from ml.advanced_system import create_advanced_ml_system
-    ADVANCED_ML_AVAILABLE = True
-except ImportError:
-    ADVANCED_ML_AVAILABLE = False
-    logger.debug("Advanced ML system not available (expected - ML system removed)")
-
-# Optimization systems removed - no longer used
 
 UTC = timezone.utc
 LOCAL_TZ = ZoneInfo(os.getenv("ACCOUNT_TZ", os.getenv("ACCOUNT_TIMEZONE", "Europe/Amsterdam")))
@@ -65,7 +47,6 @@ _CREATIVE_PERFORMANCE_STAGE_DISABLED = False
 
 
 def _roas(row: Dict[str, Any]) -> float:
-    """Extract ROAS from purchase_roas array."""
     roas_list = row.get("purchase_roas") or []
     try:
         if roas_list:
@@ -85,16 +66,13 @@ def _purchase_and_atc_counts(row: Dict[str, Any]) -> Tuple[int, int]:
         if t == "purchase":
             purch += int(v)
         elif t == "omni_add_to_cart":
-            # All ATCs across destinations (Meta Shop + website) - preferred for ASC+
             atc += int(v)
         elif t == "add_to_cart":
-            # Website-only ATCs (fallback if omni_add_to_cart not available)
             atc += int(v)
     return purch, atc
 
 
 def _fraction_or_none(value: Any, *, allow_percent: bool = True) -> Optional[float]:
-    """Convert Meta metric to a fraction within [0, 1], tolerating percentage inputs."""
     if value in (None, "", float("inf"), float("-inf")):
         return None
     if isinstance(value, str):
@@ -121,7 +99,6 @@ def _fraction_or_none(value: Any, *, allow_percent: bool = True) -> Optional[flo
 
 
 def _float_or_none(value: Any) -> Optional[float]:
-    """Convert value to float unless it's empty/invalid, mirroring Supabase sanitize logic."""
     if value in (None, "", float("inf"), float("-inf")):
         return None
     if isinstance(value, str):
@@ -153,7 +130,6 @@ def _cpm(row: Dict[str, Any]) -> float:
 
 
 def _link_clicks(row: Dict[str, Any]) -> float:
-    """Prefer Meta inline/link clicks over generic click totals."""
     if isinstance(row, dict):
         if row.get("inline_link_clicks") is not None:
             return safe_f(row.get("inline_link_clicks"))
@@ -201,7 +177,6 @@ def _safe_float(value: Any, default: float = 0.0, precision: int = 4) -> float:
 
 
 def _clamp(value: Optional[float], minimum: float, maximum: float) -> Optional[float]:
-    """Clamp numeric values to a safe range, returning None when value is invalid."""
     if value is None:
         return None
     try:
@@ -214,7 +189,6 @@ def _clamp(value: Optional[float], minimum: float, maximum: float) -> Optional[f
 
 
 def _parse_created_time(value: Any) -> Optional[datetime]:
-    """Convert Meta created_time values to timezone-aware datetime."""
     if not value:
         return None
     if isinstance(value, datetime):
@@ -238,7 +212,6 @@ def _parse_created_time(value: Any) -> Optional[datetime]:
 
 
 def _normalize_lifecycle_status(raw_status: Optional[str]) -> str:
-    """Map Meta statuses to lifecycle table allowed values."""
     status_map = {
         "ACTIVE": "active",
         "PAUSED": "paused",
@@ -256,7 +229,6 @@ def _normalize_lifecycle_status(raw_status: Optional[str]) -> str:
 
 
 def _parse_metadata(metadata: Any) -> Dict[str, Any]:
-    """Ensure metadata is a dictionary."""
     if isinstance(metadata, dict):
         return dict(metadata)
     if isinstance(metadata, str):
@@ -270,7 +242,6 @@ def _parse_metadata(metadata: Any) -> Dict[str, Any]:
 
 
 def _calculate_creative_performance(metrics: Optional[Dict[str, Any]]) -> Dict[str, float]:
-    """Derive averaged performance metrics for a creative from current insights."""
     if not metrics:
         return {"avg_ctr": 0.0, "avg_cpa": 0.0, "avg_roas": 0.0}
 
@@ -288,7 +259,6 @@ def _calculate_creative_performance(metrics: Optional[Dict[str, Any]]) -> Dict[s
 
 
 def _calculate_performance_score(perf: Dict[str, float]) -> float:
-    """Heuristic performance score between 0-1."""
     ctr_fraction = perf.get("avg_ctr") or 0.0
     ctr_pct = ctr_fraction * 100.0
     cpa = perf.get("avg_cpa") or 0.0
@@ -308,7 +278,6 @@ def _calculate_performance_score(perf: Dict[str, float]) -> float:
 
 
 def _calculate_fatigue_index(perf: Dict[str, float]) -> float:
-    """Simple fatigue indicator (higher = more fatigued)."""
     ctr_pct = (perf.get("avg_ctr") or 0.0) * 100.0
     cpa = perf.get("avg_cpa") or 0.0
     roas = perf.get("avg_roas") or 0.0
@@ -324,7 +293,6 @@ def _calculate_fatigue_index(perf: Dict[str, float]) -> float:
 
 
 def _sync_ad_creation_records(client: MetaClient, ads: List[Dict[str, Any]], stage: str = "asc_plus") -> Dict[str, datetime]:
-    """Ensure every ad has an ad_creation_times record and return creation timestamps."""
     creation_map: Dict[str, datetime] = {}
     if not ads:
         return creation_map
@@ -344,7 +312,6 @@ def _sync_ad_creation_records(client: MetaClient, ads: List[Dict[str, Any]], sta
 
     existing_records: Dict[str, Dict[str, Any]] = {}
     try:
-        # Get from ads table instead of ad_creation_times
         response = supabase_client.table("ads").select(
             "ad_id, created_at, lifecycle_id"
         ).in_("ad_id", ad_ids).execute()
@@ -430,7 +397,6 @@ def _sync_ad_lifecycle_records(
     campaign_id: Optional[str] = None,
     adset_id: Optional[str] = None,
 ) -> None:
-    """Ensure lifecycle table captures complete state for each ad every tick."""
     if not ads:
         return
     try:
@@ -449,7 +415,6 @@ def _sync_ad_lifecycle_records(
 
     existing_records: Dict[str, Dict[str, Any]] = {}
     try:
-        # Get from ads table instead of ad_lifecycle
         response = (
             supabase_client.table("ads")
             .select(
@@ -506,7 +471,6 @@ def _sync_ad_lifecycle_records(
             or existing.get("status")
         )
         status = _normalize_lifecycle_status(raw_status)
-        # Map to new status values: active, paused, killed
         if status in ["ACTIVE", "PAUSED"]:
             status = status.lower()
         elif status in ["DELETED", "ARCHIVED", "DISAPPROVED"]:
@@ -533,12 +497,10 @@ def _sync_ad_lifecycle_records(
             or now
         )
 
-        # Determine kill_reason if status is killed
         kill_reason = existing.get("kill_reason")
         if status == "killed" and not kill_reason:
             metrics = metrics_map.get(ad_id)
             if metrics:
-                # Determine reason based on performance
                 if metrics.get("ctr", 0) < 0.008:
                     kill_reason = "low_ctr"
                 elif metrics.get("cpc", 0) > 1.90:
@@ -558,7 +520,6 @@ def _sync_ad_lifecycle_records(
         elif existing.get("killed_at"):
             killed_at = existing.get("killed_at")
 
-        # Build ads record (consolidated from ad_lifecycle)
         ads_record: Dict[str, Any] = {
             "ad_id": ad_id,
             "creative_id": creative_id,
@@ -592,7 +553,6 @@ def _collect_storage_metadata(
     if not ids:
         return {}
     try:
-        # Get from ads table instead of creative_storage
         response = (
             supabase_client.table("ads")
             .select("creative_id, file_size_bytes, storage_url, metadata")
@@ -630,7 +590,6 @@ def _sync_creative_intelligence_records(
         return {}
 
     try:
-        # Get from ads table instead of creative_intelligence
         existing_resp = (
             supabase_client.table("ads")
             .select("ad_id, creative_id, headline, primary_text, description, image_prompt, performance_score, fatigue_index, metadata")
@@ -644,7 +603,7 @@ def _sync_creative_intelligence_records(
 
     existing_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
     storage_ids: set[str] = set()
-    ads_needing_creative_content: List[str] = []  # Track ads missing creative content
+    ads_needing_creative_content: List[str] = []
     
     for row in existing_rows:
         creative_id = str(row.get("creative_id") or "")
@@ -657,11 +616,9 @@ def _sync_creative_intelligence_records(
                 storage_ids.add(storage_id)
             storage_ids.add(creative_id)
             
-            # Check if creative content is missing
             if not row.get("headline") and not row.get("primary_text"):
                 ads_needing_creative_content.append(ad_id)
 
-    # Include creative IDs from ads to fetch storage metadata
     for ad in ads:
         creative_id = ad.get("creative_id")
         if creative_id:
@@ -787,7 +744,6 @@ def _sync_creative_intelligence_records(
 
         record = validate_all_timestamps(record)
 
-        # Update ads table with creative intelligence fields
         ads_update: Dict[str, Any] = {
             "ad_id": ad_id,
             "creative_id": creative_id,
@@ -817,7 +773,6 @@ def _sync_creative_intelligence_records(
         return storage_map
 
     try:
-        # Upsert to ads table instead of creative_intelligence
         supabase_client.table("ads").upsert(
             sanitized_records,
             on_conflict="ad_id",
@@ -827,7 +782,6 @@ def _sync_creative_intelligence_records(
     except Exception as exc:
         logger.debug(f"Failed to upsert ads records: {exc}")
     
-    # Fetch creative content from Meta API for ads missing it
     if ads_needing_creative_content and client:
         _fetch_and_update_creative_content(client, supabase_client, ads_needing_creative_content)
 
@@ -839,7 +793,6 @@ def _fetch_and_update_creative_content(
     supabase_client: Any,
     ad_ids: List[str],
 ) -> None:
-    """Fetch creative content (headline, primary_text, description) from Meta API and update ads table."""
     if not ad_ids or not client or not supabase_client:
         return
     
@@ -861,24 +814,21 @@ def _fetch_and_update_creative_content(
         
         updates: List[Dict[str, Any]] = []
         
-        for ad_id in ad_ids[:20]:  # Limit to 20 per call to avoid rate limits
+        for ad_id in ad_ids[:20]:
             try:
-                # Fetch ad details including creative
                 ad_obj = Ad(ad_id)
                 ad_data = ad_obj.api_get(fields=["id", "creative", "name"])
                 
                 creative_id = ad_data.get("creative", {}).get("id") if isinstance(ad_data.get("creative"), dict) else None
                 if not creative_id:
-                    creative_id = ad_data.get("creative")  # Sometimes it's just the ID string
+                    creative_id = ad_data.get("creative")
                 
                 if not creative_id:
                     continue
                 
-                # Fetch creative details
                 creative_obj = AdCreative(str(creative_id))
                 creative_data = creative_obj.api_get(fields=["object_story_spec", "name"])
                 
-                # Extract creative content from object_story_spec
                 oss = creative_data.get("object_story_spec", {})
                 link_data = oss.get("link_data", {})
                 
@@ -886,7 +836,6 @@ def _fetch_and_update_creative_content(
                 primary_text = link_data.get("message", "")
                 description = link_data.get("description", "")
                 
-                # Only update if we found content
                 if headline or primary_text or description:
                     updates.append({
                         "ad_id": ad_id,
@@ -900,7 +849,6 @@ def _fetch_and_update_creative_content(
                 logger.debug(f"Failed to fetch creative content for ad {ad_id}: {e}")
                 continue
         
-        # Batch update ads table
         if updates:
             try:
                 supabase_client.table("ads").upsert(
@@ -976,7 +924,6 @@ def _sync_creative_storage_records(
             usage_count = 0
         usage_count = max(usage_count, 0) + 1
 
-        # Update ads table with storage info
         update_record = {
             "ad_id": ad_id,
             "creative_id": creative_id,
@@ -991,7 +938,6 @@ def _sync_creative_storage_records(
         return
 
     try:
-        # Upsert to ads table instead of creative_storage
         supabase_client.table("ads").upsert(
             updates,
             on_conflict="ad_id",
@@ -1050,12 +996,8 @@ def _sync_performance_metrics_records(
         atc_to_ic_rate = _fraction_or_none(initiate_checkout / add_to_cart, allow_percent=False) if add_to_cart > 0 else None
         ic_to_purchase_rate = _fraction_or_none(purchases / initiate_checkout, allow_percent=False) if initiate_checkout > 0 else None
 
-        # Note: age_days and stage_duration_hours removed from consolidated schema
-        # These were stage-specific fields that are no longer needed
-
         record = {
             "ad_id": ad_id,
-            # Note: lifecycle_id and stage removed from consolidated schema
             "window_type": "1d",
             "date_start": date_label,
             "date_end": date_label,
@@ -1070,13 +1012,8 @@ def _sync_performance_metrics_records(
             "cpm": cpm,
             "roas": roas,
             "cpa": cpa,
-            # Always include rate fields (None is valid when impressions=0 or no conversions)
             "atc_rate": atc_rate,
             "purchase_rate": purchase_rate,
-            # Note: dwell_time, frequency, ic_rate, atc_to_ic_rate, ic_to_purchase_rate, revenue
-            # removed from consolidated schema - not in performance_metrics table
-            # Note: performance_quality_score, fatigue_index, stability_score, momentum_score
-            # removed from consolidated schema - these are now in ads table only
         }
 
         upserts.append(record)
@@ -1085,7 +1022,6 @@ def _sync_performance_metrics_records(
         return
 
     try:
-        # Upsert with correct unique constraint (stage column removed from schema)
         supabase_client.table("performance_metrics").upsert(
             upserts,
             on_conflict="ad_id,window_type,date_start",
@@ -1401,7 +1337,7 @@ def _select_ads_for_cap(
         metrics = metrics_map.get(ad_id, {})
         score = _ad_health_score(metrics)
         candidates.append((score, ad_id, metrics))
-    candidates.sort(key=lambda x: x[0])  # lowest score first
+    candidates.sort(key=lambda x: x[0])
     return candidates[:limit]
 
 
@@ -1415,7 +1351,6 @@ def _enforce_hard_cap(
     killed_ids: Set[str],
     allowed_statuses: Set[str],
 ) -> Tuple[int, List[Dict[str, Any]], int, List[Tuple[str, str]], Set[str]]:
-    """Repeatedly pause the weakest ads until active count <= max_active."""
     killed_log: List[Tuple[str, str]] = []
     safety_counter = 0
 
@@ -1520,18 +1455,12 @@ def _build_ad_metrics(
     add_to_cart = 0
     initiate_checkout = 0
     purchases = 0
-    # Parse actions - prioritize omni_add_to_cart (includes Meta Shop + website ATCs)
-    # This matches Meta Ads Manager which shows Meta Shop ATCs separately
     for action in actions:
         action_type = action.get("action_type")
         value = safe_f(action.get("value"))
         if action_type == "omni_add_to_cart":
-            # All ATCs across destinations (Meta Shop + website) - preferred for ASC+
-            # This includes Meta Shop ATCs which are shown separately in Meta Ads Manager
-            add_to_cart += int(value)  # Accumulate in case multiple entries exist
+            add_to_cart += int(value)
         elif action_type == "add_to_cart":
-            # Website-only ATCs (fallback if omni_add_to_cart not available)
-            # Only use if omni_add_to_cart wasn't found (to avoid double counting)
             if add_to_cart == 0:
                 add_to_cart = int(value)
         elif action_type == "initiate_checkout":
@@ -1560,13 +1489,9 @@ def _build_ad_metrics(
     )
     ctr = ctr_row if ctr_row is not None else ((clicks_val / impressions_val) if impressions_val > 0 else None)
 
-    # Use Meta API 'cpc' field (all clicks) - this includes Meta clicks, not just link clicks
-    # This matches "CPC (all) (EUR)" from Meta Ads Manager
     raw_cpc = _float_or_none(row.get("cpc"))
     if raw_cpc is None and clicks_val > 0:
-        # Fallback: calculate from spend / all clicks (includes Meta clicks)
         raw_cpc = spend_val / clicks_val if clicks_val > 0 else None
-    # Only use cost_per_inline_link_click as last resort (link clicks only)
     if raw_cpc is None:
         raw_cpc = _float_or_none(row.get("cost_per_inline_link_click"))
     cpc = round(raw_cpc, 2) if raw_cpc is not None else None
@@ -1578,7 +1503,6 @@ def _build_ad_metrics(
 
     cpa = (spend_val / purchases) if purchases > 0 else None
     
-    # Cost per Add to Cart (includes all ATCs: Meta + website)
     cost_per_atc = (spend_val / add_to_cart) if add_to_cart > 0 else None
 
     reach_val = safe_f(row.get("reach")) if row.get("reach") is not None else None
@@ -1676,7 +1600,6 @@ def _summarize_metrics(metrics_map: Dict[str, Dict[str, Any]]) -> Dict[str, floa
 
 
 def _ad_health_score(metrics: Dict[str, Any]) -> float:
-    """Compute a rough performance score (higher is better)."""
     roas = safe_f(metrics.get("roas"))
     purchases = safe_f(metrics.get("purchases"))
     ctr = safe_f(metrics.get("ctr"))
@@ -1722,16 +1645,13 @@ def _emit_health_notification(
 ) -> str:
     tick_time = datetime.now(LOCAL_TZ).strftime("%H:%M")
     
-    # Calculate cost per ATC from totals
     spend = totals.get('spend', 0.0)
     atc = totals.get('add_to_cart', 0.0)
     cost_per_atc = (spend / atc) if atc > 0 else None
     
-    # Calculate CPA from totals
     purchases = totals.get('purchases', 0.0)
     cpa = (spend / purchases) if purchases > 0 else None
     
-    # Calculate CTR, CPC, CPM from totals
     impressions = totals.get('impressions', 0.0)
     clicks = totals.get('clicks', 0.0)
     ctr = (clicks / impressions * 100) if impressions > 0 else None
@@ -1781,8 +1701,7 @@ def _generate_creatives_for_deficit(
     supabase_client = None
     storage_manager = None
     try:
-        from infrastructure.supabase_storage import get_validated_supabase_client
-        from infrastructure.creative_storage import create_creative_storage_manager
+        from infrastructure.supabase_storage import get_validated_supabase_client, create_creative_storage_manager
 
         supabase_client = get_validated_supabase_client()
         if supabase_client:
@@ -1793,7 +1712,7 @@ def _generate_creatives_for_deficit(
     image_generator = create_image_generator(
         flux_api_key=os.getenv("FLUX_API_KEY"),
         openai_api_key=os.getenv("OPENAI_API_KEY"),
-        ml_system=ml_system,
+        ml_system=None,
     )
 
     product_config = cfg(settings, "asc_plus.product") or {}
@@ -1807,7 +1726,6 @@ def _generate_creatives_for_deficit(
 
     created_count = 0
 
-    # Use queued creatives first
     while deficit > 0 and storage_manager:
         queued_creative = storage_manager.get_queued_creative()
         if not queued_creative:
@@ -1847,7 +1765,6 @@ def _generate_creatives_for_deficit(
         else:
             break
 
-    # Generate new creatives for remaining deficit
     attempt_index = 0
     while deficit > 0:
         creative_payload = generate_new_creative(image_generator, product_info, attempt_index)
@@ -1902,7 +1819,6 @@ def _pause_ad(client: MetaClient, ad_id: str, reason: Optional[str] = None) -> b
 
 
 def _record_lifecycle_event(ad_id: str, status: str, reason: str) -> None:
-    """Record lifecycle event in ads table (consolidated from ad_lifecycle)."""
     try:
         from infrastructure.supabase_storage import get_validated_supabase_client
         client = get_validated_supabase_client()
@@ -1910,7 +1826,6 @@ def _record_lifecycle_event(ad_id: str, status: str, reason: str) -> None:
             return
         lifecycle_status = _normalize_lifecycle_status(status)
         
-        # Update ads table with status and kill_reason
         payload = {
             "ad_id": ad_id,
             "status": lifecycle_status,
@@ -1918,7 +1833,6 @@ def _record_lifecycle_event(ad_id: str, status: str, reason: str) -> None:
             "killed_at": datetime.now(timezone.utc).isoformat() if lifecycle_status == "killed" else None,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-        # Only include kill_reason and killed_at if status is killed
         if lifecycle_status != "killed":
             payload.pop("kill_reason", None)
             payload.pop("killed_at", None)
@@ -1939,29 +1853,10 @@ def _create_creative_and_ad(
     ml_system: Optional[Any] = None,
     campaign_id: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[str], bool]:
-    """
-    Create a creative and ad in Meta from creative data.
-    Uses Supabase Storage for image hosting.
-    
-    Args:
-        client: Meta client instance
-        image_generator: Image generator instance (for validation)
-        creative_data: Dictionary with creative data (image_path, ad_copy, supabase_storage_url, etc.)
-        adset_id: Ad set ID to create ad in
-        active_count: Current count of active ads
-        created_count: Current count of created ads in this batch
-        existing_creative_ids: Set of already created creative IDs to prevent duplicates
-        ml_system: Optional ML system for tracking
-    
-    Returns:
-        Tuple of (creative_id, ad_id, success)
-    """
-    # Input validation
     if not client or not adset_id or not creative_data:
         logger.error("Invalid input: client, adset_id, and creative_data are required")
         return None, None, False
     
-    # Use storage_creative_id from creative_data if available, otherwise generate from image hash
     storage_creative_id = creative_data.get("storage_creative_id")
     if not storage_creative_id:
         import hashlib
@@ -1975,61 +1870,46 @@ def _create_creative_and_ad(
             storage_creative_id = f"creative_{int(time.time())}"
     
     try:
-        # Create descriptive creative name for Ads Manager
-        # Include headline snippet and sequence for easy identification
         ad_copy_dict = creative_data.get("ad_copy") or {}
         if not isinstance(ad_copy_dict, dict):
             ad_copy_dict = {}
         
         headline = ad_copy_dict.get("headline", "")
         if headline:
-            # Extract first 2-3 words from headline (max 25 chars)
             headline_words = headline.split()[:3]
             headline_snippet = " ".join(headline_words)
             if len(headline_snippet) > 25:
                 headline_snippet = headline_snippet[:22] + "..."
-            # Clean for filename safety
             headline_snippet = headline_snippet.replace(":", "").replace("/", "").replace("\\", "").strip()
         else:
             headline_snippet = "Creative"
         
-        # Sequence number
         seq_num = active_count + created_count + 1
         
-        # Build descriptive creative name: [ASC+] HeadlineSnippet - #N
         creative_name = f"[ASC+] {headline_snippet} - #{seq_num}"
         
-        # Ensure it's not too long (keep under 80 chars for creatives)
         if len(creative_name) > 80:
             creative_name = f"[ASC+] {headline_snippet[:15]} - #{seq_num}"
         
-        # Use Supabase Storage URL if available, otherwise fallback to image_path
         supabase_storage_url = creative_data.get("supabase_storage_url")
         image_path = creative_data.get("image_path")
         
-        # Ensure we have either supabase_storage_url or image_path
         if not supabase_storage_url and not image_path:
             logger.error("Creative data must have either supabase_storage_url or image_path")
             return None, None, False
         
-        # Ensure ad_copy is a dict (not None) - already set above, but ensure it's valid
-        if not isinstance(ad_copy_dict, dict):
             ad_copy_dict = {}
         
-        # Validate page_id
         page_id = os.getenv("FB_PAGE_ID")
         if not page_id:
             logger.error("FB_PAGE_ID environment variable is required")
             return None, None, False
         
-        # Resolve Instagram actor ID (env override -> automatic lookup)
         env_instagram_actor_id = os.getenv("IG_ACTOR_ID")
         instagram_actor_id = env_instagram_actor_id or client.get_instagram_actor_id(page_id)
         
-        # Validate Instagram actor ID format (should be numeric string)
         if instagram_actor_id:
             try:
-                # Validate it's a valid numeric ID
                 int(instagram_actor_id)
             except (ValueError, TypeError):
                 logger.warning(
@@ -2052,32 +1932,25 @@ def _create_creative_and_ad(
         )
         resolved_instagram_actor_id = instagram_actor_id
         try:
-            # Clean primary text - remove "Brava Product" and em dashes
             primary_text = ad_copy_dict.get("primary_text", "")
             if primary_text:
                 import re
                 primary_text = primary_text.replace("Brava Product", "").replace("—", ",").replace("–", ",").strip()
                 primary_text = re.sub(r'\s+', ' ', primary_text).strip()
-                # Ensure it's not too long
                 if len(primary_text) > 150:
                     primary_text = primary_text[:147] + "..."
-            
-            # Create single image creative with catalog products
-            # Note: For ASC+ campaigns, the catalog is configured at the ad set level
-            # Meta will automatically show product cards from the catalog below the single image
-            # The creative is a single image with primary text, headline, and "Shop now" CTA
             
             creative = client.create_image_creative(
                 page_id=page_id,
                 name=creative_name,
-                supabase_storage_url=supabase_storage_url,  # Use Supabase Storage URL
+                supabase_storage_url=supabase_storage_url,
                 image_path=image_path if not supabase_storage_url else None,
                 primary_text=primary_text,
                 headline=ad_copy_dict.get("headline", ""),
                 description=ad_copy_dict.get("description", ""),
-                call_to_action="SHOP_NOW",  # "Shop now" CTA
-                instagram_actor_id=instagram_actor_id,  # Add Instagram account
-                creative_id=storage_creative_id,  # Pass storage creative_id for tracking
+                call_to_action="SHOP_NOW",
+                instagram_actor_id=instagram_actor_id,
+                creative_id=storage_creative_id,
             )
             logger.info(f"Meta API create_image_creative response: {creative}")
         except Exception as e:
@@ -2121,36 +1994,27 @@ def _create_creative_and_ad(
             logger.error(f"Failed to get creative ID from Meta response. Response: {creative}")
             return None, None, False
         
-        # Check for duplicate creative (use Meta's creative ID)
         if str(meta_creative_id) in existing_creative_ids:
             logger.debug(f"Skipping duplicate creative: {meta_creative_id}")
             return str(meta_creative_id), None, False
         
-        # Create descriptive ad name for Ads Manager
-        # Include headline snippet, date, and sequence for easy identification
         headline = ad_copy_dict.get("headline", "")
         if headline:
-            # Extract first 3-4 words from headline (max 30 chars)
             headline_words = headline.split()[:4]
             headline_snippet = " ".join(headline_words)
             if len(headline_snippet) > 30:
                 headline_snippet = headline_snippet[:27] + "..."
-            # Clean for filename safety
             headline_snippet = headline_snippet.replace(":", "").replace("/", "").replace("\\", "").strip()
         else:
             headline_snippet = "Creative"
         
-        # Get date in YYMMDD format for easy sorting
         from datetime import datetime
         date_str = datetime.now().strftime("%y%m%d")
         
-        # Sequence number
         seq_num = active_count + created_count + 1
         
-        # Build descriptive ad name: [ASC+] HeadlineSnippet - YYMMDD - #N
         ad_name = f"[ASC+] {headline_snippet} - {date_str} - #{seq_num}"
         
-        # Ensure it's not too long (Meta has limits, keep under 100 chars)
         if len(ad_name) > 100:
             ad_name = f"[ASC+] {headline_snippet[:20]} - {date_str} - #{seq_num}"
         
@@ -2162,7 +2026,6 @@ def _create_creative_and_ad(
             bool(resolved_instagram_actor_id),
         )
         try:
-            # Ensure creative_id is a string (Meta API requires string format)
             creative_id_str = str(meta_creative_id).strip()
             if not creative_id_str or not creative_id_str.isdigit():
                 logger.error(f"Invalid creative_id format: {meta_creative_id} (expected numeric string)")
@@ -2171,11 +2034,11 @@ def _create_creative_and_ad(
             ad = client.create_ad(
                 adset_id=adset_id,
                 name=ad_name,
-                creative_id=creative_id_str,  # Use Meta's creative ID (ensure string format)
+                creative_id=creative_id_str,
                 status="ACTIVE",
-                instagram_actor_id=resolved_instagram_actor_id,  # Add Instagram at ad level when available
+                instagram_actor_id=resolved_instagram_actor_id,
                 use_env_instagram_actor=bool(resolved_instagram_actor_id),
-                tracking_specs=None,  # Will use default pixel-based tracking if pixel ID is set
+                tracking_specs=None,
             )
             logger.info(f"Meta API create_ad response: {ad}")
         except ValueError as ve:
@@ -2185,7 +2048,6 @@ def _create_creative_and_ad(
             error_str = str(re)
             if "500" in error_str or "unknown error" in error_str.lower():
                 logger.warning(f"Meta API 500 error (may be transient): {re}")
-                # Don't fail completely on 500 errors - might be transient
                 return None, None, False
             else:
                 logger.error(f"Meta API error creating ad: {re}")
@@ -2199,12 +2061,10 @@ def _create_creative_and_ad(
             logger.info(f"Successfully created ad with ad_id={ad_id}")
             existing_creative_ids.add(str(meta_creative_id))
             
-            # Update ads table with Supabase Storage URL and Meta creative ID
             try:
                 from infrastructure.supabase_storage import get_validated_supabase_client, SupabaseStorage
                 supabase_client = get_validated_supabase_client()
                 if supabase_client:
-                    # Record ad creation time (populates ad_creation_times table)
                     try:
                         storage = SupabaseStorage(supabase_client)
                         lifecycle_id = f"lifecycle_{ad_id}"
@@ -2213,11 +2073,9 @@ def _create_creative_and_ad(
                     except Exception as e:
                         logger.debug(f"Failed to record ad creation time: {e}")
                     
-                    # Store initial historical data (populates historical_data table)
                     try:
                         storage = SupabaseStorage(supabase_client)
                         lifecycle_id = f"lifecycle_{ad_id}"
-                        # Store initial metrics as historical data
                         storage.store_historical_data(ad_id, lifecycle_id, "asc_plus", "spend", 0.0)
                         storage.store_historical_data(ad_id, lifecycle_id, "asc_plus", "impressions", 0.0)
                         storage.store_historical_data(ad_id, lifecycle_id, "asc_plus", "clicks", 0.0)
@@ -2225,27 +2083,24 @@ def _create_creative_and_ad(
                         logger.debug(f"✅ Stored initial historical data for {ad_id}")
                     except Exception as e:
                         logger.debug(f"Failed to store initial historical data: {e}")
-                    # Extract creative content from ad_copy
                     ad_copy_dict = creative_data.get("ad_copy") or {}
                     if not isinstance(ad_copy_dict, dict):
                         ad_copy_dict = {}
                     
                     creative_intel_data = {
-                        "creative_id": str(meta_creative_id),  # Use Meta's creative ID
+                        "creative_id": str(meta_creative_id),
                         "ad_id": ad_id,
                         "creative_type": "image",
-                        # Store creative content directly in ads table
                         "headline": ad_copy_dict.get("headline", ""),
                         "primary_text": ad_copy_dict.get("primary_text", ""),
                         "description": ad_copy_dict.get("description", ""),
                         "metadata": {
                             "ad_copy": creative_data.get("ad_copy"),
                             "flux_request_id": creative_data.get("flux_request_id"),
-                            "storage_creative_id": storage_creative_id,  # Store our internal ID
-                            "scenario_description": creative_data.get("scenario_description"),  # Store scenario for ML learning
+                            "storage_creative_id": storage_creative_id,
+                            "scenario_description": creative_data.get("scenario_description"),
                         },
                     }
-                    # Add optional fields if available
                     if creative_data.get("supabase_storage_url"):
                         creative_intel_data["storage_url"] = creative_data.get("supabase_storage_url")
                     if creative_data.get("image_prompt"):
@@ -2253,68 +2108,47 @@ def _create_creative_and_ad(
                     if creative_data.get("text_overlay"):
                         creative_intel_data["text_overlay_content"] = creative_data.get("text_overlay")
                     
-                    # Ensure performance metrics are calculated
                     try:
-                        from infrastructure.data_optimizer import CreativeIntelligenceOptimizer
+                        from infrastructure.data_validation import CreativeIntelligenceOptimizer
                         optimizer = CreativeIntelligenceOptimizer(supabase_client)
                         metrics = optimizer.calculate_performance_metrics(
                             str(meta_creative_id),
                             ad_id,
                         )
-                        # Add calculated metrics to creative_intel_data
-                        # Note: avg_ctr, avg_cpa, avg_roas don't exist in consolidated ads table
-                        # Only performance_score and fatigue_index are stored in ads table
                         creative_intel_data['performance_score'] = metrics.get('performance_score', 0.0)
                         creative_intel_data['fatigue_index'] = metrics.get('fatigue_index', 0.0)
                     except ImportError:
-                        pass  # Optimizer not available
+                        pass
                     except Exception as opt_error:
                         logger.debug(f"Failed to calculate metrics: {opt_error}")
                     
-                    # Update ads table instead of creative_intelligence
                     supabase_client.table("ads").upsert(
                         creative_intel_data,
                         on_conflict="ad_id"
                     ).execute()
                     
-                    # Schedule async update for accurate metrics
                     try:
-                        from infrastructure.data_optimizer import CreativeIntelligenceOptimizer
+                        from infrastructure.data_validation import CreativeIntelligenceOptimizer
                         optimizer = CreativeIntelligenceOptimizer(supabase_client)
                         optimizer.update_creative_performance(str(meta_creative_id), ad_id)
                     except Exception:
-                        pass  # Non-critical
+                        pass
             except Exception as e:
                 logger.warning(f"Failed to update ads table with storage URL: {e}")
             
-            # Track in ML system
-            if ml_system:
-                try:
-                    ml_system.record_creative_creation(
-                        ad_id=ad_id,
-                        creative_data=creative_data,
-                        performance_data={},
-                    )
-                except (AttributeError, ValueError, TypeError) as e:
-                    logger.warning(f"Failed to track creative in ML system: {e}")
-            
-            # Store initial performance data (populates performance_metrics and ad_lifecycle tables)
             try:
                 from infrastructure.supabase_storage import get_validated_supabase_client
                 supabase_client = get_validated_supabase_client()
                 if supabase_client:
-                    # Get campaign_id if not provided
                     final_campaign_id = campaign_id or ''
                     if not final_campaign_id:
                         try:
-                            # Try to get campaign_id from adset
                             adset_info = client._graph_get_object(f"{adset_id}", params={"fields": "campaign_id"})
                             if adset_info:
                                 final_campaign_id = adset_info.get('campaign_id', '')
                         except Exception:
                             pass
                     
-                    # Create initial ad_data with zero values for new ad
                     initial_ad_data = {
                         'ad_id': ad_id,
                         'creative_id': str(meta_creative_id),
@@ -2334,14 +2168,12 @@ def _create_creative_and_ad(
                         'cpa': None,
                         'status': 'active',
                     }
-                    # Import and call store_performance_data_in_supabase
                     import sys
-                    # Add src directory to path to import from main (use os from module level, not local import)
                     src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
                     if src_dir not in sys.path:
                         sys.path.insert(0, src_dir)
                     from main import store_performance_data_in_supabase
-                    store_performance_data_in_supabase(supabase_client, initial_ad_data, "asc_plus", ml_system)
+                    store_performance_data_in_supabase(supabase_client, initial_ad_data, "asc_plus", None)
                     logger.debug(f"✅ Stored initial performance data for new ad {ad_id}")
             except Exception as e:
                 logger.debug(f"Failed to store initial performance data (non-critical): {e}")
@@ -2361,26 +2193,17 @@ def ensure_asc_plus_campaign(
     settings: Dict[str, Any],
     store: Any,
 ) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Ensure ASC+ campaign and adset exist.
-    Returns (campaign_id, adset_id) or (None, None) on failure.
-    """
     try:
-        # Check if campaign already exists
         campaign_id = cfg(settings, "ids.asc_plus_campaign_id") or ""
         adset_id = cfg(settings, "ids.asc_plus_adset_id") or ""
         
         if campaign_id and adset_id:
-            # Verify they still exist
             try:
-                # Try to get campaign info
                 client._graph_get_object(f"{campaign_id}", params={"fields": "id,name,status"})
                 return campaign_id, adset_id
             except Exception:
-                # Campaign doesn't exist, create new
                 pass
         
-        # Create ASC+ campaign
         campaign_name = "[ASC+] Brava - US Men"
         campaign = client.ensure_campaign(
             name=campaign_name,
@@ -2400,11 +2223,9 @@ def ensure_asc_plus_campaign(
         else:
             adset_placements = placements_cfg.get("publisher_platforms") or default_placements
         
-        # Create ASC+ adset with Advantage+ placements
         asc_config = cfg(settings, "asc_plus") or {}
         daily_budget = cfg_or_env_f(asc_config, "daily_budget_eur", "ASC_PLUS_BUDGET", 50.0)
         
-        # Validate budget
         if daily_budget < ASC_PLUS_BUDGET_MIN:
             notify(f"⚠️ ASC+ budget too low: €{daily_budget:.2f}. Minimum is €{ASC_PLUS_BUDGET_MIN:.2f}")
             daily_budget = ASC_PLUS_BUDGET_MIN
@@ -2412,7 +2233,6 @@ def ensure_asc_plus_campaign(
             notify(f"⚠️ ASC+ budget too high: €{daily_budget:.2f}. Capping at €{ASC_PLUS_BUDGET_MAX:.2f}")
             daily_budget = ASC_PLUS_BUDGET_MAX
         
-        # Verify budget matches target active ads
         target_ads = cfg(settings, "asc_plus.target_active_ads") or 10
         budget_per_creative = daily_budget / target_ads if target_ads > 0 else daily_budget
         min_budget_per_creative = cfg_or_env_f(asc_config, "min_budget_per_creative_eur", None, ASC_PLUS_MIN_BUDGET_PER_CREATIVE)
@@ -2421,23 +2241,20 @@ def ensure_asc_plus_campaign(
             notify(f"⚠️ Budget per creative (€{budget_per_creative:.2f}) below minimum (€{min_budget_per_creative:.2f})")
             notify(f"   Consider increasing daily budget or reducing target active ads")
         
-        # Targeting: US, Men, 18-54
         targeting = {
             "age_min": 18,
             "age_max": 54,
-            "genders": [1],  # Men
+            "genders": [1],
             "geo_locations": {"countries": ["US"]},
         }
         
-        # Create adset with Advantage+ placements
-        # ATC optimization - teaching pixel buyer intent patterns (30-day learning phase)
         adset_name = "[ASC+] US Men ATC"
         optimization_goal = cfg(asc_config, "optimization_goal") or "ADD_TO_CART"
         adset = client.ensure_adset(
             campaign_id=campaign_id,
             name=adset_name,
             daily_budget=daily_budget,
-            optimization_goal=optimization_goal,  # ADD_TO_CART for 30-day learning phase
+            optimization_goal=optimization_goal,
             billing_event="IMPRESSIONS",
             bid_strategy="LOWEST_COST_WITHOUT_CAP",
             targeting=targeting,
@@ -2450,21 +2267,19 @@ def ensure_asc_plus_campaign(
             notify("❌ Failed to create ASC+ adset")
             return None, None
         
-        # Verify budget was set correctly - enforce fixed €100/day budget (no scaling during 30-day ATC learning phase)
-        fixed_budget = 100.0  # Fixed budget for 30-day ATC learning phase
+        fixed_budget = 100.0
         try:
             adset_budget = client.get_adset_budget(adset_id)
             if adset_budget:
-                # Always enforce fixed budget - no scaling during learning phase
                 if abs(adset_budget - fixed_budget) > 0.01:
-                    logger.info(f"Enforcing fixed budget: €{adset_budget:.2f} -> €{fixed_budget:.2f}/day (30-day ATC learning phase)")
+                    logger.info(f"Enforcing fixed budget: €{adset_budget:.2f} -> €{fixed_budget:.2f}/day")
                     try:
                         client.update_adset_budget(
                             adset_id=adset_id,
                             daily_budget=fixed_budget,
                             current_budget=adset_budget,
                         )
-                        notify(f"✅ Fixed budget enforced: €{fixed_budget:.2f}/day (no scaling during learning phase)")
+                        notify(f"✅ Fixed budget enforced: €{fixed_budget:.2f}/day")
                         adset_budget = fixed_budget
                     except Exception as e:
                         logger.warning(f"Failed to enforce fixed budget: {e}")
@@ -2485,7 +2300,6 @@ def generate_new_creative(
     product_info: Dict[str, Any],
     creative_index: int,
 ) -> Optional[Dict[str, Any]]:
-    """Generate a new static image creative."""
     try:
         creative_data = image_generator.generate_creative(
             product_info=product_info,
@@ -2510,7 +2324,6 @@ def run_asc_plus_tick(
     store: Any,
     ml_system: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    """Modern ASC+ tick controller with guardrails and creative floor enforcement."""
     validate_asc_plus_config(settings)
     timekit = Timekit()
     target_count = cfg(settings, "asc_plus.target_active_ads") or 10
@@ -2549,7 +2362,6 @@ def run_asc_plus_tick(
 
     ads_list = client.list_ads_in_adset(adset_id)
 
-    # Step 1: fetch insights for today + trailing window
     insight_rows = client.get_recent_ad_insights(adset_id=adset_id, campaign_id=campaign_id)
     account_today = timekit.today_ymd_account()
     metrics_map: Dict[str, Dict[str, Any]] = {}
@@ -2629,9 +2441,7 @@ def run_asc_plus_tick(
     hydrated_active_count = len(hydrated_active_ads)
     result["hydrated_active_count"] = hydrated_active_count
 
-    # Step 3: apply guardrail kill/promote rules
     killed_ads: List[Tuple[str, str]] = []
-    promoted_ads: List[Tuple[str, str, Optional[str]]] = []
     killed_ids = set()
     for ad in active_ads:
         ad_id = ad.get("id")
@@ -2655,7 +2465,6 @@ def run_asc_plus_tick(
                 _record_lifecycle_event(ad_id, "PAUSED", kill_reason)
             continue
 
-    # Refresh active count after guardrails
     try:
         active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
     except Exception:
@@ -2668,7 +2477,6 @@ def run_asc_plus_tick(
 
     planning_active_count = active_count
 
-    # Step 4: enforce max active ceiling by trimming lowest performers
     excess = max(0, planning_active_count - max_active)
     if excess > 0:
         cap_pool = hydrated_active_ads if hydrated_active_ads else active_ads
@@ -2725,7 +2533,7 @@ def run_asc_plus_tick(
     available_slots = max(0, max_active - min(active_count, max_active))
     desired_slots = max(0, effective_target - planning_active_count)
     deficit = min(desired_slots, available_slots)
-    created_records = _generate_creatives_for_deficit(deficit, client, settings, campaign_id, adset_id, ml_system, active_count)
+    created_records = _generate_creatives_for_deficit(deficit, client, settings, campaign_id, adset_id, None, active_count)
     if created_records:
         try:
             active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
@@ -2748,12 +2556,10 @@ def run_asc_plus_tick(
     result["active_count"] = active_count
     result["caps_enforced"] = bool(result["active_count"] == result["target_count"])
     result["kills"] = killed_ads
-    result["promotions"] = promoted_ads
     result["created_ads"] = [record["ad_id"] for record in created_records if record.get("ad_id")]
     result["created_details"] = created_records
     result["ad_metrics"] = metrics_map
 
-    # Slack actions summary
     action_lines: List[str] = []
     if killed_ads:
         action_lines.append(f"🛑 Paused {len(killed_ads)} ads:")
@@ -2761,12 +2567,6 @@ def run_asc_plus_tick(
             action_lines.append(f"   • {_short_id(ad_id)} – {reason}")
         if len(killed_ads) > 10:
             action_lines.append(f"   • … {len(killed_ads) - 10} more")
-    if promoted_ads:
-        action_lines.append(f"🚀 Promoted {len(promoted_ads)} ads:")
-        for src_id, dst_id, reason in promoted_ads[:5]:
-            action_lines.append(f"   • {_short_id(src_id)} → {_short_id(dst_id)} – {reason or 'Promotion rule'}")
-        if len(promoted_ads) > 5:
-            action_lines.append(f"   • … {len(promoted_ads) - 5} more")
     if created_records:
         action_lines.append(f"✨ Created {len(created_records)} ads (target {effective_target}):")
         for record in created_records[:5]:

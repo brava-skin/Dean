@@ -1,11 +1,8 @@
-# rules.py
 from __future__ import annotations
 
-import math
 import os
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytz
 
@@ -19,35 +16,12 @@ from analytics.metrics import (
 
 UTC = timezone.utc
 
-# ---- Environment / defaults (EUR account; Meta returns all values in EUR) ----
-PRODUCT_PRICE = float(os.getenv("PRODUCT_PRICE", "50") or 50)   # EUR price of the product (used for tripwire)
-BREAKEVEN_CPA = float(os.getenv("BREAKEVEN_CPA", "27.51") or 27.51)   # EUR (account currency)
+PRODUCT_PRICE = float(os.getenv("PRODUCT_PRICE", "50") or 50)
+BREAKEVEN_CPA = float(os.getenv("BREAKEVEN_CPA", "27.51") or 27.51)
 COGS_ENV = os.getenv("COGS_PER_PURCHASE")
 COGS_PER_PURCHASE = float(COGS_ENV) if COGS_ENV not in (None, "") else None
 
 
-def _f(x: Any, d: float = 0.0) -> float:
-    try:
-        if x is None:
-            return d
-        if isinstance(x, (int, float)):
-            return float(x)
-        return float(str(x).replace(",", "").strip())
-    except Exception:
-        return d
-
-
-def _utcnow() -> datetime:
-    return datetime.now(UTC)
-
-
-def _pct_growth(curr: float, prev: float) -> float:
-    if prev <= 0:
-        return 999.0 if curr > 0 else 0.0
-    return (curr - prev) / prev * 100.0
-
-
-# ---- Compatibility shims to keep working with older metrics signatures ----
 def _metrics_from_row_compat(
     row: Dict[str, Any],
     *,
@@ -63,7 +37,7 @@ def _metrics_from_row_compat(
             prefer_roas_field=prefer_roas_field,
             cogs_per_purchase=cogs_per_purchase,
             smoothing_epsilon=smoothing_epsilon,
-        )  # type: ignore[call-arg]
+        )
     except TypeError:
         try:
             return metrics_from_row(
@@ -71,7 +45,7 @@ def _metrics_from_row_compat(
                 cfg=cfg,
                 cogs_per_purchase=cogs_per_purchase,
                 smoothing_epsilon=smoothing_epsilon,
-            )  # type: ignore[call-arg]
+            )
         except TypeError:
             try:
                 return metrics_from_row(row, cfg=cfg, cogs_per_purchase=cogs_per_purchase)  # type: ignore[call-arg]
@@ -92,39 +66,22 @@ def _aggregate_rows_compat(
 
 
 class AdvancedRuleEngine:
-    """
-    Production-ready rule engine for ad automation:
-      - Metric computation with compatibility shims
-      - Stage rules (testing, validation, scaling)
-      - Stability (N consecutive ticks) and minimums
-      - Adaptive account bands via EWMA
-      - Guardrails (pacing, account CPA, tripwires)
-      - Reinvestment allocator
-      - Creative compliance
-      - TZ-aware daily counters (Europe/Amsterdam by default)
-      - Accessors for validation.engine and scaling.engine tunables (new)
-    """
-
     def __init__(self, cfg: Dict[str, Any], store: Optional[Any] = None) -> None:
         self.cfg = cfg or {}
         self.store = store
         self._mem_counters: Dict[str, int] = {}
         self._mem_flags: Dict[Tuple[str, str, str], str] = {}
 
-        # --- Modes
         self.mode = (self.cfg.get("mode", {}).get("current") or "production").lower()
 
-        # --- Stability
         stab = self.cfg.get("stability", {}) or {}
         self.consecutive_ticks = int(stab.get("consecutive_ticks", 1) or 1)
         self.eps = float(stab.get("smoothing_epsilon", 0.0) or 0.0)
 
-        # --- Minimums & attribution
         self.global_mins = self.cfg.get("minimums", {}) or {}
         attr = self.cfg.get("attribution", {}) or {}
         self.roas_source = (attr.get("roas_source") or "computed").lower()
 
-        # --- Timezones (account vs audience). Account drives 'day' boundaries.
         tz_cfg = self.cfg.get("timezones", {}) or {}
         self.account_tz_name = tz_cfg.get("account_tz") or "Europe/Amsterdam"
         self.audience_tz_name = tz_cfg.get("audience_tz") or "America/Chicago"
@@ -133,34 +90,27 @@ class AdvancedRuleEngine:
         except Exception:
             self.account_tz = pytz.timezone("Europe/Amsterdam")
 
-        # --- Metrics config (EUR account; Meta returns all values in EUR)
         self.metrics_cfg = MetricsConfig(
             prefer_roas_field=(self.roas_source == "field"),
             account_currency=(self.cfg.get("economics", {}).get("account_currency") or "EUR"),
             product_currency=(self.cfg.get("economics", {}).get("product_currency") or "EUR"),
         )
 
-        # --- COGS source
         econ = self.cfg.get("economics", {}) or {}
         self.use_env_cogs = bool(econ.get("use_env_cogs", True))
         self.use_creative_cogs = bool(econ.get("use_creative_cogs", False))
 
-        # --- Creative compliance
         cc = self.cfg.get("creative_compliance") or {}
         self.cc_require_fields: List[str] = list(cc.get("require_fields") or [])
         self.cc_forbid_terms: List[str] = [str(t).lower() for t in (cc.get("forbid_terms") or [])]
         self.cc_max_lengths: Dict[str, int] = {k: int(v) for k, v in (cc.get("max_lengths") or {}).items()}
 
-    # ---------- Time helpers ----------
     def _now_account(self) -> datetime:
-        """Account-local 'now' (aware)."""
         return datetime.now(self.account_tz)
 
     def _today_key_account(self) -> str:
-        """Date key in account-local time (for daily duplicate caps, etc.)."""
         return self._now_account().date().isoformat()
 
-    # ---------- Store helpers ----------
     def _key(self, entity_id: str, *parts: str) -> str:
         return f"{entity_id}::" + "::".join(parts)
 
@@ -189,7 +139,7 @@ class AdvancedRuleEngine:
     def _get_flag_value(self, entity_type: str, entity_id: str, k: str) -> Optional[str]:
         if self.store:
             try:
-                got = self.store.get_flag(entity_type, entity_id, k)  # requires Store(entity_type,entity_id,k)
+                got = self.store.get_flag(entity_type, entity_id, k)
                 if got and "v" in got:
                     return str(got["v"])
             except Exception:
@@ -205,7 +155,6 @@ class AdvancedRuleEngine:
                 pass
         self._mem_flags[(entity_type, entity_id, k)] = v
 
-    # ---------- Economics ----------
     def _cogs_for_row(self, row: Dict[str, Any]) -> Optional[float]:
         if self.use_creative_cogs:
             r = row.get("cogs_per_purchase")
@@ -218,7 +167,6 @@ class AdvancedRuleEngine:
             return COGS_PER_PURCHASE
         return None
 
-    # ---------- Metrics ----------
     def compute_metrics(self, row: Dict[str, Any]) -> Metrics:
         return _metrics_from_row_compat(
             row,
@@ -228,7 +176,6 @@ class AdvancedRuleEngine:
             smoothing_epsilon=self.eps,
         )
 
-    # ---------- Minimums & stability ----------
     def _meets_minimums(self, stage: str, m: Metrics) -> bool:
         mins = dict(self.global_mins)
         mins.update(((self.cfg.get(stage, {}) or {}).get("minimums", {}) or {}))
@@ -250,7 +197,6 @@ class AdvancedRuleEngine:
         return False
 
 
-    # ---------- Stage rule evaluation ----------
     def _eval(self, rule: Dict[str, Any], m: Metrics, row: Dict[str, Any]) -> Tuple[bool, str]:
         t = rule["type"]
 
@@ -276,7 +222,6 @@ class AdvancedRuleEngine:
             return ok, f"ROAS<{rule['roas_lt']}" if ok else ""
 
         if t == "spend_over_2x_price_no_purchase":
-            # Tripwire in EUR: 2 × product price (Meta returns all values in EUR, no conversion needed)
             threshold = tripwire_threshold_account(PRODUCT_PRICE, multiple=2.0)
             ok = (m.spend or 0) >= threshold and (m.purchases or 0) == 0
             return ok, f"Spend≥2× price (€{threshold:.2f}) & 0 purchases" if ok else ""
@@ -298,18 +243,15 @@ class AdvancedRuleEngine:
             return ok, f"ATC<{rule['atc_lt']}" if ok else ""
 
         if t == "spend_no_purchase_with_conditions":
-            # Support for performance-based killing with CTR/ATC conditions
             spend_ok = (m.spend or 0) >= rule["spend_gte"]
             purchase_ok = (m.purchases or 0) == 0
             
-            # Check CTR conditions if specified
             ctr_ok = True
             if "ctr_gte" in rule:
                 ctr_ok = ctr_ok and (m.ctr or 0.0) >= rule["ctr_gte"]
             if "ctr_lt" in rule:
                 ctr_ok = ctr_ok and (m.ctr or 0.0) < rule["ctr_lt"]
             
-            # Check ATC conditions if specified  
             atc_ok = True
             if "atc_gte" in rule:
                 atc_ok = atc_ok and (m.add_to_cart or 0) >= rule["atc_gte"]
@@ -320,7 +262,6 @@ class AdvancedRuleEngine:
             return ok, f"Spend≥€{rule['spend_gte']} & 0 purchases & conditions met" if ok else ""
 
         if t == "learning_acceleration_high_ctr":
-            # Accelerate learning for high-CTR ads even without ATC
             spend_ok = (m.spend or 0) >= rule["spend_gte"]
             purchase_ok = (m.purchases or 0) == 0
             ctr_ok = (m.ctr or 0.0) >= rule["ctr_gte"]
@@ -328,7 +269,6 @@ class AdvancedRuleEngine:
             return ok, f"High CTR learning acceleration: Spend≥€{rule['spend_gte']} & CTR≥{rule['ctr_gte']:.1%}" if ok else ""
 
         if t == "learning_acceleration_multi_atc":
-            # Massive budget for ads with multiple ATCs
             spend_ok = (m.spend or 0) >= rule["spend_gte"]
             purchase_ok = (m.purchases or 0) == 0
             atc_ok = (m.add_to_cart or 0) >= rule["atc_gte"]
@@ -336,7 +276,6 @@ class AdvancedRuleEngine:
             return ok, f"Multi-ATC learning: Spend≥€{rule['spend_gte']} & ATC≥{rule['atc_gte']}" if ok else ""
 
         if t == "zero_performance_quick_kill":
-            # Kill zero-CTR ads immediately to save budget
             spend_ok = (m.spend or 0) >= rule["spend_gte"]
             purchase_ok = (m.purchases or 0) == 0
             ctr_ok = (m.ctr or 0.0) < rule["ctr_lt"]
@@ -387,21 +326,17 @@ class AdvancedRuleEngine:
             ok = (m.spend or 0) >= rule.get("min_spend_for_alert", 20) and (m.purchases or 0) == 0 and (m.add_to_cart or 0) == 0
             return ok, "Spend present but no actions" if ok else ""
 
-        # NEW RULE TYPES FOR LEARNING PHASE
         if t == "cpm_increase":
-            # Kill if CPM increased by specified percentage
             ad_id = row.get("ad_id")
             if not ad_id:
                 return False, ""
             
             store = getattr(self, 'store', None)
             if store:
-                # Get historical CPM data
                 historical_cpm = store.get_historical_data(ad_id, "cpm", since_days=2)
                 if len(historical_cpm) >= 1:
                     current_cpm = m.cpm or 0.0
                     spend_ok = (m.spend or 0) >= rule["spend_gte"]
-                    # Calculate average CPM from yesterday
                     avg_cpm = sum(h["metric_value"] for h in historical_cpm) / len(historical_cpm)
                     increase_threshold = rule.get("cpm_increase_pct", 80) / 100.0
                     
@@ -410,35 +345,29 @@ class AdvancedRuleEngine:
             return False, ""
 
         if t == "cpm_above":
-            # Kill if CPM above threshold
             current_cpm = m.cpm or 0.0
             spend_ok = (m.spend or 0) >= rule["spend_gte"]
             cpm_ok = current_cpm > rule["cpm_above"]
             return spend_ok and cpm_ok, f"CPM above threshold: {current_cpm:.2f} > {rule['cpm_above']}" if spend_ok and cpm_ok else ""
 
         if t == "roas_below":
-            # Kill if ROAS below threshold
             current_roas = m.roas or 0.0
             spend_ok = (m.spend or 0) >= rule["spend_gte"]
             roas_ok = current_roas < rule["roas_lt"]
             return spend_ok and roas_ok, f"ROAS below threshold: {current_roas:.3f} < {rule['roas_lt']}" if spend_ok and roas_ok else ""
 
         if t == "atc_no_purchase":
-            # Kill if ATC but no purchase after specified days
             atc_ok = (m.add_to_cart or 0) >= rule["atc_gte"]
             purchase_ok = (m.purchases or 0) == 0
             spend_ok = (m.spend or 0) >= rule["spend_gte"]
-            # Note: days parameter would need to be tracked separately
             return atc_ok and purchase_ok and spend_ok, f"ATC≥{rule['atc_gte']} but no purchase after {rule.get('days', 3)}d" if atc_ok and purchase_ok and spend_ok else ""
 
         if t == "atc_gte":
-            # Promote if ATC meets threshold
             atc_ok = (m.add_to_cart or 0) >= rule["atc_gte"]
             spend_ok = (m.spend or 0) >= rule.get("spend_gte", 0)
             return atc_ok and spend_ok, f"ATC≥{rule['atc_gte']} after €{rule.get('spend_gte', 0)}" if atc_ok and spend_ok else ""
 
         if t == "cpm_lte":
-            # Promote if CPM below threshold
             current_cpm = m.cpm or 0.0
             spend_ok = (m.spend or 0) >= rule["spend_gte"]
             ctr_ok = (m.ctr or 0.0) >= rule.get("ctr_gte", 0)
@@ -446,33 +375,28 @@ class AdvancedRuleEngine:
             return spend_ok and ctr_ok and cpm_ok, f"CPM≤{rule['cpm_lte']} & CTR≥{rule.get('ctr_gte', 0):.1%}" if spend_ok and ctr_ok and cpm_ok else ""
 
         if t == "atc_rate_below":
-            # Kill if ATC rate below threshold
             atc_rate = (m.add_to_cart or 0) / max(1, m.impressions or 1)
             spend_ok = (m.spend or 0) >= rule["spend_gte"]
             rate_ok = atc_rate < rule["atc_rate_lt"]
             return spend_ok and rate_ok, f"ATC rate<{rule['atc_rate_lt']:.1%}" if spend_ok and rate_ok else ""
 
         if t == "cost_per_atc_above":
-            # Kill if cost per ATC above threshold
             cost_per_atc = (m.spend or 0) / max(1, m.add_to_cart or 1)
             spend_ok = (m.spend or 0) >= rule["spend_gte"]
             cost_ok = cost_per_atc >= rule["cost_per_atc_gte"]
             return spend_ok and cost_ok, f"Cost per ATC≥€{rule['cost_per_atc_gte']}" if spend_ok and cost_ok else ""
 
         if t == "atc_no_ic":
-            # Kill if ATC but no IC
             atc_ok = (m.add_to_cart or 0) >= rule["atc_gte"]
             ic_ok = (m.initiate_checkout or 0) < rule["ic_lt"]
             spend_ok = (m.spend or 0) >= rule["spend_gte"]
             return atc_ok and ic_ok and spend_ok, f"ATC≥{rule['atc_gte']} but IC<{rule['ic_lt']}" if atc_ok and ic_ok and spend_ok else ""
 
         if t == "max_runtime":
-            # Kill after maximum runtime
             ad_id = row.get("ad_id")
             if not ad_id:
                 return False, ""
             
-            # Get ad age from store
             store = getattr(self, 'store', None)
             if store:
                 ad_age_days = store.get_ad_age_days(ad_id)
@@ -481,12 +405,10 @@ class AdvancedRuleEngine:
             return False, ""
 
         if t == "mandatory_kill_after_days":
-            # Kill after specified days regardless of performance
             ad_id = row.get("ad_id")
             if not ad_id:
                 return False, ""
             
-            # Get ad age from store
             store = getattr(self, 'store', None)
             if store:
                 ad_age_days = store.get_ad_age_days(ad_id)
@@ -495,18 +417,15 @@ class AdvancedRuleEngine:
             return False, ""
 
         if t == "cpm_spike":
-            # Kill if CPM spikes significantly
             ad_id = row.get("ad_id")
             if not ad_id:
                 return False, ""
             
             store = getattr(self, 'store', None)
             if store:
-                # Get historical CPM data
                 historical_cpm = store.get_historical_data(ad_id, "cpm", since_days=3)
                 if len(historical_cpm) >= 2:
                     current_cpm = m.cpm or 0.0
-                    # Calculate average CPM from last 2 days
                     avg_cpm = sum(h["metric_value"] for h in historical_cpm[1:]) / len(historical_cpm[1:])
                     spike_threshold = rule.get("cpm_spike_pct", 100) / 100.0
                     
@@ -515,18 +434,15 @@ class AdvancedRuleEngine:
             return False, ""
 
         if t == "impression_drop":
-            # Kill if impressions drop significantly
             ad_id = row.get("ad_id")
             if not ad_id:
                 return False, ""
             
             store = getattr(self, 'store', None)
             if store:
-                # Get historical impression data
                 historical_impressions = store.get_historical_data(ad_id, "impressions", since_days=3)
                 if len(historical_impressions) >= 2:
                     current_impressions = m.impressions or 0
-                    # Calculate average impressions from last 2 days
                     avg_impressions = sum(h["metric_value"] for h in historical_impressions[1:]) / len(historical_impressions[1:])
                     drop_threshold = rule.get("impression_drop_pct", 30) / 100.0
                     
@@ -535,18 +451,15 @@ class AdvancedRuleEngine:
             return False, ""
 
         if t == "atc_rate_drop":
-            # Kill if ATC rate drops significantly
             ad_id = row.get("ad_id")
             if not ad_id:
                 return False, ""
             
             store = getattr(self, 'store', None)
             if store:
-                # Get historical ATC rate data
                 historical_atc_rate = store.get_historical_data(ad_id, "atc_rate", since_days=3)
                 if len(historical_atc_rate) >= 2:
                     current_atc_rate = (m.add_to_cart or 0) / max(1, m.impressions or 1)
-                    # Calculate average ATC rate from last 2 days
                     avg_atc_rate = sum(h["metric_value"] for h in historical_atc_rate[1:]) / len(historical_atc_rate[1:])
                     drop_threshold = rule.get("atc_rate_drop_pct", 25) / 100.0
                     

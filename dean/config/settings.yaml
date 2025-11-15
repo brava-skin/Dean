@@ -1,139 +1,28 @@
-# =====================================================
-# DEAN SYSTEM SETTINGS
-# Infrastructure, IDs, and System Configuration
-# =====================================================
-
-version: 2.0
-env: prod
 branding_name: "Dean"
 
-# ── Meta Account Configuration ───────────────────────
 account:
   timezone: "Europe/Amsterdam"
   currency: "EUR"
 
-# Copy bank removed - ASC+ uses AI-generated copy (ChatGPT-5) instead
-
-# Campaign & AdSet IDs (root level for backward compatibility)
-# Single ASC+ Campaign Setup
 ids:
-  asc_plus_campaign_id: "120234137971970160"  # ASC+ Campaign ID
-  asc_plus_adset_id: "120234137971980160"    # ASC+ Ad Set ID
-  # Legacy IDs removed - system now uses only ASC+ campaign
+  asc_plus_campaign_id: "120234137971970160"
+  asc_plus_adset_id: "120234137971980160"
 
-# ── Meta API Defaults ────────────────────────────────
-meta:
-  objective: "SALES"
-  conversion_location: "website"
-  pixel_event: "Purchase"
-  bid_strategy: "lowest_cost"  # No manual bid caps
-  campaign_type: "SHOPPING"  # Advantage+ Shopping Campaign (ASC)
-  
-  attribution:
-    click_days: 7
-    view_days: 1
-    roas_source: "computed"
-  
-  geo:
-    country: "US"
-  
-  audience:
-    type: "broad"
-    country: "US"                           # United States only
-    gender: "male"
-    age_min: 18
-    age_max: 54
-    # No interests, no manual narrowing - pure broad targeting
-    # No exclusions - allowing pixel to learn naturally
-  
-  creative:
-    dynamic_creative: false
-    cta: "SHOP_NOW"
-    link_url_env: "STORE_URL"
-    instagram_actor_id_env: "IG_ACTOR_ID"
-    creative_type: "static_image"  # Static images instead of UGC videos
-
-# ── Placements ───────────────────────────────────────
 placements:
-  default:
-    publisher_platforms: ["facebook", "instagram"]
-    device_platforms: ["mobile", "desktop"]
-    facebook_positions: ["feed", "video_feeds", "marketplace"]
-    instagram_positions: ["feed", "story", "reels", "explore"]
-    messenger_positions: []
-    audience_network_positions: []
+  asc_plus:
+    advantage_plus_placements: true
 
-# ── ASC+ Campaign Configuration (lint baseline; production overrides detailed settings) ──
 asc_plus:
-  daily_budget_eur: 100                    # Fixed €100/day for 30-day ATC learning phase
-  keep_ads_live: 10
-  max_active_ads: 10
+  daily_budget_eur: 100
   target_active_ads: 10
-  optimization_goal: "ADD_TO_CART"         # ATC optimization - teaching pixel buyer intent patterns
+  optimization_goal: "ADD_TO_CART"
   naming_prefix: "[ASC+]"
 
-# Scheduler cadence aligns with Andromeda requirement (10 creatives, 30-minute checks)
 scheduler:
-  asc_plus_tick_minutes: 30                 # Primary automation tick cadence (GitHub Actions matched)
-  summary_minutes: 180                      # Summary digest cadence (3 hours)
-  daily_digest_time_local: "08:00"          # Daily digest dispatch time (local timezone)
+  asc_plus_tick_minutes: 60
   run_order:
-    - "asc_plus"                            # Ensure ASC+ stage executes first each tick
+    - "asc_plus"
 
-# ── Queue Management (Legacy - Not used by ASC+ which generates creatives dynamically) ──
-queue:
-  source: "supabase"  # or "csv"
-  table: "meta_creatives"
-  
-  schema:
-    required_columns: []  # ASC+ generates creatives dynamically, no queue needed
-    optional_columns: ["creative_id", "name", "image_url", "image_hash", "primary_text", "headline", "description"]
-  
-  validation:
-    check_media_exists: false  # Images are generated on-the-fly
-    min_duration_sec: null     # Not applicable for static images
-    max_duration_sec: null    # Not applicable for static images
-  
-  dedupe_by: ["creative_id", "name"]
-  prioritization: "fifo"
-
-# ── Notifications ─────────────────────────────────────
-notifications:
-  slack:
-    enabled: true
-    default_webhook_env: "SLACK_WEBHOOK_URL"
-    errors_webhook_env: "SLACK_WEBHOOK_URL_ERRORS"
-    
-    routing:
-      info: "default"
-      warn: "default"
-      error: "errors"
-    
-    digest:
-      enabled: true
-      time_local: "08:30"
-      timezone: "Europe/Amsterdam"
-
-# ── Data & Logging ────────────────────────────────────
 logging:
-  # SQLite for local state (required for fast operations)
   sqlite:
-    enabled: true
-    path: "data/state.sqlite"  # Relative to project root (dean/)
-  
-  # Supabase for ML data (required for ML mode)
-  supabase:
-    enabled: true
-    table_env: "SUPABASE_TABLE"
-  
-  # Action logs
-  actions_log: "data/actions.log.jsonl"
-  
-  # Daily digests
-  digests_dir: "data/digests"
-
-# ── Creative Intelligence System ──────────────────────
-# Note: Most creative_intelligence config keys are unused
-# ASC+ uses AI-generated copy (ChatGPT-5) instead of copy_bank
-creative_intelligence:
-  # All creative_intelligence config keys are currently unused
+    path: "data/state.sqlite"

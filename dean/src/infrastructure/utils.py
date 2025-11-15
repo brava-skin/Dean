@@ -11,9 +11,6 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 import pytz
 
 
-# -----------------------
-# Clock primitives
-# -----------------------
 class Clock:
     def now_utc(self) -> datetime:
         raise NotImplementedError
@@ -65,19 +62,14 @@ def _require_tz(name: str) -> pytz.BaseTzInfo:
         raise ValueError(f"Invalid IANA timezone: {name!r}") from e
 
 
-# -----------------------
-# Config (Time & Currency)
-# -----------------------
 @dataclass(frozen=True)
 class TZConfig:
     account_tz: str
     user_tz: str
-    # Optional audience tz (for mapping windows like Chicago → Amsterdam)
     audience_tz: str = "America/Chicago"
 
     @staticmethod
     def from_env() -> "TZConfig":
-        # NEW DEFAULT: Europe/Amsterdam for the ad account
         acc = os.getenv("ACCOUNT_TIMEZONE") or os.getenv("TIMEZONE") or "Europe/Amsterdam"
         usr = os.getenv("USER_TIMEZONE") or "Europe/Amsterdam"
         aud = os.getenv("AUDIENCE_TIMEZONE") or "America/Chicago"
@@ -89,10 +81,8 @@ class TZConfig:
 
 @dataclass(frozen=True)
 class CurrencyConfig:
-    # NEW: currency helpers (defaults to EUR account, product USD)
     account_currency: str = "EUR"
     product_currency: str = "USD"
-    # Prefer live rate via env; fallback constant if not set
     usd_eur_rate: float = float(os.getenv("USD_EUR_RATE") or os.getenv("EXCHANGE_RATE_USD_EUR") or 0.92)
 
     @staticmethod
@@ -107,9 +97,6 @@ class CurrencyConfig:
         return CurrencyConfig(acc, prod, rate)
 
 
-# -----------------------
-# Timekit core
-# -----------------------
 class Timekit:
     def __init__(self, tzcfg: Optional[TZConfig] = None, clock: Optional[Clock] = None,
                  curr: Optional[CurrencyConfig] = None):
@@ -121,7 +108,6 @@ class Timekit:
         self._usr = _require_tz(self.tzcfg.user_tz)
         self._aud = _require_tz(self.tzcfg.audience_tz)
 
-    # --- now() helpers
     def now_utc(self) -> datetime:
         return self.clock.now_utc()
 
@@ -134,7 +120,6 @@ class Timekit:
     def now_audience(self) -> datetime:
         return self.now_utc().astimezone(self._aud)
 
-    # --- day boundaries & ymd
     @staticmethod
     def start_of_day(dt: datetime) -> datetime:
         if dt.tzinfo is None:
@@ -163,7 +148,6 @@ class Timekit:
     def yesterday_ymd_user(self) -> str:
         return self.ymd(self.now_user() - timedelta(days=1))
 
-    # --- windows
     def calendar_day_window_account(self, days_ago: int = 0) -> Tuple[datetime, datetime]:
         base = self.now_account() - timedelta(days=days_ago)
         s = self.start_of_day(base)
@@ -189,7 +173,6 @@ class Timekit:
         s = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         return s, self.end_of_day(now)
 
-    # --- Meta-style ranges (account tz)
     def meta_range_today(self) -> Dict[str, str]:
         d = self.today_ymd_account()
         return {"since": d, "until": d}
@@ -214,7 +197,6 @@ class Timekit:
         s, e = self.month_to_date_account()
         return {"since": self.ymd(s), "until": self.ymd(e)}
 
-    # --- DST / tick
     def dst_state_account(self) -> Dict[str, Union[bool, int]]:
         now = self.now_account()
         off = now.utcoffset() or timedelta(0)
@@ -241,10 +223,11 @@ class Timekit:
         tz = dt_local.tzinfo
         before = (dt_local - timedelta(minutes=30)).astimezone(tz)
         after = (dt_local + timedelta(minutes=30)).astimezone(tz)
-        return {"possible_gap": after.utcoffset() != dt_local.utcoffset(),
-                "possible_fold": before.utcoffset() != dt_local.utcoffset()}
+        return {
+            "possible_gap": after.utcoffset() != dt_local.utcoffset(),
+            "possible_fold": before.utcoffset() != dt_local.utcoffset()
+        }
 
-    # --- window parsing / expansion (24h clock strings -> hours)
     @staticmethod
     def parse_window_str(s: str) -> Tuple[int, int]:
         m = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*", s)
@@ -266,7 +249,6 @@ class Timekit:
                 hours.extend(list(range(a, 24)) + list(range(0, b + 1)))
         return tuple(sorted(set(hours)))
 
-    # --- Should pause (true if current hour IS in pause list)
     def should_pause_now(
         self,
         stage_hours: Union[Tuple[int, ...], Dict[int, Tuple[int, ...]]],
@@ -282,14 +264,12 @@ class Timekit:
             hours = stage_hours
         return hour in hours
 
-    # --- ISO with no micros
     @staticmethod
     def iso_no_micro(dt: datetime) -> str:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(dt.tzinfo).replace(microsecond=0).isoformat()
 
-    # --- Banner
     def banner(self) -> str:
         n = self.now_utc()
         a = self.now_account()
@@ -304,9 +284,6 @@ class Timekit:
             f"CURR[acct={self.curr.account_currency}, prod={self.curr.product_currency}, usd→eur≈{self.curr.usd_eur_rate:.4f}]"
         )
 
-    # ---------------------------------------------------------------------
-    # NEW: Hour mapping helpers (e.g., Chicago audience hours -> Amsterdam)
-    # ---------------------------------------------------------------------
     @staticmethod
     def _map_hours_between_tz(
         hours: Sequence[int],
@@ -314,30 +291,17 @@ class Timekit:
         dst_tz: pytz.BaseTzInfo,
         on_date: Optional[date] = None,
     ) -> Tuple[int, ...]:
-        """
-        Map a set of whole hours defined in src_tz to the corresponding hours in dst_tz
-        preserving the *absolute* instants. Handles DST properly.
-
-        on_date: date in dst_tz on which to interpret the mapping (defaults to today in dst).
-        """
         if not hours:
             return tuple()
-
         if on_date is None:
-            # Use today's date in dst_tz
             now_dst = datetime.now(timezone.utc).astimezone(dst_tz)
             on_date = now_dst.date()
-
         mapped: List[int] = []
-        # Use the *same* civil date in src_tz that corresponds to that day in dst_tz midnight
         dst_midnight = dst_tz.localize(datetime(on_date.year, on_date.month, on_date.day, 0, 0, 0))
-        # Convert midnight in dst to src to figure which src civil date overlaps
         src_ref = dst_midnight.astimezone(src_tz)
         src_date = src_ref.date()
-
         for h in sorted(set(int(h) % 24 for h in hours)):
             src_local = src_tz.localize(datetime(src_date.year, src_date.month, src_date.day, h, 0, 0))
-            # Convert that instant to dst tz and collect the hour
             dst_local = src_local.astimezone(dst_tz)
             mapped.append(dst_local.hour)
 
@@ -346,48 +310,31 @@ class Timekit:
     def audience_hours_to_account(
         self, audience_hours: Sequence[int], on_date: Optional[date] = None
     ) -> Tuple[int, ...]:
-        """Convenience: map America/Chicago hours → Account (Europe/Amsterdam)."""
         return self._map_hours_between_tz(audience_hours, self._aud, self._acc, on_date)
 
-    # ---------------------------------------------------------------------
-    # NEW: Currency helpers (USD → Account / generic)
-    # ---------------------------------------------------------------------
     def convert(self, amount: float, from_ccy: str, to_ccy: str) -> float:
         from_ccy = from_ccy.upper()
         to_ccy = to_ccy.upper()
         if from_ccy == to_ccy:
             return float(amount)
-
-        # Currently we only handle USD<->EUR simply; extend as needed
         if from_ccy == "USD" and to_ccy == "EUR":
             return float(amount) * float(self.curr.usd_eur_rate)
         if from_ccy == "EUR" and to_ccy == "USD":
             rate = 1.0 / float(self.curr.usd_eur_rate) if self.curr.usd_eur_rate else 0.0
             return float(amount) * rate
-
-        # If more currencies are needed, plug in your FX source here or raise.
         raise ValueError(f"Unsupported conversion {from_ccy}->{to_ccy}")
 
     def usd_to_account(self, amount_usd: float) -> float:
-        """Convert USD amount to account currency using config."""
         if self.curr.account_currency == "EUR":
             return self.convert(amount_usd, "USD", "EUR")
         if self.curr.account_currency == "USD":
             return float(amount_usd)
-        # Extend if you ever switch account currency to something else
         raise ValueError(f"Unsupported account currency {self.curr.account_currency}")
 
     def tripwire_threshold_account(self, product_price_usd: float, multiple: float = 2.0) -> float:
-        """
-        Example: 'Instant tripwire: spend ≥ 2× product price (USD→EUR) & 0 purchases'
-        Returns the spend threshold in *account currency*.
-        """
         return self.usd_to_account(product_price_usd * multiple)
 
 
-# -----------------------
-# Singleton accessors
-# -----------------------
 @lru_cache(maxsize=1)
 def _kit() -> Timekit:
     return Timekit()
@@ -408,53 +355,28 @@ def tick_key(period_minutes: int = 30, for_user_display: bool = False) -> str: r
 def describe_tick(period_minutes: int = 30) -> str: return _kit().describe_tick(period_minutes)
 def dst_state_account() -> Dict[str, Union[bool, int]]: return _kit().dst_state_account()
 def banner() -> str: return _kit().banner()
-
-# NEW: public currency helpers
 def usd_to_account(amount_usd: float) -> float: return _kit().usd_to_account(amount_usd)
 def convert(amount: float, from_ccy: str, to_ccy: str) -> float: return _kit().convert(amount, from_ccy, to_ccy)
 def tripwire_threshold_account(product_price_usd: float, multiple: float = 2.0) -> float:
     return _kit().tripwire_threshold_account(product_price_usd, multiple)
-
-# NEW: public hour mapping (e.g., define Chicago prime hours and map them to AMS)
 def audience_hours_to_account(hours: Sequence[int], on_date: Optional[date] = None) -> Tuple[int, ...]:
     return _kit().audience_hours_to_account(hours, on_date)
 
-
-# -----------------------
-# Misc legacy helpers
-# -----------------------
 def now_local(tz_name: str) -> datetime:
-    """
-    Return the current datetime in the provided IANA timezone (aware datetime).
-    Used by main.py for human-friendly logging.
-    """
     tz = _require_tz(tz_name)
     return now_utc().astimezone(tz)
 
 def today_ymd(tz: timezone | None = None) -> str:
-    """
-    Legacy helper used by meta_client.py.
-    Defaults to account timezone to match delivery/reporting windows.
-    """
     if tz is None:
         return today_ymd_account()
     return now_utc().astimezone(tz).date().isoformat()
 
 def yesterday_ymd(tz: timezone | None = None) -> str:
-    """
-    Legacy helper used by meta_client.py.
-    Defaults to account timezone to match delivery/reporting windows.
-    """
     if tz is None:
         return yesterday_ymd_account()
     return (now_utc().astimezone(tz) - timedelta(days=1)).date().isoformat()
 
-
-# -----------------------
-# Config helpers (consolidated from duplicate files)
-# -----------------------
 def getenv_f(name: str, default: float) -> float:
-    """Get environment variable as float with fallback."""
     try:
         return float(os.getenv(name, str(default)))
     except Exception:
@@ -462,7 +384,6 @@ def getenv_f(name: str, default: float) -> float:
 
 
 def getenv_i(name: str, default: int) -> int:
-    """Get environment variable as int with fallback."""
     try:
         return int(float(os.getenv(name, str(default))))
     except Exception:
@@ -470,13 +391,11 @@ def getenv_i(name: str, default: int) -> int:
 
 
 def getenv_b(name: str, default: bool) -> bool:
-    """Get environment variable as bool with fallback."""
     raw = os.getenv(name, str(int(default))).lower()
     return raw in ("1", "true", "yes", "y")
 
 
 def cfg(settings: Dict[str, Any], path: str, default: Any = None) -> Any:
-    """Get nested config value by dot-separated path."""
     cur: Any = settings
     for part in path.split("."):
         if not isinstance(cur, dict) or part not in cur:
@@ -486,7 +405,6 @@ def cfg(settings: Dict[str, Any], path: str, default: Any = None) -> Any:
 
 
 def cfg_or_env_f(settings: Dict[str, Any], path: str, env: str, default: float) -> float:
-    """Get config value or environment variable as float."""
     v = cfg(settings, path, None)
     if v is None:
         return getenv_f(env, default)
@@ -497,7 +415,6 @@ def cfg_or_env_f(settings: Dict[str, Any], path: str, env: str, default: float) 
 
 
 def cfg_or_env_i(settings: Dict[str, Any], path: str, env: str, default: int) -> int:
-    """Get config value or environment variable as int."""
     v = cfg(settings, path, None)
     if v is None:
         return getenv_i(env, default)
@@ -508,7 +425,6 @@ def cfg_or_env_i(settings: Dict[str, Any], path: str, env: str, default: int) ->
 
 
 def cfg_or_env_b(settings: Dict[str, Any], path: str, env: str, default: bool) -> bool:
-    """Get config value or environment variable as bool."""
     v = cfg(settings, path, None)
     if v is None:
         return getenv_b(env, default)
@@ -518,7 +434,6 @@ def cfg_or_env_b(settings: Dict[str, Any], path: str, env: str, default: bool) -
 
 
 def cfg_or_env_list(settings: Dict[str, Any], path: str, env: str, default: List[str]) -> List[str]:
-    """Get config value or environment variable as list."""
     v = cfg(settings, path, None)
     if v is None:
         raw = os.getenv(env, ",".join(default))
@@ -528,11 +443,7 @@ def cfg_or_env_list(settings: Dict[str, Any], path: str, env: str, default: List
     return [str(v).strip()]
 
 
-# -----------------------
-# Number formatting helpers (consolidated from slack.py)
-# -----------------------
 def safe_f(v: Any, default: float = 0.0) -> float:
-    """Safely convert any value to float."""
     try:
         if v is None:
             return default
@@ -544,7 +455,6 @@ def safe_f(v: Any, default: float = 0.0) -> float:
 
 
 def fmt_currency(amount: Optional[float | str]) -> str:
-    """Format currency with Euro symbol."""
     if amount is None:
         return "–"
     try:
@@ -557,7 +467,6 @@ def fmt_currency(amount: Optional[float | str]) -> str:
 
 
 def fmt_pct(v: Optional[float | str], decimals: int = 1) -> str:
-    """Format percentage with specified decimal places."""
     if v is None:
         return "–"
     try:
@@ -568,7 +477,6 @@ def fmt_pct(v: Optional[float | str], decimals: int = 1) -> str:
 
 
 def fmt_int(v: Optional[int | float | str]) -> str:
-    """Format integer."""
     if v is None:
         return "–"
     try:
@@ -578,68 +486,39 @@ def fmt_int(v: Optional[int | float | str]) -> str:
 
 
 def fmt_roas(value: Optional[float]) -> str:
-    """Format ROAS with 2 decimal places."""
     if value is None:
         return "–"
     return f"{value:.2f}"
 
 
-# -----------------------
-# Time helpers (consolidated from duplicate files)
-# -----------------------
 def today_str() -> str:
-    """Get today's date string in account timezone."""
     return today_ymd_account()
 
-
 def daily_key(stage: str, metric: str) -> str:
-    """Generate daily counter key."""
     return f"daily::{today_str()}::{stage}::{metric}"
 
-
 def ad_day_flag_key(ad_id: str, flag: str) -> str:
-    """Generate ad day flag key."""
     return f"ad::{ad_id}::{flag}::{today_str()}"
 
-
 def now_minute_key(prefix: str) -> str:
-    """Generate minute-based key."""
     return f"{prefix}::{now_account().strftime('%Y-%m-%dT%H:%M')}"
 
-
-# -----------------------
-# Text cleaning helpers
-# -----------------------
 def clean_text_token(v: Any) -> str:
-    """Clean text token for display."""
     s = str(v or "")
     s = s.replace("_", " ")
     return " ".join(s.split()).strip()
 
-
 def prettify_ad_name(name: str) -> str:
-    """Clean up ad display names for mobile-friendly display."""
     if not name:
         return "UNNAMED"
-    
-    # Remove stage prefixes
     cleaned = re.sub(r'^\[(TEST|VALID|SCALE)\]\s*', '', name.strip())
-    
-    # Clean up common patterns
     cleaned = cleaned.replace('_', ' ')
-    cleaned = re.sub(r'\s+', ' ', cleaned)  # Multiple spaces to single
+    cleaned = re.sub(r'\s+', ' ', cleaned)
     cleaned = cleaned.strip()
-    
-    # Truncate if too long
     if len(cleaned) > 30:
         cleaned = cleaned[:27] + "..."
-    
     return cleaned or "UNNAMED"
 
-
-# -----------------------
-# Drift checker (unchanged)
-# -----------------------
 class DriftChecker:
     def __init__(self):
         self._t0_wall = time.time()

@@ -1,26 +1,22 @@
-"""
-Comprehensive Data Validation System for Supabase
-================================================
-This module provides field-level validation for all Supabase table operations.
-Prevents invalid data from being stored by validating every field before insertion.
-Includes date validation and correction utilities.
-"""
+from __future__ import annotations
 
 import re
 import json
 import logging
 import os
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Any, Optional, Union, Callable
+from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass
 from enum import Enum
+import pandas as pd
+import numpy as np
+
 from config import CREATIVE_PERFORMANCE_STAGE_VALUE
 
 logger = logging.getLogger(__name__)
 STRICT_MODE = os.getenv("STRICT_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 class ValidationError(Exception):
-    """Custom exception for validation errors."""
     def __init__(self, message: str, field: str = None, value: Any = None):
         self.message = message
         self.field = field
@@ -28,14 +24,12 @@ class ValidationError(Exception):
         super().__init__(message)
 
 class ValidationSeverity(Enum):
-    """Validation severity levels."""
-    ERROR = "error"      # Block insertion
-    WARNING = "warning"  # Log warning but allow insertion
-    INFO = "info"        # Log info but allow insertion
+    ERROR = "error"
+    WARNING = "warning"
+    INFO = "info"
 
 @dataclass
 class ValidationResult:
-    """Result of a validation operation."""
     is_valid: bool
     errors: List[str]
     warnings: List[str]
@@ -43,8 +37,6 @@ class ValidationResult:
     sanitized_data: Dict[str, Any]
 
 class FieldValidator:
-    """Base class for field validators."""
-    
     def __init__(self, field_name: str, required: bool = False, severity: ValidationSeverity = ValidationSeverity.ERROR, default: Any = None):
         self.field_name = field_name
         self.required = required
@@ -52,41 +44,27 @@ class FieldValidator:
         self.default = default
     
     def validate(self, value: Any, data: Dict[str, Any]) -> List[str]:
-        """Validate a field value. Return list of error messages."""
         errors = []
-        
-        # Check required fields
         if self.required and (value is None or value == ''):
             errors.append(f"Field '{self.field_name}' is required")
             return errors
-        
-        # Skip validation for None/empty values if not required
         if not self.required and (value is None or value == ''):
             return errors
-        
-        # Perform field-specific validation
         field_errors = self._validate_field(value, data)
         errors.extend(field_errors)
-        
         return errors
     
     def _validate_field(self, value: Any, data: Dict[str, Any]) -> List[str]:
-        """Override in subclasses for field-specific validation."""
         return []
     
     def sanitize(self, value: Any) -> Any:
-        """Sanitize/clean the field value. Override in subclasses."""
-        # Apply default if value is None or empty
         if (value is None or value == '') and self.default is not None:
             return self.default
-        # Convert empty strings to None for optional fields (to match database NULL)
         if value == '' and not self.required:
             return None
         return value
 
 class StringValidator(FieldValidator):
-    """Validator for string fields."""
-    
     def __init__(self, field_name: str, max_length: int = None, min_length: int = None, 
                  pattern: str = None, allowed_values: List[str] = None, **kwargs):
         super().__init__(field_name, **kwargs)
@@ -97,43 +75,28 @@ class StringValidator(FieldValidator):
     
     def _validate_field(self, value: Any, data: Dict[str, Any]) -> List[str]:
         errors = []
-        
-        # Convert to string
         str_value = str(value) if value is not None else ""
-        
-        # Check length constraints
         if self.min_length and len(str_value) < self.min_length:
             errors.append(f"Field '{self.field_name}' must be at least {self.min_length} characters")
-        
         if self.max_length and len(str_value) > self.max_length:
             errors.append(f"Field '{self.field_name}' must be at most {self.max_length} characters")
-        
-        # Check pattern
         if self.pattern and str_value:
             if not re.match(self.pattern, str_value):
                 errors.append(f"Field '{self.field_name}' does not match required pattern")
-        
-        # Check allowed values
         if self.allowed_values and str_value not in self.allowed_values:
             errors.append(f"Field '{self.field_name}' must be one of: {', '.join(self.allowed_values)}")
-        
         return errors
     
     def sanitize(self, value: Any) -> Optional[str]:
-        """Sanitize string value."""
         if value is None or value == '':
             if self.default is not None:
                 return str(self.default)
-            # For optional fields, return None (becomes NULL in database)
-            # For required fields, return empty string (will be caught by validation)
             if not self.required:
                 return None
             return ""
         return str(value).strip()
 
 class IntegerValidator(FieldValidator):
-    """Validator for integer fields."""
-    
     def __init__(self, field_name: str, min_value: int = None, max_value: int = None, **kwargs):
         super().__init__(field_name, **kwargs)
         self.min_value = min_value
@@ -141,24 +104,18 @@ class IntegerValidator(FieldValidator):
     
     def _validate_field(self, value: Any, data: Dict[str, Any]) -> List[str]:
         errors = []
-        
         try:
             int_value = int(value)
         except (ValueError, TypeError):
             errors.append(f"Field '{self.field_name}' must be a valid integer")
             return errors
-        
-        # Check range constraints
         if self.min_value is not None and int_value < self.min_value:
             errors.append(f"Field '{self.field_name}' must be at least {self.min_value}")
-        
         if self.max_value is not None and int_value > self.max_value:
             errors.append(f"Field '{self.field_name}' must be at most {self.max_value}")
-        
         return errors
     
     def sanitize(self, value: Any) -> Optional[int]:
-        """Sanitize integer value."""
         if value is None or value == '':
             if self.default is not None:
                 return int(self.default)
@@ -171,8 +128,6 @@ class IntegerValidator(FieldValidator):
             return None
 
 class FloatValidator(FieldValidator):
-    """Validator for float fields."""
-    
     def __init__(self, field_name: str, min_value: float = None, max_value: float = None, 
                  allow_inf: bool = False, allow_nan: bool = False, **kwargs):
         super().__init__(field_name, **kwargs)
@@ -183,61 +138,44 @@ class FloatValidator(FieldValidator):
     
     def _validate_field(self, value: Any, data: Dict[str, Any]) -> List[str]:
         errors = []
-        
         try:
             float_value = float(value)
         except (ValueError, TypeError):
             errors.append(f"Field '{self.field_name}' must be a valid number")
             return errors
-        
-        # Check for infinity
         if not self.allow_inf and (float_value == float('inf') or float_value == float('-inf')):
             errors.append(f"Field '{self.field_name}' cannot be infinity")
-        
-        # Check for NaN
-        if not self.allow_nan and float_value != float_value:  # NaN check
+        if not self.allow_nan and float_value != float_value:
             errors.append(f"Field '{self.field_name}' cannot be NaN")
-        
-        # Check range constraints
         if self.min_value is not None and float_value < self.min_value:
             errors.append(f"Field '{self.field_name}' must be at least {self.min_value}")
-        
         if self.max_value is not None and float_value > self.max_value:
             errors.append(f"Field '{self.field_name}' must be at most {self.max_value}")
-        
         return errors
     
     def sanitize(self, value: Any) -> Optional[float]:
-        """Sanitize float value."""
         if value is None or value == '':
             if self.default is not None:
                 return float(self.default)
             return None
         try:
             float_value = float(value)
-            # Handle infinity and NaN
             if not self.allow_inf and (float_value == float('inf') or float_value == float('-inf')):
                 return 0.0
-            if not self.allow_nan and float_value != float_value:  # NaN check
+            if not self.allow_nan and float_value != float_value:
                 return 0.0
             return float_value
         except (ValueError, TypeError):
             return None
 
 class BooleanValidator(FieldValidator):
-    """Validator for boolean fields."""
-    
     def _validate_field(self, value: Any, data: Dict[str, Any]) -> List[str]:
         errors = []
-        
-        # Accept various boolean representations
         if value not in [True, False, 1, 0, "true", "false", "1", "0", "yes", "no"]:
             errors.append(f"Field '{self.field_name}' must be a boolean value")
-        
         return errors
     
     def sanitize(self, value: Any) -> Optional[bool]:
-        """Sanitize boolean value."""
         if value is None or value == '':
             return None
         
@@ -253,12 +191,9 @@ class BooleanValidator(FieldValidator):
         return None
 
 class DateValidator(FieldValidator):
-    """Validator for date fields with flexible format support."""
-    
     def __init__(self, field_name: str, date_format: str = "%Y-%m-%d", **kwargs):
         super().__init__(field_name, **kwargs)
         self.date_format = date_format
-        # Common date formats to try
         self.common_formats = [
             "%Y-%m-%dT%H:%M:%S",
             "%Y-%m-%dT%H:%M:%S.%f",
@@ -273,55 +208,40 @@ class DateValidator(FieldValidator):
     
     def _validate_field(self, value: Any, data: Dict[str, Any]) -> List[str]:
         errors = []
-        
         if isinstance(value, str) and value:
-            # Try the specified format first
             try:
                 datetime.strptime(value, self.date_format)
                 return errors
             except ValueError:
                 pass
-            
-            # Try common formats
             for fmt in self.common_formats:
                 try:
                     datetime.strptime(value, fmt)
                     return errors
                 except ValueError:
                     continue
-            
             errors.append(f"Field '{self.field_name}' must be a valid date in format {self.date_format}")
-        
         return errors
     
     def sanitize(self, value: Any) -> Optional[str]:
-        """Sanitize date value."""
         if value is None or value == '':
             return None
-        
         if isinstance(value, str):
-            # Try the specified format first
             try:
                 datetime.strptime(value, self.date_format)
                 return value
             except ValueError:
                 pass
-            
-            # Try common formats and convert to the specified format
             for fmt in self.common_formats:
                 try:
                     dt = datetime.strptime(value, fmt)
                     return dt.strftime(self.date_format)
                 except ValueError:
                     continue
-            
             return None
-        
         return None
 
 class JSONValidator(FieldValidator):
-    """Validator for JSON fields."""
-    
     def _validate_field(self, value: Any, data: Dict[str, Any]) -> List[str]:
         errors = []
         
@@ -337,7 +257,6 @@ class JSONValidator(FieldValidator):
         return errors
     
     def sanitize(self, value: Any) -> Optional[Dict[str, Any]]:
-        """Sanitize JSON value."""
         if value is None or value == '':
             return None
         
@@ -353,8 +272,6 @@ class JSONValidator(FieldValidator):
         return None
 
 class CustomValidator(FieldValidator):
-    """Validator for custom validation logic."""
-    
     def __init__(self, field_name: str, validation_func: Callable[[Any, Dict[str, Any]], List[str]], 
                  sanitize_func: Callable[[Any], Any] = None, **kwargs):
         super().__init__(field_name, **kwargs)
@@ -368,15 +285,12 @@ class CustomValidator(FieldValidator):
             return [f"Custom validation error for '{self.field_name}': {str(e)}"]
     
     def sanitize(self, value: Any) -> Any:
-        """Sanitize using custom function."""
         try:
             return self.sanitize_func(value)
         except Exception:
             return value
 
 class UnitEnforcer:
-    """Enforce metric unit expectations (fractions vs currency) before persistence."""
-
     FRACTION_FIELDS = {
         "ctr",
         "unique_ctr",
@@ -434,31 +348,20 @@ class UnitEnforcer:
         return errors
 
 class TableValidator:
-    """Validator for entire Supabase tables."""
-    
     def __init__(self, table_name: str, validators: Dict[str, FieldValidator]):
         self.table_name = table_name
         self.validators = validators
     
     def validate(self, data: Dict[str, Any]) -> ValidationResult:
-        """Validate all fields in the data."""
         errors = []
         warnings = []
         info = []
         sanitized_data = {}
-        
-        # Validate each field
         for field_name, validator in self.validators.items():
             value = data.get(field_name)
-            
-            # Apply default if value is missing and default is set
             if value is None and validator.default is not None:
                 value = validator.default
-            
-            # Validate field
             field_errors = validator.validate(value, data)
-            
-            # Categorize by severity
             for error in field_errors:
                 if validator.severity == ValidationSeverity.ERROR:
                     errors.append(f"{field_name}: {error}")
@@ -466,19 +369,13 @@ class TableValidator:
                     warnings.append(f"{field_name}: {error}")
                 else:
                     info.append(f"{field_name}: {error}")
-            
-            # Sanitize field (will apply default if needed)
             sanitized_value = validator.sanitize(value)
-            if sanitized_value is not None or field_name in data:  # Include if in data or has default
+            if sanitized_value is not None or field_name in data:
                 sanitized_data[field_name] = sanitized_value
-        
-        # Check for missing required fields (but allow defaults)
         for field_name, validator in self.validators.items():
             if validator.required and field_name not in data and validator.default is None:
                 errors.append(f"Required field '{field_name}' is missing")
-        
         is_valid = len(errors) == 0
-        
         return ValidationResult(
             is_valid=is_valid,
             errors=errors,
@@ -488,19 +385,12 @@ class TableValidator:
         )
 
 class SupabaseDataValidator:
-    """Main validator class for all Supabase operations."""
-    
     def __init__(self):
         self.table_validators = self._create_table_validators()
         self.unit_enforcer = UnitEnforcer()
     
     def _create_table_validators(self) -> Dict[str, TableValidator]:
-        """Create validators for all Supabase tables."""
         return {
-            # =====================================================
-            # NEW CONSOLIDATED TABLE VALIDATORS
-            # =====================================================
-            
             'ads': TableValidator('ads', {
                 'ad_id': StringValidator('ad_id', required=True, max_length=100),
                 'creative_id': StringValidator('creative_id', required=True, max_length=100),
@@ -508,7 +398,7 @@ class SupabaseDataValidator:
                 'adset_id': StringValidator('adset_id', max_length=100),
                 'status': StringValidator('status', required=True,
                                         allowed_values=['active', 'paused', 'killed'], default='active'),
-                'kill_reason': StringValidator('kill_reason', max_length=500),  # Why the ad was killed
+                'kill_reason': StringValidator('kill_reason', max_length=500),
                 'created_at': DateValidator('created_at', date_format="%Y-%m-%dT%H:%M:%S"),
                 'killed_at': DateValidator('killed_at', date_format="%Y-%m-%dT%H:%M:%S"),
                 'storage_url': StringValidator('storage_url', required=True, max_length=500),
@@ -573,10 +463,7 @@ class SupabaseDataValidator:
             }),
         }
     
-    # Removed: _validate_similarity_vector and _sanitize_similarity_vector - similarity vectors no longer used
-    
     def _validate_tags_array(self, value: Any, data: Dict[str, Any]) -> List[str]:
-        """Validate tags array field."""
         errors = []
         
         if value is None or value == '':
@@ -593,7 +480,6 @@ class SupabaseDataValidator:
         return errors
     
     def _sanitize_tags_array(self, value: Any) -> Optional[List[str]]:
-        """Sanitize tags array."""
         if value is None or value == '':
             return None
         
@@ -602,82 +488,7 @@ class SupabaseDataValidator:
         
         return None
     
-    def _validate_array(self, value: Any, data: Dict[str, Any]) -> List[str]:
-        """Validate array field (for timestamps, values, etc.)."""
-        errors = []
-        
-        if value is None or value == '':
-            return errors  # Optional field
-        
-        if not isinstance(value, list):
-            errors.append("Field must be a list/array")
-        
-        return errors
-    
-    def _sanitize_array(self, value: Any) -> Optional[List]:
-        """Sanitize array field."""
-        if value is None or value == '':
-            return None
-        
-        if isinstance(value, list):
-            return value
-        
-        # Try to convert string representation of list
-        if isinstance(value, str):
-            try:
-                import json
-                return json.loads(value)
-            except:
-                pass
-        
-        return None
-    
-    def _validate_model_data(self, value: Any, data: Dict[str, Any]) -> List[str]:
-        """Validate ML model data."""
-        errors = []
-        
-        if value is None or value == '':
-            return errors
-        
-        min_size_bytes = 64  # Allow lightweight baselines while preventing empty payloads
-
-        if isinstance(value, bytes):
-            # Binary data - check minimum size
-            if len(value) < min_size_bytes:
-                errors.append("Model data appears too small")
-        elif isinstance(value, str):
-            # Check if it's valid hex
-            try:
-                raw_bytes = bytes.fromhex(value)
-                if len(raw_bytes) < min_size_bytes:
-                    errors.append("Model data appears too small")
-            except ValueError:
-                errors.append("Model data must be valid hex string")
-        else:
-            errors.append("Model data must be a hex string or binary data")
-        
-        return errors
-    
-    def _sanitize_model_data(self, value: Any) -> Any:
-        """Sanitize model data."""
-        if value is None or value == '':
-            return None
-        
-        if isinstance(value, bytes):
-            # Return binary data as-is
-            return value
-        elif isinstance(value, str):
-            try:
-                # Validate hex and return
-                bytes.fromhex(value)
-                return value
-            except ValueError:
-                return None
-        
-        return None
-    
     def validate_table_data(self, table_name: str, data: Dict[str, Any]) -> ValidationResult:
-        """Validate data for a specific table."""
         if table_name not in self.table_validators:
             raise ValueError(f"No validator found for table '{table_name}'")
         
@@ -698,15 +509,12 @@ class SupabaseDataValidator:
         return result
     
     def validate_batch_data(self, table_name: str, data_list: List[Dict[str, Any]]) -> List[ValidationResult]:
-        """Validate a batch of data for a specific table."""
         results = []
-        
         for i, data in enumerate(data_list):
             try:
                 result = self.validate_table_data(table_name, data)
                 results.append(result)
             except Exception as e:
-                # Create error result for this item
                 error_result = ValidationResult(
                     is_valid=False,
                     errors=[f"Validation error for item {i}: {str(e)}"],
@@ -718,42 +526,22 @@ class SupabaseDataValidator:
         
         return results
 
-# Global validator instance
 data_validator = SupabaseDataValidator()
 
 def validate_supabase_data(table_name: str, data: Dict[str, Any], 
                           strict_mode: bool = True) -> ValidationResult:
-    """
-    Validate data before inserting into Supabase.
-    
-    Args:
-        table_name: Name of the Supabase table
-        data: Data dictionary to validate
-        strict_mode: If True, errors block insertion. If False, warnings are logged but insertion continues.
-    
-    Returns:
-        ValidationResult with validation status and sanitized data
-    """
     try:
         result = data_validator.validate_table_data(table_name, data)
-        
-        # Log validation results
         if result.errors:
             logger.error(f"Validation errors for {table_name}: {result.errors}")
-        
         if result.warnings:
             logger.warning(f"Validation warnings for {table_name}: {result.warnings}")
-        
         if result.info:
             logger.info(f"Validation info for {table_name}: {result.info}")
-        
-        # In strict mode, errors prevent insertion
         if strict_mode and result.errors:
             logger.error(f"Data validation failed for {table_name}. Insertion blocked.")
             return result
-        
         return result
-        
     except Exception as e:
         logger.error(f"Validation error for {table_name}: {e}")
         return ValidationResult(
@@ -765,10 +553,6 @@ def validate_supabase_data(table_name: str, data: Dict[str, Any],
         )
 
 def validate_and_sanitize_data(table_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Validate and sanitize data for Supabase insertion.
-    Returns sanitized data ready for insertion.
-    """
     result = validate_supabase_data(table_name, data, strict_mode=True)
     
     if not result.is_valid:
@@ -777,20 +561,13 @@ def validate_and_sanitize_data(table_name: str, data: Dict[str, Any]) -> Dict[st
     return result.sanitized_data
 
 
-# =====================================================
-# DATE VALIDATION UTILITIES
-# =====================================================
-
 class DateValidationUtility:
-    """Centralized date validation and correction utility."""
-    
     def __init__(self):
         self.logger = logging.getLogger(f"{__name__}.DateValidationUtility")
         self.min_valid_date = datetime(2020, 1, 1, tzinfo=timezone.utc)
         self.max_future_offset = timedelta(hours=1)
         
     def get_current_timestamp(self) -> datetime:
-        """Get current UTC timestamp."""
         return datetime.now(timezone.utc)
     
     def validate_and_correct_date(self, 
@@ -798,7 +575,6 @@ class DateValidationUtility:
                                 field_name: str = "timestamp",
                                 allow_future: bool = False,
                                 max_future_hours: int = 1) -> datetime:
-        """Validate and correct a date value to ensure it's current and valid."""
         now = self.get_current_timestamp()
         
         if date_value is None or date_value == "":
@@ -827,9 +603,9 @@ class DateValidationUtility:
                 
         elif isinstance(date_value, (int, float)):
             try:
-                if date_value > 1e10:  # Milliseconds
+                if date_value > 1e10:
                     parsed_date = datetime.fromtimestamp(date_value / 1000, tz=timezone.utc)
-                else:  # Seconds
+                else:
                     parsed_date = datetime.fromtimestamp(date_value, tz=timezone.utc)
             except (ValueError, OSError):
                 self.logger.warning(f"Invalid epoch timestamp {field_name} '{date_value}', using current timestamp")
@@ -872,7 +648,6 @@ class DateValidationUtility:
         return parsed_date
     
     def validate_data_timestamps(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate all timestamp fields in a data dictionary."""
         timestamp_fields = [
             'created_at', 'updated_at', 'timestamp', 'expires_at',
             'date_start', 'date_end', 'trained_at', 'recorded_at'
@@ -906,15 +681,12 @@ class DateValidationUtility:
         return data
 
 
-# Global instance for easy access
 date_validator = DateValidationUtility()
 
 def get_validated_timestamp(date_value: Any = None, field_name: str = "timestamp") -> datetime:
-    """Convenience function to get a validated timestamp."""
     return date_validator.validate_and_correct_date(date_value, field_name)
 
 def add_current_timestamps(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Convenience function to add current timestamps to data."""
     now = date_validator.get_current_timestamp()
     if 'created_at' not in data or data['created_at'] is None:
         data['created_at'] = now.isoformat()
@@ -925,8 +697,211 @@ def add_current_timestamps(data: Dict[str, Any]) -> Dict[str, Any]:
     return data
 
 def validate_all_timestamps(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Convenience function to validate all timestamps in data."""
     return date_validator.validate_data_timestamps(data)
+
+
+
+
+class CreativeIntelligenceOptimizer:
+    def __init__(self, supabase_client: Any) -> None:
+        self.client = supabase_client
+    
+    def calculate_performance_metrics(
+        self,
+        creative_id: str,
+        ad_id: str,
+        days_back: int = 30,
+    ) -> Dict[str, float]:
+        try:
+            start_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
+            
+            response = self.client.table('performance_metrics').select(
+                'ctr, cpa, roas, spend, purchases, impressions, clicks'
+            ).eq('ad_id', ad_id).gte('date_start', start_date).execute()
+            
+            if not response.data:
+                try:
+                    creative_response = self.client.table('ads').select(
+                        'ad_id'
+                    ).eq('creative_id', creative_id).execute()
+                    
+                    if creative_response.data:
+                        ad_ids = [row.get('ad_id') for row in creative_response.data if row.get('ad_id')]
+                        if ad_ids:
+                            response = self.client.table('performance_metrics').select(
+                                'ctr, cpa, roas, spend, purchases, impressions, clicks'
+                            ).in_('ad_id', ad_ids).gte('date_start', start_date).execute()
+                except Exception:
+                    pass
+            
+            if not response.data:
+                return {
+                    'avg_ctr': 0.0,
+                    'avg_cpa': 0.0,
+                    'avg_roas': 0.0,
+                    'performance_rank': 999,
+                    'performance_score': 0.0,
+                    'fatigue_index': 0.0,
+                }
+            
+            df = pd.DataFrame(response.data)
+            
+            if 'spend' in df.columns and df['spend'].sum() > 0:
+                total_spend = df['spend'].sum()
+                avg_ctr = (df['ctr'] * df['spend']).sum() / total_spend if total_spend > 0 else df['ctr'].mean()
+                avg_cpa = (df['cpa'] * df['spend']).sum() / total_spend if total_spend > 0 else df['cpa'].mean()
+                avg_roas = (df['roas'] * df['spend']).sum() / total_spend if total_spend > 0 else df['roas'].mean()
+            else:
+                avg_ctr = df['ctr'].mean() if 'ctr' in df.columns else 0.0
+                avg_cpa = df['cpa'].mean() if 'cpa' in df.columns else 0.0
+                avg_roas = df['roas'].mean() if 'roas' in df.columns else 0.0
+            
+            performance_score = self._calculate_performance_score(avg_ctr, avg_cpa, avg_roas)
+            fatigue_index = self._calculate_fatigue_index(df)
+            performance_rank = 999
+            
+            return {
+                'avg_ctr': float(avg_ctr) if not np.isnan(avg_ctr) else 0.0,
+                'avg_cpa': float(avg_cpa) if not np.isnan(avg_cpa) else 0.0,
+                'avg_roas': float(avg_roas) if not np.isnan(avg_roas) else 0.0,
+                'performance_rank': performance_rank,
+                'performance_score': float(performance_score),
+                'fatigue_index': float(fatigue_index),
+            }
+        except Exception as e:
+            logger.error(f"Error calculating performance metrics for {creative_id}: {e}")
+            return {
+                'avg_ctr': 0.0,
+                'avg_cpa': 0.0,
+                'avg_roas': 0.0,
+                'performance_rank': 999,
+                'performance_score': 0.0,
+                'fatigue_index': 0.0,
+            }
+    
+    def _calculate_performance_score(
+        self,
+        avg_ctr: float,
+        avg_cpa: float,
+        avg_roas: float,
+    ) -> float:
+        ctr_score = min(1.0, avg_ctr / 0.02)
+        cpa_score = min(1.0, max(0.0, (50.0 - avg_cpa) / 50.0))
+        roas_score = min(1.0, avg_roas / 3.0)
+        
+        performance_score = (
+            ctr_score * 0.3 +
+            cpa_score * 0.3 +
+            roas_score * 0.4
+        )
+        
+        return max(0.0, min(1.0, performance_score))
+    
+    def _calculate_fatigue_index(self, df: pd.DataFrame) -> float:
+        if len(df) < 3:
+            return 0.0
+        
+        if 'roas' in df.columns and len(df) >= 3:
+            recent_roas = df['roas'].tail(3).mean()
+            older_roas = df['roas'].head(len(df) - 3).mean() if len(df) > 3 else recent_roas
+            
+            if older_roas > 0:
+                decline_pct = (older_roas - recent_roas) / older_roas
+                fatigue_index = max(0.0, min(1.0, decline_pct))
+                return fatigue_index
+        
+        return 0.0
+    
+    def update_creative_performance(
+        self,
+        creative_id: str,
+        ad_id: str,
+        force_recalculate: bool = False,
+    ) -> bool:
+        try:
+            if not force_recalculate:
+                existing = self.client.table('ads').select(
+                    'performance_score, fatigue_index, updated_at'
+                ).eq('ad_id', ad_id).execute()
+                
+                if existing.data:
+                    last_update = existing.data[0].get('updated_at')
+                    if last_update:
+                        try:
+                            last_update_dt = datetime.fromisoformat(last_update.replace('Z', '+00:00'))
+                            hours_since_update = (datetime.now(timezone.utc) - last_update_dt).total_seconds() / 3600
+                            if hours_since_update < 6:
+                                return True
+                        except Exception:
+                            pass
+            
+            metrics = self.calculate_performance_metrics(creative_id, ad_id)
+            
+            update_data = {
+                'performance_score': metrics['performance_score'],
+                'fatigue_index': metrics['fatigue_index'],
+                'updated_at': datetime.now(timezone.utc).isoformat(),
+            }
+            
+            self.client.table('ads').update(update_data).eq(
+                'ad_id', ad_id
+            ).execute()
+            
+            logger.info(f"✅ Updated performance metrics for ad {ad_id} (creative {creative_id})")
+            return True
+        except Exception as e:
+            logger.error(f"Error updating creative performance for {creative_id}: {e}")
+            return False
+    
+    def calculate_performance_ranks(self, stage: str = 'asc_plus') -> bool:
+        logger.debug("Performance ranks calculation skipped - not applicable with consolidated schema")
+        return True
+    
+    def backfill_missing_metrics(self, stage: str = 'asc_plus') -> Dict[str, int]:
+        try:
+            response = self.client.table('ads').select(
+                'ad_id, creative_id, performance_score, fatigue_index'
+            ).limit(1000).execute()
+            
+            if not response.data:
+                return {'updated': 0, 'skipped': 0, 'errors': 0}
+            
+            updated = 0
+            skipped = 0
+            errors = 0
+            
+            for creative in response.data:
+                creative_id = creative.get('creative_id')
+                ad_id = creative.get('ad_id')
+                
+                if not creative_id or not ad_id:
+                    skipped += 1
+                    continue
+                
+                avg_ctr = creative.get('avg_ctr')
+                avg_cpa = creative.get('avg_cpa')
+                avg_roas = creative.get('avg_roas')
+                
+                needs_update = (
+                    avg_ctr is None or 
+                    avg_cpa is None or 
+                    avg_roas is None or
+                    (avg_ctr == 0.0 and avg_cpa == 0.0 and avg_roas == 0.0)
+                )
+                
+                if needs_update:
+                    if self.update_creative_performance(creative_id, ad_id, force_recalculate=True):
+                        updated += 1
+                    else:
+                        errors += 1
+                else:
+                    skipped += 1
+            
+            logger.info(f"✅ Backfilled metrics: {updated} updated, {skipped} skipped, {errors} errors")
+            return {'updated': updated, 'skipped': skipped, 'errors': errors}
+        except Exception as e:
+            logger.error(f"Error backfilling metrics: {e}")
+            return {'updated': 0, 'skipped': 0, 'errors': 1}
 
 
 __all__ = [
@@ -939,4 +914,5 @@ __all__ = [
     "get_validated_timestamp",
     "add_current_timestamps",
     "validate_all_timestamps",
+    "CreativeIntelligenceOptimizer",
 ]

@@ -11,17 +11,14 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import requests
 
-# Import moved to avoid circular dependency - will import locally when needed
-
-# ---- Local time/currency config (AMS + EUR) ----
 try:
-    from zoneinfo import ZoneInfo  # py>=3.9
-except Exception:  # pragma: no cover
-    ZoneInfo = None  # type: ignore
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 
 UTC = timezone.utc
 ACCOUNT_TZ_NAME = os.getenv("ACCOUNT_TZ") or os.getenv("ACCOUNT_TIMEZONE") or "Europe/Amsterdam"
@@ -75,17 +72,14 @@ def _fmt_int(v: Optional[int | float | str]) -> str:
     except Exception:
         return str(v)
 
-# ---- Env helpers ----
 ENVBOOL = lambda v, d=False: (os.getenv(v, str(int(d))) or "").lower() in ("1", "true", "yes", "y")
 ENVINT = lambda v, d: int(os.getenv(v, str(d)) or d)
 ENVF = lambda v, d: float(os.getenv(v, str(d)) or d)
 
-# Disable Slack by default for local runs unless explicitly overridden
 if not os.getenv("SLACK_ENABLED") and not os.getenv("CI"):
     os.environ["SLACK_ENABLED"] = "0"
     os.environ.setdefault("SLACK_DRY_RUN", "1")
 
-# Temporary kill-switch so we can quiet Slack noise during mitigation
 SLACK_TEMP_DISABLED = ENVBOOL("SLACK_TEMP_DISABLE", True)
 
 
@@ -129,7 +123,7 @@ LOG_STDOUT = ENVBOOL("SLACK_LOG_STDOUT", True)
 SLACK_INFO_QUEUE_DROP = ENVINT("SLACK_DROP_INFO_AT", 40)
 
 try:
-    from prometheus_client import Counter, Histogram  # type: ignore
+    from prometheus_client import Counter, Histogram
 
     METRICS = True
     M_SENT = Counter("slack_sent_total", "Messages sent", ["topic"])
@@ -137,25 +131,23 @@ try:
     M_RETRY = Counter("slack_retry_total", "Retries", ["topic"])
     M_QUEUE = Counter("slack_enqueued_total", "Enqueued", ["topic"])
     H_LAT = Histogram("slack_send_latency_seconds", "Send latency", ["topic"])
-except Exception:  # pragma: no cover
+except Exception:
     METRICS = False
     class _N:
         def labels(self, *_, **__): return self
         def inc(self, *_): pass
         def observe(self, *_): pass
-    M_SENT = M_FAIL = M_RETRY = M_QUEUE = H_LAT = _N()  # type: ignore
+    M_SENT = M_FAIL = M_RETRY = M_QUEUE = H_LAT = _N()
 
 
 def _log(msg: str) -> None:
     if LOG_STDOUT:
-        # Replace Unicode emojis with text equivalents for cross-platform console compatibility
         msg = msg.replace("🛑", "[STOP]").replace("⚠️", "[WARN]").replace("🚀", "[LAUNCH]").replace("⬆️", "[SCALE]").replace("🧬", "[DUP]")
         msg = msg.replace("🩺", "[HEALTH]").replace("⏳", "[WAIT]").replace("❌", "[ERROR]").replace("ℹ️", "[INFO]")
         msg = msg.replace("📥", "[LOAD]").replace("📦", "[SAVE]").replace("✅", "[OK]").replace("❗", "[ALERT]")
         try:
             print(msg, flush=True)
         except UnicodeEncodeError:
-            # Fallback: encode as ASCII with error replacement
             print(msg.encode('ascii', 'replace').decode('ascii'), flush=True)
 
 
@@ -180,13 +172,11 @@ def _mk_divider() -> Dict[str, Any]:
 
 
 def _ts_footer() -> str:
-    # Show local AMS time (falls back to UTC if zoneinfo missing)
     now_local = _now_local()
     tz_name = ACCOUNT_TZ_NAME if _tz() else "UTC"
     return f"Sent {now_local.strftime('%Y-%m-%d %H:%M')} {tz_name}"
 
 def _env_webhooks() -> Dict[str, str]:
-    # Get the main webhook URL
     main_webhook = os.getenv("SLACK_WEBHOOK_URL", "") or ""
     
     return {
@@ -268,67 +258,9 @@ EMOJI = {
     "digest": "🧾",
 }
 
-# ---------- Human formatting helpers ----------
-
-def _metrics_compact_line(metrics: Dict[str, Any]) -> str:
-    """
-    Build a compact, human-friendly facts line, trying common keys first.
-    Accepts both numeric and already-formatted strings.
-    Preferred order:
-      €today / €lifetime • CTR • ATC • Purch • ROAS
-    Falls back to a simple "k=v, ..." listing if unknown keys.
-    """
-    # Normalize keys case-insensitively
-    def getk(*names, default=None):
-        for n in names:
-            for k in metrics.keys():
-                if k.lower() == str(n).lower():
-                    return metrics[k]
-        return default
-
-    spend_today = getk("spend_today", "today_spend", "spendToday")
-    spend_life = getk("spend_lifetime", "lifetime_spend", "spendLifetime")
-    ctr = getk("ctr", "CTR", "ctr_today", "CTR_today")
-    atc = getk("atc", "ATC", "adds_to_cart", "add_to_cart")
-    purch = getk("purchases", "purchase", "Purchases")
-    roas = getk("roas", "ROAS", "purchase_roas")
-
-    known_any = any(v not in (None, "", 0) for v in [spend_today, spend_life, ctr, atc, purch, roas])
-    if not known_any:
-        # Fallback: generic listing
-        if not metrics:
-            return ""
-        return ", ".join(f"{k}={v}" for k, v in metrics.items())
-
-    parts: List[str] = []
-    if spend_today is not None or spend_life is not None:
-        left = _fmt_currency(spend_today) if spend_today not in (None, "") else "–"
-        right = _fmt_currency(spend_life) if spend_life not in (None, "") else "–"
-        parts.append(f"{left} / {right}")
-    if ctr not in (None, ""):
-        parts.append(f"CTR {_fmt_pct(ctr)}")
-    if atc not in (None, ""):
-        parts.append(f"ATC {_fmt_int(atc)}")
-    if purch not in (None, ""):
-        parts.append(f"Purch {_fmt_int(purch)}")
-    if roas not in (None, ""):
-        # keep any ROAS precision supplied; if numeric, show 2dp
-        try:
-            roas_val = float(str(roas).replace(",", ""))
-            parts.append(f"ROAS {roas_val:.2f}")
-        except Exception:
-            parts.append(f"ROAS {roas}")
-
-    return " • ".join(parts)
-
 def _mk_title(sev: str, title: str) -> str:
     icon = EMOJI.get(sev, "ℹ️")
     return f"{icon} *{title}*"
-
-def _mk_link(url: Optional[str], label: str = "Open in Ads Manager") -> Optional[str]:
-    if not url:
-        return None
-    return f"<{url}|{label}>"
 
 def _sanitize_line(text: str) -> str:
     if not text:
@@ -342,7 +274,6 @@ def _sanitize_line(text: str) -> str:
 def build_basic_blocks(title: str, lines: List[str], severity: str = "info", footer: Optional[str] = None) -> List[Dict[str, Any]]:
     blocks: List[Dict[str, Any]] = [_mk_section(_mk_title(severity, _sanitize_line(title)))]
     if lines:
-        # stitch lines into sections without exceeding Slack limits
         chunk, acc = [], ""
         for ln in lines:
             ln = _sanitize_line(ln)
@@ -363,10 +294,7 @@ def build_basic_blocks(title: str, lines: List[str], severity: str = "info", foo
         blocks.append(_mk_context(footer))
     return blocks[:MAX_BLOCKS]
 
-# ---------- New messaging helpers ----------
-
 def format_run_header(status: str, time_str: str, profile: str, spend: float, purch: int, cpa: Optional[float], be: Optional[float], impressions: int = 0, clicks: int = 0, ctr: Optional[float] = None, cpc: Optional[float] = None, cpm: Optional[float] = None, atc: int = 0, ic: int = 0, cost_per_atc: Optional[float] = None) -> str:
-    """Format the main run header line."""
     spend_str = _fmt_currency(spend)
     cpa_str = fmt_eur(cpa)
     cost_per_atc_str = fmt_eur(cost_per_atc)
@@ -378,7 +306,6 @@ def format_run_header(status: str, time_str: str, profile: str, spend: float, pu
     cpc_str = fmt_eur(cpc)
     cpm_str = fmt_eur(cpm)
 
-    # Improved format with better spacing and organization
     main_line = (
         f"{time_str} "
         f"Spend {spend_str} · ATC {atc} · IC {ic} · PUR {purch} | "
@@ -389,7 +316,6 @@ def format_run_header(status: str, time_str: str, profile: str, spend: float, pu
     return main_line
 
 def format_stage_line(stage: str, counts: Dict[str, any]) -> str:
-    """Format a single stage summary line - only show non-zero actions."""
     actions = []
     for key, value in counts.items():
         if key == "caps_enforced":
@@ -397,9 +323,7 @@ def format_stage_line(stage: str, counts: Dict[str, any]) -> str:
                 actions.append("Caps relaxed")
             continue
 
-        # Handle both simple integers and complex data structures
         if isinstance(value, dict):
-            # If it's a dictionary, try to extract a count or use the first value
             if 'count' in value:
                 count_value = value['count']
             elif 'total' in value:
@@ -411,13 +335,12 @@ def format_stage_line(stage: str, counts: Dict[str, any]) -> str:
         else:
             count_value = value
         
-        # Ensure count_value is a number for comparison
         try:
             count_value = float(count_value) if count_value is not None else 0
         except (ValueError, TypeError):
             count_value = 0
             
-        if count_value > 0:  # Only show actions that happened
+        if count_value > 0:
             if key == "kills":
                 actions.append(f"Killed {int(count_value)}")
             elif key == "promotions":
@@ -449,40 +372,30 @@ def format_stage_line(stage: str, counts: Dict[str, any]) -> str:
     return f"{stage}: {', '.join(actions)}"
 
 def prettify_ad_name(name: str) -> str:
-    """Clean up ad display names for mobile-friendly display."""
-    # Import locally to avoid circular dependency
     from infrastructure.utils import prettify_ad_name as utils_prettify_ad_name
     return utils_prettify_ad_name(name)
 
 def fmt_eur(amount: Optional[float]) -> str:
-    """Format currency with Euro symbol."""
     if amount is None:
         return "-"
-    # Import locally to avoid circular dependency
     from infrastructure.utils import fmt_currency
     return fmt_currency(amount)
 
 def fmt_pct(value: Optional[float], decimals: int = 1) -> str:
-    """Format percentage with specified decimal places."""
     if value is None:
         return "-"
-    # Import locally to avoid circular dependency
     from infrastructure.utils import fmt_pct as utils_fmt_pct
     return utils_fmt_pct(value, decimals)
 
 def fmt_roas(value: Optional[float]) -> str:
-    """Format ROAS with 2 decimal places."""
     if value is None:
         return "-"
-    # Import locally to avoid circular dependency
     from infrastructure.utils import fmt_roas as utils_fmt_roas
     return utils_fmt_roas(value)
 
 def fmt_int(value: Optional[int]) -> str:
-    """Format integer."""
     if value is None:
         return "-"
-    # Import locally to avoid circular dependency
     from infrastructure.utils import fmt_int as utils_fmt_int
     return utils_fmt_int(value)
 
@@ -504,16 +417,13 @@ def post_run_header_and_get_thread_ts(
     ic: int = 0,
     cost_per_atc: Optional[float] = None
 ) -> Optional[str]:
-    """Post the main run header and return thread timestamp for replies."""
     header_text = format_run_header(status, time_str, profile, spend, purch, cpa, be, impressions, clicks, ctr, cpc, cpm, atc, ic, cost_per_atc)
     
-    # Add stage summaries (only if there are actions)
     stage_lines = []
     for stage_data in stage_summaries:
         stage_name = stage_data.get("stage", "")
         counts = stage_data.get("counts", {})
         stage_line = format_stage_line(stage_name, counts)
-        # Only include stage line if it has actual actions (not just "–")
         if stage_line and not stage_line.endswith(": –"):
             stage_lines.append(stage_line)
     
@@ -522,20 +432,16 @@ def post_run_header_and_get_thread_ts(
     else:
         full_text = header_text
     
-    # Create a SlackMessage with the header
     msg = SlackMessage(
         text=full_text,
         severity="info",
         topic="default"
     )
     
-    # Send the message and return a mock thread timestamp
-    # In a real implementation, you'd capture the actual Slack response
     client().notify(msg)
-    return "mock_thread_ts"  # This would be the actual thread timestamp
+    return "mock_thread_ts"
 
 def post_thread_ads_snapshot(thread_ts: str, ad_lines: List[str], alerts: List[str] = None) -> None:
-    """Post ad snapshot as a thread reply with optional alerts."""
     if not ad_lines and not alerts:
         return
     
@@ -558,20 +464,12 @@ def post_thread_ads_snapshot(thread_ts: str, ad_lines: List[str], alerts: List[s
     
     client().notify(msg)
 
-# ---------- Human templates (backward-compatible with your calls) ----------
-
 def template_kill(stage: str, entity_name: str, reason: str, metrics: Dict[str, Any], link: Optional[str] = None) -> SlackMessage:
-    """
-    Human, one-glance kill/pause message using new format.
-    """
-    # Clean up the ad name for display
     clean_name = prettify_ad_name(entity_name)
     
-    # Format metrics for the new template
     ctr = metrics.get("CTR", metrics.get("ctr"))
     roas = metrics.get("ROAS", metrics.get("roas"))
     
-    # Handle string metrics that are already formatted
     if isinstance(ctr, str):
         ctr_str = ctr
     else:
@@ -582,7 +480,6 @@ def template_kill(stage: str, entity_name: str, reason: str, metrics: Dict[str, 
     else:
         roas_str = fmt_roas(roas) if roas is not None else "–"
     
-    # Humanized message - like a media buyer colleague texting
     text = f"🚨 Hey! Had to kill {clean_name} in {stage}\n{reason}\nCTR was {ctr_str}, ROAS {roas_str} - not hitting our targets"
     
     return SlackMessage(
@@ -592,16 +489,12 @@ def template_kill(stage: str, entity_name: str, reason: str, metrics: Dict[str, 
     )
 
 def template_digest(date_label: str, stage_stats: Dict[str, Dict[str, Any]]) -> SlackMessage:
-    """
-    Human daily digest.
-    """
     title = f"📊 Daily Report • {date_label}"
     lines = []
     for stage, stats in stage_stats.items():
         nice = " | ".join(f"{k}={v}" for k, v in stats.items())
         lines.append(f"*{stage}:* {nice}")
     
-    # Humanized intro
     intro = f"Hey! Here's what happened yesterday ({date_label}):"
     
     return SlackMessage(
@@ -609,8 +502,6 @@ def template_digest(date_label: str, stage_stats: Dict[str, Dict[str, Any]]) -> 
         blocks=build_basic_blocks(title, [intro] + lines, severity="info", footer=_ts_footer()),
         topic="digest",
     )
-
-# ---------- Outbox, TokenBucket, client (unchanged behavior) ----------
 
 class Outbox:
     def __init__(self, path: str) -> None:
@@ -1006,107 +897,23 @@ def client() -> SlackClient:
         _client = SlackClient()
     return _client
 
-# ---------- Public API (unchanged signatures) ----------
-
 def notify(text: str, severity: Literal["info", "warn", "error"] = "info", topic: Union[str, Literal["default", "alerts", "digest", "scale"]] = "default", ttl_seconds: Optional[int] = None) -> None:
-    """
-    Smart notification with frequency control and content filtering.
-    """
     if SLACK_TEMP_DISABLED:
         sanitized = _sanitize_line(text)
         _log(f"[SLACK DISABLED {severity}/{topic}] {sanitized}")
         return
 
-    # Import smart notifications
-    try:
-        from smart_notifications import smart_notifications
-        
-        # Determine message type from content
-        message_type = _determine_message_type(text, topic)
-        
-        # Check if we should send this notification
-        if not smart_notifications.should_send_notification(message_type, text):
-            # Log that we skipped it
-            smart_notifications.log_message(message_type, text, sent=False)
-            return
-        
-        # Format message with smart templates
-        formatted_text = smart_notifications.format_smart_message(message_type, text, {})
-        
-        formatted_text = _sanitize_line(formatted_text)
-        msg = SlackMessage(text=formatted_text, severity=severity, topic=topic, ttl_seconds=ttl_seconds)
-        msg.text = msg.sanitized_text()
-        client().notify(msg)
-        
-        # Log that we sent it
-        smart_notifications.log_message(message_type, text, sent=True)
-        
-    except ImportError:
-        # Fallback to original behavior if smart notifications not available
-        msg = SlackMessage(text=_sanitize_line(text), severity=severity, topic=topic, ttl_seconds=ttl_seconds)
-        msg.text = msg.sanitized_text()
-        client().notify(msg)
-    except Exception as e:
-        # Fallback to original behavior on any error
-        msg = SlackMessage(text=_sanitize_line(text), severity=severity, topic=topic, ttl_seconds=ttl_seconds)
-        msg.text = msg.sanitized_text()
-        client().notify(msg)
-
-def _determine_message_type(text: str, topic: str) -> str:
-    """Determine message type from content and topic."""
-    text_lower = text.lower()
-    
-    # Critical alerts
-    if any(keyword in text_lower for keyword in ['critical', 'error', 'failed', 'alert', '🚨']):
-        return 'critical_alert'
-    
-    # ML health reports
-    if any(keyword in text_lower for keyword in ['ml health', 'ml intelligence', 'model', 'learning', 'predictions']):
-        return 'ml_health_report'
-    
-    # Performance summaries
-    if any(keyword in text_lower for keyword in ['performance', 'spend', 'purchases', 'cpa', 'roas', 'summary']):
-        return 'performance_summary'
-    
-    # Data collection messages
-    if any(keyword in text_lower for keyword in ['data stored', 'data collected', 'stored in supabase', 'inserted']):
-        return 'data_collection'
-    
-    # ML analysis messages
-    if any(keyword in text_lower for keyword in ['ml analysis', 'analysis completed', 'models trained']):
-        return 'ml_analysis'
-    
-    # Learning events
-    if any(keyword in text_lower for keyword in ['learning', 'training', 'model validation']):
-        return 'learning_event'
-    
-    # Default based on topic
-    if topic == 'alerts':
-        return 'critical_alert'
-    elif topic == 'digest':
-        return 'performance_summary'
-    elif topic == 'scale':
-        return 'performance_summary'
-    else:
-        return 'info'
+    msg = SlackMessage(text=_sanitize_line(text), severity=severity, topic=topic, ttl_seconds=ttl_seconds)
+    msg.text = msg.sanitized_text()
+    client().notify(msg)
 
 def alert_kill(stage: str = "ASC+", entity_name: str = "", reason: str = "", metrics: Optional[Dict[str, Any]] = None, link: Optional[str] = None) -> None:
-    """
-    Human pause/kill message.
-    """
     client().notify(template_kill(stage, entity_name, reason, metrics, link))
 
-
 def post_digest(date_label: str, stage_stats: Dict[str, Dict[str, Any]]) -> None:
-    """
-    Human daily digest.
-    """
     client().notify(template_digest(date_label, stage_stats))
 
 def alert_error(error_msg: str) -> None:
-    """
-    Error alert using new format.
-    """
     text = f"🚨 Something went wrong: {error_msg}\nNeed to check this ASAP"
     
     msg = SlackMessage(
@@ -1117,44 +924,30 @@ def alert_error(error_msg: str) -> None:
     client().notify(msg)
 
 def build_ads_snapshot(rows_today: List[Dict[str, Any]], rows_lifetime: List[Dict[str, Any]], local_tz: str) -> List[str]:
-    """
-    Build the ads snapshot for thread reply with proper today/lifetime separation.
-    """
     from datetime import datetime, timezone
     import re
     
-    # Import locally to avoid circular dependency
     from infrastructure.utils import safe_f
     
     def _prettify_ad_name(name: str) -> str:
-        """Clean up ad display names for mobile-friendly display."""
-        # Remove leading [TEST], [VALID], [SCALE] tags
         name = re.sub(r'^\[(TEST|VALID|SCALE)\]\s*', '', name)
-        
-        # Compress long visual style tokens
         name = re.sub(r'DynamicGreenScreenEffect', 'DGS Effect', name)
         name = re.sub(r'Green Screen Effect Template', 'Green Screen Template', name)
-        
-        # Truncate if too long for mobile
         if len(name) > 50:
             name = name[:47] + "..."
-        
         return name
     
     def _fmt_eur(amount: Optional[float]) -> str:
-        """Format currency with Euro symbol."""
         if amount is None:
             return "-"
         return f"€{amount:,.2f}"
     
-    # Build lifetime lookup by ad_id
     lifetime_by_id = {}
     for row in rows_lifetime or []:
         ad_id = row.get("ad_id")
         if ad_id:
             lifetime_by_id[str(ad_id)] = row
     
-    # Process today's ads
     ad_lines = []
     integrity_issues = 0
     
@@ -1163,26 +956,21 @@ def build_ads_snapshot(rows_today: List[Dict[str, Any]], rows_lifetime: List[Dic
         ad_name = today_row.get("ad_name", "")
         spend_today = safe_f(today_row.get("spend"))
         
-        # Get lifetime data
         lifetime_row = lifetime_by_id.get(str(ad_id), {})
         spend_life = safe_f(lifetime_row.get("spend")) if lifetime_row else None
         
-        # Check for integrity issues
         if spend_life is not None and spend_life < spend_today:
             integrity_issues += 1
         
-        # Get purchase counts
         purch_today = 0
         for action in (today_row.get("actions") or []):
             if action.get("action_type") == "purchase":
                 purch_today += int(action.get("value", 0))
         
-        # Format the line - simplified
         clean_name = _prettify_ad_name(ad_name)
         spend_life_display = _fmt_eur(spend_life) if spend_life is not None else "–"
         ad_lines.append(f"• {clean_name}: {_fmt_eur(spend_today)} today, {spend_life_display} all-time")
     
-    # Sort by spend_today desc
     def sort_key(item):
         try:
             spend_part = item.split(": €")[1].split(" today")[0] if ": €" in item else "0"
@@ -1193,24 +981,18 @@ def build_ads_snapshot(rows_today: List[Dict[str, Any]], rows_lifetime: List[Dic
     
     ad_lines.sort(key=sort_key)
     
-    # Limit to 4 lines, show "more" if needed
     if len(ad_lines) > 6:
         display_lines = ad_lines[:4]
         display_lines.append(f"+ {len(ad_lines) - 4} more in thread")
     else:
         display_lines = ad_lines[:4]
     
-    # Add integrity note if needed
     if integrity_issues > 0:
         display_lines.append(f"note: {integrity_issues} ad shows lifetime < today (API window or join issue)")
     
     return display_lines
 
 def alert_queue_empty() -> None:
-    """
-    Alert when creative queue is empty (legacy - ASC+ generates creatives dynamically).
-    This function is kept for backward compatibility but should not be called for ASC+ campaigns.
-    """
     text = "🚨 URGENT: No more creatives in the queue!\nASC+ generates creatives dynamically - this alert should not appear"
     
     msg = SlackMessage(
@@ -1221,9 +1003,6 @@ def alert_queue_empty() -> None:
     client().notify(msg)
 
 def alert_system_health(issue: str) -> None:
-    """
-    Alert for system health issues.
-    """
     text = f"🔧 System issue detected: {issue}\nThe automation might be affected"
     
     msg = SlackMessage(
@@ -1234,9 +1013,6 @@ def alert_system_health(issue: str) -> None:
     client().notify(msg)
 
 def alert_ad_account_health_critical(account_id: str, issues: List[str]) -> None:
-    """
-    Alert for critical ad account health issues that could disable the account.
-    """
     issues_text = "\n".join([f"• {issue}" for issue in issues])
     text = f"🚨 CRITICAL: Ad Account Health Issues Detected\nAccount: {account_id}\n\nIssues:\n{issues_text}\n\n⚠️ Your ad account may be disabled or restricted. Check immediately!"
     
@@ -1248,9 +1024,6 @@ def alert_ad_account_health_critical(account_id: str, issues: List[str]) -> None
     client().notify(msg)
 
 def alert_ad_account_health_warning(account_id: str, warnings: List[str]) -> None:
-    """
-    Alert for ad account health warnings that should be monitored.
-    """
     warnings_text = "\n".join([f"• {warning}" for warning in warnings])
     text = f"⚠️ Ad Account Health Warning\nAccount: {account_id}\n\nWarnings:\n{warnings_text}\n\nMonitor these issues to prevent account problems."
     
@@ -1261,12 +1034,7 @@ def alert_ad_account_health_warning(account_id: str, warnings: List[str]) -> Non
     )
     client().notify(msg)
 
-
-
 def alert_spend_cap_approaching(account_id: str, spent: float, cap: float, currency: str = "EUR") -> None:
-    """
-    Alert when approaching spend cap limit.
-    """
     percentage = (spent / cap) * 100 if cap > 0 else 0
     text = f"📊 Spend Cap Warning\nAccount: {account_id}\nSpent: {spent:.2f} {currency} ({percentage:.1f}% of cap)\nCap: {cap:.2f} {currency}\n\n⚠️ Approaching spend limit. Consider increasing cap or monitoring spend."
     
@@ -1278,9 +1046,6 @@ def alert_spend_cap_approaching(account_id: str, spent: float, cap: float, curre
     client().notify(msg)
 
 def alert_budget_alert(entity_name: str, current_budget: float, target_budget: float) -> None:
-    """
-    Alert for significant budget changes.
-    """
     clean_name = prettify_ad_name(entity_name)
     change_pct = ((target_budget - current_budget) / current_budget) * 100
     direction = "up" if change_pct > 0 else "down"

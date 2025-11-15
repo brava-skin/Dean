@@ -1,8 +1,3 @@
-"""
-Advanced Rate Limit Management
-Smart rate limit handling for Meta API and Flux API with queuing, batching, and prediction
-"""
-
 from __future__ import annotations
 
 import logging
@@ -19,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 
 class RateLimitType(Enum):
-    """Types of rate limits."""
     META_API = "meta_api"
     FLUX_API = "flux_api"
     SUPABASE = "supabase"
@@ -28,18 +22,16 @@ class RateLimitType(Enum):
 
 @dataclass
 class RateLimitConfig:
-    """Configuration for rate limiting."""
     requests_per_window: int
     window_seconds: int
-    burst_limit: Optional[int] = None  # Max requests in short burst
-    retry_after_header: Optional[str] = None  # Header name for retry-after
+    burst_limit: Optional[int] = None
+    retry_after_header: Optional[str] = None
     backoff_multiplier: float = 1.5
     max_backoff_seconds: int = 300
 
 
 @dataclass
 class RateLimitState:
-    """Current state of rate limiting."""
     requests_made: int = 0
     window_start: datetime = field(default_factory=datetime.now)
     next_available: Optional[datetime] = None
@@ -49,11 +41,10 @@ class RateLimitState:
 
 @dataclass
 class QueuedRequest:
-    """Represents a queued API request."""
     func: Callable
     args: tuple
     kwargs: dict
-    priority: int = 0  # Higher = more priority
+    priority: int = 0
     max_retries: int = 3
     retry_count: int = 0
     created_at: datetime = field(default_factory=datetime.now)
@@ -62,49 +53,41 @@ class QueuedRequest:
 
 
 class RateLimitManager:
-    """Manages rate limits for multiple APIs."""
-    
     def __init__(self):
         self.configs: Dict[RateLimitType, RateLimitConfig] = {
             RateLimitType.META_API: RateLimitConfig(
                 requests_per_window=200,
-                window_seconds=3600,  # 200 requests per hour
+                window_seconds=3600,
                 burst_limit=50,
                 retry_after_header="x-business-use-case-usage",
             ),
             RateLimitType.FLUX_API: RateLimitConfig(
                 requests_per_window=100,
-                window_seconds=3600,  # 100 requests per hour
+                window_seconds=3600,
                 burst_limit=20,
             ),
             RateLimitType.SUPABASE: RateLimitConfig(
                 requests_per_window=500,
-                window_seconds=60,  # 500 requests per minute
+                window_seconds=60,
                 burst_limit=100,
             ),
             RateLimitType.OPENAI: RateLimitConfig(
                 requests_per_window=5000,
-                window_seconds=3600,  # 5000 requests per hour
+                window_seconds=3600,
                 burst_limit=500,
             ),
         }
-        
         self.states: Dict[RateLimitType, RateLimitState] = {
             limit_type: RateLimitState() for limit_type in RateLimitType
         }
-        
         self.request_queues: Dict[RateLimitType, queue.PriorityQueue] = {
             limit_type: queue.PriorityQueue() for limit_type in RateLimitType
         }
-        
         self.locks: Dict[RateLimitType, threading.Lock] = {
             limit_type: threading.Lock() for limit_type in RateLimitType
         }
-        
         self.worker_threads: Dict[RateLimitType, threading.Thread] = {}
         self.running = True
-        
-        # Start worker threads
         for limit_type in RateLimitType:
             thread = threading.Thread(
                 target=self._worker_loop,
@@ -114,55 +97,34 @@ class RateLimitManager:
             )
             thread.start()
             self.worker_threads[limit_type] = thread
-        
-        # Historical data for prediction
         self.request_history: Dict[RateLimitType, deque] = {
             limit_type: deque(maxlen=100) for limit_type in RateLimitType
         }
     
     def _worker_loop(self, limit_type: RateLimitType):
-        """Worker thread that processes queued requests."""
         while self.running:
             try:
-                # Get next request (blocking with timeout)
                 priority, queued_request = self.request_queues[limit_type].get(timeout=1.0)
-                
-                # Wait for rate limit availability
                 self._wait_for_rate_limit(limit_type)
-                
-                # Execute request
                 try:
                     result = queued_request.func(*queued_request.args, **queued_request.kwargs)
-                    
-                    # Record successful request
                     self._record_request(limit_type, success=True)
-                    
-                    # Call success callback
                     if queued_request.callback:
                         queued_request.callback(result)
-                    
                 except Exception as e:
-                    # Record failed request
                     self._record_request(limit_type, success=False)
-                    
-                    # Retry logic
                     if queued_request.retry_count < queued_request.max_retries:
                         queued_request.retry_count += 1
-                        # Re-queue with lower priority
                         self.request_queues[limit_type].put((
                             queued_request.priority - 1,
                             queued_request,
                         ))
                         logger.warning(f"Retrying request {queued_request.retry_count}/{queued_request.max_retries}: {e}")
                     else:
-                        # Call error callback
                         if queued_request.error_callback:
                             queued_request.error_callback(e)
                         logger.error(f"Request failed after {queued_request.max_retries} retries: {e}")
-                
-                # Mark task as done
                 self.request_queues[limit_type].task_done()
-                
             except queue.Empty:
                 continue
             except Exception as e:
@@ -170,43 +132,30 @@ class RateLimitManager:
                 time.sleep(1)
     
     def _wait_for_rate_limit(self, limit_type: RateLimitType):
-        """Wait until rate limit allows a request."""
         with self.locks[limit_type]:
             state = self.states[limit_type]
             config = self.configs[limit_type]
-            
             now = datetime.now()
-            
-            # Check if we're in backoff
             if state.backoff_until and now < state.backoff_until:
                 sleep_seconds = (state.backoff_until - now).total_seconds()
                 logger.debug(f"Rate limit backoff: sleeping {sleep_seconds:.2f}s")
                 time.sleep(sleep_seconds)
                 now = datetime.now()
-            
-            # Reset window if expired
             window_age = (now - state.window_start).total_seconds()
             if window_age >= config.window_seconds:
                 state.requests_made = 0
                 state.window_start = now
-            
-            # Check if we're at the limit
             if state.requests_made >= config.requests_per_window:
-                # Calculate wait time
                 elapsed = (now - state.window_start).total_seconds()
                 wait_seconds = config.window_seconds - elapsed
-                
                 if wait_seconds > 0:
                     logger.debug(f"Rate limit reached, waiting {wait_seconds:.2f}s")
                     time.sleep(wait_seconds)
                     state.requests_made = 0
                     state.window_start = datetime.now()
-            
-            # Increment request count
             state.requests_made += 1
     
     def _record_request(self, limit_type: RateLimitType, success: bool):
-        """Record a request for historical analysis."""
         with self.locks[limit_type]:
             self.request_history[limit_type].append({
                 "timestamp": datetime.now(),
@@ -224,7 +173,6 @@ class RateLimitManager:
         error_callback: Optional[Callable] = None,
         **kwargs,
     ) -> QueuedRequest:
-        """Queue a request for execution."""
         queued_request = QueuedRequest(
             func=func,
             args=args,
@@ -234,10 +182,7 @@ class RateLimitManager:
             callback=callback,
             error_callback=error_callback,
         )
-        
-        # Use negative priority for max-heap behavior (higher priority = higher number)
         self.request_queues[limit_type].put((-priority, queued_request))
-        
         return queued_request
     
     def execute_with_rate_limit(
@@ -247,7 +192,6 @@ class RateLimitManager:
         *args,
         **kwargs,
     ) -> Any:
-        """Execute a function with rate limiting (blocking)."""
         result_queue = queue.Queue()
         error_queue = queue.Queue()
         
@@ -266,8 +210,6 @@ class RateLimitManager:
             error_callback=error_callback,
             **kwargs,
         )
-        
-        # Wait for result
         while True:
             try:
                 if not error_queue.empty():
@@ -282,27 +224,20 @@ class RateLimitManager:
                 time.sleep(0.1)
     
     def predict_rate_limit_reset(self, limit_type: RateLimitType) -> Optional[datetime]:
-        """Predict when rate limit will reset based on historical data."""
         with self.locks[limit_type]:
             state = self.states[limit_type]
             config = self.configs[limit_type]
-            
             if state.requests_made < config.requests_per_window:
-                return None  # Not at limit
-            
-            # Calculate reset time based on window
+                return None
             reset_time = state.window_start + timedelta(seconds=config.window_seconds)
             return reset_time
     
     def get_rate_limit_status(self, limit_type: RateLimitType) -> Dict[str, Any]:
-        """Get current rate limit status."""
         with self.locks[limit_type]:
             state = self.states[limit_type]
             config = self.configs[limit_type]
-            
             remaining = config.requests_per_window - state.requests_made
             utilization = state.requests_made / config.requests_per_window if config.requests_per_window > 0 else 0
-            
             return {
                 "limit_type": limit_type.value,
                 "requests_made": state.requests_made,
@@ -319,22 +254,16 @@ class RateLimitManager:
         limit_type: RateLimitType,
         response_headers: Dict[str, str],
     ):
-        """Handle rate limit information from API response."""
         with self.locks[limit_type]:
             state = self.states[limit_type]
             config = self.configs[limit_type]
-            
-            # Check for retry-after header
             if config.retry_after_header and config.retry_after_header in response_headers:
                 retry_after = int(response_headers[config.retry_after_header])
                 state.backoff_until = datetime.now() + timedelta(seconds=retry_after)
                 logger.warning(f"Rate limit hit, backing off for {retry_after}s")
-            
-            # Check for rate limit headers
             if "x-ratelimit-remaining" in response_headers:
                 remaining = int(response_headers["x-ratelimit-remaining"])
                 state.requests_made = config.requests_per_window - remaining
-            
             if "x-ratelimit-reset" in response_headers:
                 reset_timestamp = int(response_headers["x-ratelimit-reset"])
                 state.estimated_reset = datetime.fromtimestamp(reset_timestamp)
@@ -345,10 +274,8 @@ class RateLimitManager:
         requests: List[Tuple[Callable, tuple, dict]],
         priority: int = 0,
     ) -> List[Any]:
-        """Execute multiple requests in a batch with rate limiting."""
         results = []
         result_queue = queue.Queue()
-        
         completed = 0
         total = len(requests)
         
@@ -362,7 +289,6 @@ class RateLimitManager:
             result_queue.put(("error", error))
             completed += 1
         
-        # Queue all requests
         for func, args, kwargs in requests:
             self.queue_request(
                 limit_type=limit_type,
@@ -373,8 +299,6 @@ class RateLimitManager:
                 error_callback=batch_error_callback,
                 **kwargs,
             )
-        
-        # Wait for all to complete
         while completed < total:
             try:
                 result = result_queue.get(timeout=1.0)
@@ -383,23 +307,18 @@ class RateLimitManager:
                 results.append(result)
             except queue.Empty:
                 continue
-        
         return results
     
     def shutdown(self):
-        """Shutdown rate limit manager."""
         self.running = False
-        # Wait for all queues to empty
         for limit_type in RateLimitType:
             self.request_queues[limit_type].join()
 
 
-# Global rate limit manager instance
 _rate_limit_manager: Optional[RateLimitManager] = None
 
 
 def get_rate_limit_manager() -> RateLimitManager:
-    """Get global rate limit manager instance."""
     global _rate_limit_manager
     if _rate_limit_manager is None:
         _rate_limit_manager = RateLimitManager()

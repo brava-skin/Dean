@@ -7,7 +7,7 @@ import time
 import uuid
 from collections import defaultdict
 from contextlib import contextmanager
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Tuple
@@ -16,11 +16,10 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 
-# NEW: tz support for account-local counters
 try:
     import pytz
-except Exception:  # pragma: no cover
-    pytz = None  # type: ignore
+except Exception:
+    pytz = None
 
 UTC = timezone.utc
 ACCOUNT_TZ_NAME = os.getenv("ACCOUNT_TZ") or os.getenv("ACCOUNT_TIMEZONE") or "Europe/Amsterdam"
@@ -78,35 +77,28 @@ def _from_json(s: Optional[str]) -> Optional[Any]:
 
 
 def _seconds_until_local_midnight(tz_name: Optional[str] = None) -> int:
-    """
-    TTL helper: seconds from *now* until next local midnight in the given tz (default: account tz).
-    Falls back to ~24h if pytz is unavailable.
-    """
     tz = _get_tz(tz_name)
     if tz is None:
         return 24 * 3600
     now = _now_account(tz_name)
-    # local midnight of "tomorrow"
     tomorrow = (now + timedelta(days=1)).date()
     local_midnight = tz.localize(datetime(tomorrow.year, tomorrow.month, tomorrow.day, 0, 0, 0))
     return max(1, int((local_midnight - now).total_seconds()))
 
 
 try:
-    from prometheus_client import Counter, Histogram  # type: ignore
-
+    from prometheus_client import Counter, Histogram
     _prom_enabled = True
     DB_OPS = Counter("store_db_ops_total", "DB operations", ["op"])
     DB_ERRORS = Counter("store_db_errors_total", "DB errors", ["op"])
     DB_LAT = Histogram("store_db_latency_seconds", "DB latencies", ["op"])
-except Exception:  # pragma: no cover
+except Exception:
     _prom_enabled = False
-
     class _N:
         def labels(self, *_, **__): return self
         def inc(self, *_): pass
         def observe(self, *_): pass
-    DB_OPS = DB_ERRORS = DB_LAT = _N()  # type: ignore
+    DB_OPS = DB_ERRORS = DB_LAT = _N()
 
 
 def _retry_sql(retries: int = 5, base_sleep: float = 0.03, max_sleep: float = 0.5) -> Callable:
@@ -251,7 +243,6 @@ class Store:
               );
             """)
             c.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_flags_ttl ON flags(ttl_epoch);")
-            
             c.exec_driver_sql("""
               CREATE TABLE IF NOT EXISTS state(
                 key TEXT PRIMARY KEY,
@@ -259,8 +250,6 @@ class Store:
                 updated_at INTEGER NOT NULL
               );
             """)
-            
-            # Historical data tracking for rules
             c.exec_driver_sql("""
               CREATE TABLE IF NOT EXISTS historical_data(
                 id TEXT PRIMARY KEY,
@@ -274,8 +263,6 @@ class Store:
                 created_at INTEGER NOT NULL
               );
             """)
-            
-            # Ad creation tracking for time-based rules
             c.exec_driver_sql("""
               CREATE TABLE IF NOT EXISTS ad_creation_times(
                 ad_id TEXT PRIMARY KEY,
@@ -302,7 +289,6 @@ class Store:
                     pass
             if v == 6:
                 try:
-                    # Add historical data tracking tables
                     conn.exec_driver_sql("""
                       CREATE TABLE IF NOT EXISTS historical_data(
                         id TEXT PRIMARY KEY,
@@ -326,7 +312,6 @@ class Store:
                         updated_at INTEGER NOT NULL
                       );
                     """)
-                    # Create indexes separately
                     conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_historical_data_ad_metric ON historical_data(ad_id, metric_name, ts_epoch);")
                     conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_historical_data_lifecycle_metric ON historical_data(lifecycle_id, metric_name, ts_epoch);")
                     conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_historical_data_stage_metric ON historical_data(stage, metric_name, ts_epoch);")
@@ -536,7 +521,14 @@ class Store:
                 if not batch:
                     break
                 for r in batch:
-                    f.write(json.dumps(asdict(r), separators=(",", ":"), ensure_ascii=False) + "\n")
+                    f.write(json.dumps({
+                        "id": r.id, "ts_iso": r.ts_iso, "ts_epoch": r.ts_epoch,
+                        "entity_type": r.entity_type, "entity_id": r.entity_id, "action": r.action,
+                        "level": r.level, "stage": r.stage, "rule_type": r.rule_type, "reason": r.reason,
+                        "thresholds": r.thresholds, "observed": r.observed,
+                        "window": r.window, "attribution": r.attribution, "actor": r.actor,
+                        "meta": r.meta, "dedup_key": r.dedup_key, "deleted": r.deleted,
+                    }, separators=(",", ":"), ensure_ascii=False) + "\n")
                     count += 1
                 cursor_epoch = batch[-1].ts_epoch
                 cursor_id = batch[-1].id
@@ -577,8 +569,6 @@ class Store:
             return True
         except Exception:
             return False
-
-    # ------------------------ Counters ------------------------
 
     @_retry_sql()
     def incr(self, key: str, delta: int = 1, ns: str = "default") -> int:
@@ -657,21 +647,11 @@ class Store:
         with self._begin() as c:
             c.execute(text("DELETE FROM counters WHERE ns=:ns AND key=:k"), {"ns": ns, "k": key})
 
-    # -------- NEW: account-local (Europe/Amsterdam) daily counters --------
-
     def set_counter_daily(self, key: str, val: int, ns: str = "default", tz_name: Optional[str] = None) -> None:
-        """
-        Set a counter and have it expire at the next local midnight (account tz by default).
-        """
         ttl_seconds = _seconds_until_local_midnight(tz_name)
         self.set_counter(key, val, ns=ns, ttl_seconds=ttl_seconds)
 
     def incr_with_daily_cap(self, key: str, delta: int, cap: int, ns: str = "default", tz_name: Optional[str] = None) -> Tuple[int, int]:
-        """
-        Increment a counter that resets at *local midnight*, enforcing a per-day cap.
-        Returns (new_value, applied_delta). If capped, applied_delta may be lower than delta.
-        """
-        # Ensure TTL is aligned to local midnight
         _, remain = self.get_counter_with_ttl(key, ns=ns)
         if remain is None or remain <= 0:
             self.set_counter_daily(key, 0, ns=ns, tz_name=tz_name)
@@ -683,19 +663,12 @@ class Store:
         return new_val, allowed
 
     def get_counter_daily(self, key: str, ns: str = "default", tz_name: Optional[str] = None) -> Tuple[int, int]:
-        """
-        Get (value, seconds_until_reset) for a daily counter keyed to local midnight.
-        If no TTL exists yet, attaches one to midnight and returns (current, ttl).
-        """
         val, remain = self.get_counter_with_ttl(key, ns=ns)
         if remain is None or remain <= 0:
             ttl_seconds = _seconds_until_local_midnight(tz_name)
-            # Reapply TTL without changing value
             self.set_counter(key, val, ns=ns, ttl_seconds=ttl_seconds)
             remain = ttl_seconds
         return val, int(remain)
-
-    # ------------------------ Flags ------------------------
 
     @_retry_sql()
     def set_flag(self, entity_type: str, entity_id: str, k: str, v: str, ttl_seconds: Optional[int] = None) -> None:
@@ -730,8 +703,6 @@ class Store:
             c.execute(text("DELETE FROM flags WHERE entity_type=:et AND entity_id=:eid AND k=:k"),
                       {"et": entity_type, "eid": entity_id, "k": k})
 
-    # ------------------------ Convenience logs ------------------------
-
     def log_kill(
         self, *, stage: str, entity_id: str, rule_type: str, reason: str,
         observed: Dict[str, Any], thresholds: Dict[str, Any], window: Optional[str] = None,
@@ -765,7 +736,6 @@ class Store:
         )
 
     def get_state(self, key: str) -> Optional[Any]:
-        """Get a state value by key."""
         try:
             with self._begin() as conn:
                 result = conn.execute(
@@ -779,7 +749,6 @@ class Store:
             return None
 
     def set_state(self, key: str, value: Any) -> None:
-        """Set a state value by key."""
         try:
             with self._begin() as conn:
                 conn.execute(
@@ -796,13 +765,10 @@ class Store:
         except Exception:
             pass
 
-    # ------------------------ Historical Data Tracking ------------------------
-
     @_retry_sql()
     def store_historical_data(self, ad_id: str, lifecycle_id: str, stage: str, 
                             metric_name: str, metric_value: float, 
                             ts: Optional[datetime] = None) -> str:
-        """Store historical data point for rule evaluation."""
         now = ts or _now_utc()
         data_id = str(uuid.uuid7()) if hasattr(uuid, "uuid7") else str(uuid.uuid4())
         
@@ -827,7 +793,6 @@ class Store:
     @_retry_sql()
     def get_historical_data(self, ad_id: str, metric_name: str, 
                           since_days: int = 7, limit: int = 100) -> List[Dict[str, Any]]:
-        """Get historical data for an ad and metric."""
         since_epoch = _epoch(_now_utc() - timedelta(days=since_days))
         
         with self._begin() as c:
@@ -857,7 +822,6 @@ class Store:
     @_retry_sql()
     def record_ad_creation(self, ad_id: str, lifecycle_id: str, stage: str, 
                           created_at: Optional[datetime] = None) -> None:
-        """Record when an ad was created for time-based rules."""
         now = created_at or _now_utc()
         
         with self._begin() as c:
@@ -876,7 +840,6 @@ class Store:
 
     @_retry_sql()
     def get_ad_creation_time(self, ad_id: str) -> Optional[datetime]:
-        """Get when an ad was created."""
         with self._begin() as c:
             row = c.execute(text("""
                 SELECT created_at_epoch
@@ -891,18 +854,16 @@ class Store:
 
     @_retry_sql()
     def get_ad_age_days(self, ad_id: str) -> Optional[float]:
-        """Get ad age in days."""
         creation_time = self.get_ad_creation_time(ad_id)
         if not creation_time:
             return None
         
         now = _now_utc()
         age_delta = now - creation_time
-        return age_delta.total_seconds() / (24 * 3600)  # Convert to days
+        return age_delta.total_seconds() / (24 * 3600)
 
     @_retry_sql()
     def cleanup_old_historical_data(self, days_to_keep: int = 30) -> int:
-        """Clean up old historical data to keep database size manageable."""
         cutoff_epoch = _epoch(_now_utc() - timedelta(days=days_to_keep))
         
         with self._begin() as c:
