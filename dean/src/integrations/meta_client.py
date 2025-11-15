@@ -2914,52 +2914,6 @@ class MetaClient:
             ok, issues = False, issues + [f"preflight error: {e}"]
         return {"ok": ok, "issues": issues}
 
-    def _get_billing_details(self) -> Optional[Dict[str, Any]]:
-        """
-        Get billing details including auto-charge threshold from Meta's billing API.
-        Returns billing information if available, None if not accessible.
-        """
-        if self.dry_run or not USE_SDK:
-            return None
-        
-        try:
-            # Try to get billing information from the account
-            # Note: This may require additional permissions or may not be available for all account types
-            def _get_billing_info():
-                return AdAccount(self.ad_account_id_act).api_get(fields=[
-                    "funding_source"
-                ])
-            
-            billing_info = self._retry("billing_details", _get_billing_info)
-            
-            # Try to extract auto-charge threshold from funding source
-            funding_source = billing_info.get("funding_source", {})
-            if isinstance(funding_source, dict):
-                # Look for auto-charge threshold in various possible fields
-                auto_charge_threshold = (
-                    funding_source.get("auto_charge_threshold") or
-                    funding_source.get("threshold") or
-                    funding_source.get("min_balance") or
-                    funding_source.get("recharge_threshold")
-                )
-                
-                if auto_charge_threshold is not None:
-                    return {
-                        "auto_charge_threshold": auto_charge_threshold,
-                        "funding_source_type": funding_source.get("type", "unknown"),
-                        "payment_method_status": funding_source.get("status", "unknown")
-                    }
-            
-            # If no auto-charge threshold found, return basic billing info
-            return {
-                "funding_source_type": funding_source.get("type", "unknown"),
-                "payment_method_status": funding_source.get("status", "unknown"),
-                "auto_charge_threshold": None
-            }
-            
-        except Exception:
-            # Billing details are optional, return None if not accessible
-            return None
 
     def check_account_health(self) -> Dict[str, Any]:
         """
@@ -2978,7 +2932,7 @@ class MetaClient:
             def _get_account_info():
                 return AdAccount(self.ad_account_id_act).api_get(fields=[
                     "account_id", "currency", "timezone_name", "account_status", 
-                    "amount_spent", "balance", "spend_cap", "funding_source",
+                    "amount_spent", "balance", "spend_cap",
                     "business_name", "business_country_code", "business_zip"
                 ])
             
@@ -2992,34 +2946,6 @@ class MetaClient:
                 health_details["account_status"] = "inactive"
             else:
                 health_details["account_status"] = "active"
-            
-            # Check for payment/billing issues and get auto-charge threshold
-            funding_source = account_info.get("funding_source")
-            if funding_source:
-                health_details["funding_source"] = funding_source
-                # Check if funding source indicates payment issues
-                if isinstance(funding_source, dict):
-                    source_type = funding_source.get("type", "").lower()
-                    if "credit_card" in source_type or "payment_method" in source_type:
-                        # Check if there are any payment method issues
-                        if funding_source.get("status", "").lower() in ["failed", "declined", "expired"]:
-                            critical_issues.append(f"Payment method issue: {funding_source.get('status')}")
-                            health_details["payment_status"] = "failed"
-                        else:
-                            health_details["payment_status"] = "ok"
-            
-            # Try to get billing details including auto-charge threshold
-            try:
-                billing_details = self._get_billing_details()
-                if billing_details:
-                    health_details["billing_details"] = billing_details
-                    # Extract auto-charge threshold if available
-                    auto_charge_threshold = billing_details.get("auto_charge_threshold")
-                    if auto_charge_threshold is not None:
-                        health_details["auto_charge_threshold"] = float(auto_charge_threshold) / 100.0  # Convert from cents
-            except Exception as e:
-                # Billing details are optional, don't fail the health check
-                health_details["billing_error"] = str(e)
             
             # Check account balance and spending limits
             balance = account_info.get("balance")

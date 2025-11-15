@@ -1646,17 +1646,9 @@ def check_ad_account_health(client: MetaClient, settings: Dict[str, Any]) -> Dic
             account_id = client.ad_account_id_act
             
             # Send critical alerts
-            from integrations import alert_ad_account_health_critical, alert_payment_issue, alert_account_balance_low
+            from integrations import alert_ad_account_health_critical
             
             alert_ad_account_health_critical(account_id, critical_issues)
-            
-            # Check for specific payment issues
-            health_details = health_result.get("health_details", {})
-            if health_details.get("payment_status") == "failed":
-                payment_details = health_details.get("funding_source", {})
-                alert_payment_issue(account_id, "Payment Failed", str(payment_details))
-            
-            # Balance monitoring removed as requested
             
             return {"ok": False, "critical_issues": critical_issues, "health_details": health_details}
         
