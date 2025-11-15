@@ -118,11 +118,9 @@ jobs:
         
         # Business Configuration
         STORE_URL: ${{ secrets.STORE_URL }}
-        SHOPIFY_STORE_URL: ${{ secrets.STORE_URL }}
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         BREAKEVEN_CPA: ${{ secrets.BREAKEVEN_CPA }}
         COGS_PER_PURCHASE: ${{ secrets.COGS_PER_PURCHASE }}
-        USD_EUR_RATE: ${{ secrets.USD_EUR_RATE }}
         
         # Rate Limiting Configuration
         META_REQUEST_DELAY: 2.0
