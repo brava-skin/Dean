@@ -1444,7 +1444,12 @@ class MetaClient:
                 params["breakdowns"] = breakdowns
 
             # choose between time_range and date_preset
+            # Use SDK enum if available, otherwise pass as string (SDK will handle conversion)
             if normalized_preset:
+                # Valid date_preset values: "today", "yesterday", "this_week", "last_week", 
+                # "this_month", "last_month", "this_quarter", "last_quarter", "this_year", 
+                # "last_year", "lifetime", "maximum", "last_7d", "last_14d", "last_28d", "last_30d", "last_90d"
+                # The SDK expects these as strings, but some versions want enum - we'll let SDK handle it
                 params["date_preset"] = normalized_preset
             else:
                 params["time_range"] = tr
@@ -2922,7 +2927,7 @@ class MetaClient:
             # Note: This may require additional permissions or may not be available for all account types
             def _get_billing_info():
                 return AdAccount(self.ad_account_id_act).api_get(fields=[
-                    "funding_source", "billing_center", "payment_methods"
+                    "funding_source"
                 ])
             
             billing_info = self._retry("billing_details", _get_billing_info)

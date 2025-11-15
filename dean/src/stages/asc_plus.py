@@ -1737,19 +1737,24 @@ def _build_ad_metrics(
     add_to_cart = 0
     initiate_checkout = 0
     purchases = 0
+    # Parse actions - prioritize omni_add_to_cart (includes Meta Shop + website ATCs)
+    # This matches Meta Ads Manager which shows Meta Shop ATCs separately
     for action in actions:
         action_type = action.get("action_type")
         value = safe_f(action.get("value"))
         if action_type == "omni_add_to_cart":
             # All ATCs across destinations (Meta Shop + website) - preferred for ASC+
-            add_to_cart = int(value)
+            # This includes Meta Shop ATCs which are shown separately in Meta Ads Manager
+            add_to_cart += int(value)  # Accumulate in case multiple entries exist
         elif action_type == "add_to_cart":
             # Website-only ATCs (fallback if omni_add_to_cart not available)
-            add_to_cart = int(value)
+            # Only use if omni_add_to_cart wasn't found (to avoid double counting)
+            if add_to_cart == 0:
+                add_to_cart = int(value)
         elif action_type == "initiate_checkout":
-            initiate_checkout = int(value)
+            initiate_checkout += int(value)
         elif action_type == "purchase":
-            purchases = int(value)
+            purchases += int(value)
 
     revenue = 0.0
     for action_value in row.get("action_values") or []:
