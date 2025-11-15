@@ -12,10 +12,7 @@ account:
   timezone: "Europe/Amsterdam"
   currency: "EUR"
 
-# Copy bank configuration
-copy_bank:
-  path: "data/copy_bank.json"
-  strategy: "round_robin"
+# Copy bank removed - ASC+ uses AI-generated copy (ChatGPT-5) instead
 
 # Campaign & AdSet IDs (root level for backward compatibility)
 # Single ASC+ Campaign Setup
@@ -135,134 +132,8 @@ logging:
   # Daily digests
   digests_dir: "data/digests"
 
-# ── Safety & Compliance ───────────────────────────────
-safety:
-  guardrails:
-    account_cpa_pause_factor: 1.5
-    account_cpa_window_days: 2
-    no_purchases_tripwire_hours: 48
-    global_daily_cap_eur: 3000
-  
-  spend_velocity:
-    warn_24h_growth: 1.5
-    warn_48h_growth: 2.5
-    freeze_scaling_if_exceeds: true
-  
-  emergency_stop:
-    enabled: true
-    api_error_threshold_pct: 40
-    tracking_flatline_hours: 24
-
-# ── Compliance ────────────────────────────────────────
-compliance:
-  naming:
-    enforce: true
-    auto_prefix_if_missing: true
-  
-  creative:
-    max_primary_text: 300
-    max_headline: 60
-    max_description: 150
-    forbid_terms: ["cures", "miracle", "guaranteed"]
-    auto_truncate: true
-
-# ── Execution ─────────────────────────────────────────
-execution:
-  rate_limits:
-    retry_max: 5
-    backoff_base_seconds: 0.6
-    respect_retry_after: true
-  
-  pagination:
-    insights_page_limit: 500
-    max_pages: 50
-  
-  concurrency:
-    writes_max_parallel: 3
-    reads_max_parallel: 5
-
-# ── Data Quality ──────────────────────────────────────
-data_quality:
-  missing_actions_alert:
-    enabled: true
-    min_spend_for_alert_eur: 20
-  
-  tracking_drop_alert:
-    enabled: true
-    drop_pct_vs_7d_avg: 60
-
 # ── Creative Intelligence System ──────────────────────
+# Note: Most creative_intelligence config keys are unused
+# ASC+ uses AI-generated copy (ChatGPT-5) instead of copy_bank
 creative_intelligence:
-  # System settings
-  enabled: true
-  auto_load_copy_bank: true
-  update_performance_scores: true
-  
-  # Performance tracking
-  performance_tracking:
-    enabled: true
-    update_frequency_hours: 24
-    retention_days: 365
-    
-  # AI Generation
-  ai_generation:
-    enabled: true
-    model: "gpt-5"  # ChatGPT-5 only, no fallback
-    temperature: 0.7
-    max_tokens: 500
-    generation_count: 3
-    auto_approve: false
-    use_fallback: false  # Only use GPT-5
-    
-  # Similarity Analysis
-  similarity_analysis:
-    enabled: true
-    model: "all-MiniLM-L6-v2"
-    threshold: 0.7
-    max_similar_creatives: 10
-    
-  # Performance Analysis
-  performance_analysis:
-    enabled: true
-    analysis_frequency_hours: 168  # Weekly
-    min_sample_size: 10
-    confidence_threshold: 0.7
-    
-  # Creative Categories
-  categories:
-    - "global"
-    - "product_specific"
-    - "seasonal"
-    - "promotional"
-    - "educational"
-    - "social_proof"
-    
-  # Performance Metrics Weights
-  performance_weights:
-    roas: 0.4
-    ctr: 0.3
-    conversion_rate: 0.3
-    
-  # A/B Testing
-  ab_testing:
-    enabled: true
-    min_test_duration_days: 7
-    statistical_significance_threshold: 0.95
-    max_concurrent_tests: 5
-    
-  # Creative Rotation
-  rotation:
-    enabled: true
-    frequency_days: 7
-    rotation_percentage: 0.3
-    performance_threshold: 0.6
-    
-  # Notifications
-  notifications:
-    enabled: true
-    channels: ["slack", "email"]
-    events:
-      - "high_performing_creative"
-      - "creative_fatigue_detected"
-      - "ai_creative_generated"
-      - "ab_test_completed"
+  # All creative_intelligence config keys are currently unused

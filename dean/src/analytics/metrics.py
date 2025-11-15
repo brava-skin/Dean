@@ -21,11 +21,10 @@ class MetricsConfig:
     beta_prior_atc_rate: Tuple[float, float] = (1.0, 50.0)
     ci_z: float = 1.96
 
-    # NEW: currency defaults to support your Amsterdam / EUR account
+    # Currency defaults (EUR account, Meta returns all values in EUR)
     account_currency: str = (os.getenv("ACCOUNT_CURRENCY") or "EUR").upper()
-    product_currency: str = (os.getenv("PRODUCT_CURRENCY") or "USD").upper()
-    # USD→EUR rate overrideable via env (falls back to 0.92 if not set)
-    usd_eur_rate: float = float(os.getenv("USD_EUR_RATE") or os.getenv("EXCHANGE_RATE_USD_EUR") or 0.92)
+    product_currency: str = (os.getenv("PRODUCT_CURRENCY") or "EUR").upper()
+    # Note: Currency conversion removed - Meta returns everything in EUR
 
     def __post_init__(self) -> None:
         if self.action_aliases is None:
@@ -85,16 +84,6 @@ def _to_float(x: Any, default: float = 0.0) -> float:
         return default
 
 
-def _sum_field_in_list_of_dicts(items: Any, key: str = "value") -> float:
-    if not isinstance(items, list):
-        return 0.0
-    total = 0.0
-    for it in items:
-        if isinstance(it, dict):
-            total += _to_float(it.get(key))
-    return total
-
-
 def _scan_actions(row: Dict[str, Any], candidates: Sequence[str], sources: Sequence[str]) -> float:
     total = 0.0
     for src in sources:
@@ -149,44 +138,17 @@ def _wilson_ci(successes: float, trials: float, z: float) -> Tuple[Optional[floa
     return (max(0.0, lo), min(1.0, hi))
 
 
-# -------------------- Currency helpers (NEW) --------------------
+# -------------------- Currency helpers --------------------
 
-def convert(amount: float, from_ccy: str, to_ccy: str, cfg: Optional[MetricsConfig] = None) -> float:
+def tripwire_threshold_account(product_price: float, multiple: float = 2.0, cfg: Optional[MetricsConfig] = None) -> float:
     """
-    Simple USD<->EUR converter using cfg.usd_eur_rate (override via env: USD_EUR_RATE or EXCHANGE_RATE_USD_EUR).
+    For rules like: 'Instant tripwire: spend ≥ 2× product price & 0 purchases'
+    Returns threshold in account currency (EUR).
+    
+    Note: Meta returns all values in EUR, so no conversion needed.
+    Product price should be set in EUR to match Meta's currency.
     """
-    cfg = cfg or MetricsConfig()
-    f = (from_ccy or "").upper()
-    t = (to_ccy or "").upper()
-    if f == t:
-        return float(amount)
-    if f == "USD" and t == "EUR":
-        return float(amount) * float(cfg.usd_eur_rate)
-    if f == "EUR" and t == "USD":
-        rate = 1.0 / float(cfg.usd_eur_rate) if cfg.usd_eur_rate else 0.0
-        return float(amount) * rate
-    raise ValueError(f"Unsupported conversion {f}->{t} (module handles USD<->EUR only).")
-
-
-def usd_to_account(amount_usd: float, cfg: Optional[MetricsConfig] = None) -> float:
-    """
-    Convert a USD amount to the account currency defined in cfg (EUR by default for your setup).
-    """
-    cfg = cfg or MetricsConfig()
-    if cfg.account_currency == "EUR":
-        return convert(amount_usd, "USD", "EUR", cfg)
-    if cfg.account_currency == "USD":
-        return float(amount_usd)
-    raise ValueError(f"Unsupported account currency {cfg.account_currency} (expected EUR or USD).")
-
-
-def tripwire_threshold_account(product_price_usd: float, multiple: float = 2.0, cfg: Optional[MetricsConfig] = None) -> float:
-    """
-    For rules like: 'Instant tripwire: spend ≥ 2× product price (USD→EUR) & 0 purchases'
-    Returns threshold in account currency (EUR for your account).
-    """
-    cfg = cfg or MetricsConfig()
-    return usd_to_account(product_price_usd * multiple, cfg)
+    return product_price * multiple
 
 
 # -------------------- Data models --------------------
@@ -485,87 +447,11 @@ def aggregate_rows(
     )
 
 
-def groupby_aggregate(
-    rows: Iterable[Dict[str, Any]],
-    group_key: str,
-    cfg: Optional[MetricsConfig] = None,
-    *,
-    cogs_per_purchase: Optional[float] = None,
-    smoothing_epsilon: Optional[float] = None,
-) -> Dict[Any, Metrics]:
-    groups: Dict[Any, List[Dict[str, Any]]] = {}
-    for r in rows:
-        k = r.get(group_key)
-        groups.setdefault(k, []).append(r)
-    return {
-        k: aggregate_rows(v, cfg, cogs_per_purchase=cogs_per_purchase, smoothing_epsilon=smoothing_epsilon)
-        for k, v in groups.items()
-    }
-
-
-# -------------------- Quick accessors --------------------
-
-def purchases_count(row: Dict[str, Any], cfg: Optional[MetricsConfig] = None) -> float:
-    cfg = cfg or MetricsConfig()
-    return _scan_actions(row, cfg.action_aliases["purchase"], cfg.window_keys)
-
-
-def atc_count(row: Dict[str, Any], cfg: Optional[MetricsConfig] = None) -> float:
-    cfg = cfg or MetricsConfig()
-    return _scan_actions(row, cfg.action_aliases["add_to_cart"], cfg.window_keys)
-
-
-def ctr_basic(row: Dict[str, Any], epsilon: float = 0.0) -> float:
-    imps = _to_float(row.get("impressions"))
-    clicks = _to_float(row.get("clicks"))
-    if imps > 0:
-        return clicks / imps
-    return clicks / (imps + epsilon) if epsilon > 0 else 0.0
-
-
-def cpa_basic(row: Dict[str, Any], cfg: Optional[MetricsConfig] = None) -> Optional[float]:
-    cfg = cfg or MetricsConfig()
-    spend = _to_float(row.get("spend"))
-    p = purchases_count(row, cfg)
-    return _safe_div(spend, p, None) if p > 0 else None
-
-
-def roas_basic(row: Dict[str, Any], cfg: Optional[MetricsConfig] = None) -> float:
-    cfg = cfg or MetricsConfig()
-    spend = _to_float(row.get("spend"))
-    rev = _scan_values(row, cfg.value_aliases["purchase"], cfg.value_keys)
-    return _safe_div(rev, spend, 0.0) if spend > 0 else 0.0
-
-
-# -------------------- Diagnostics --------------------
-
-def explain_row(row: Dict[str, Any], cfg: Optional[MetricsConfig] = None) -> Dict[str, Any]:
-    m, d = metrics_from_row(row, cfg, compute_diagnostics=True)  # type: ignore[misc]
-    summary = m.as_dict()
-    summary["_diagnostics"] = {
-        "used_action_aliases": d.used_action_aliases,
-        "used_value_aliases": d.used_value_aliases,
-        "missing_required": d.missing_required,
-        "anomalies": d.anomalies,
-    }
-    return summary
-
-
 __all__ = [
     "MetricsConfig",
     "Metrics",
     "Diagnostics",
     "metrics_from_row",
     "aggregate_rows",
-    "groupby_aggregate",
-    "purchases_count",
-    "atc_count",
-    "ctr_basic",
-    "cpa_basic",
-    "roas_basic",
-    "explain_row",
-    # NEW exports
-    "convert",
-    "usd_to_account",
     "tripwire_threshold_account",
 ]

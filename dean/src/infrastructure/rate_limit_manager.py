@@ -405,8 +405,3 @@ def get_rate_limit_manager() -> RateLimitManager:
         _rate_limit_manager = RateLimitManager()
     return _rate_limit_manager
 
-
-def create_rate_limit_manager() -> RateLimitManager:
-    """Factory function to create RateLimitManager."""
-    return RateLimitManager()
-

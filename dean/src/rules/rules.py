@@ -19,8 +19,8 @@ from analytics.metrics import (
 
 UTC = timezone.utc
 
-# ---- Environment / defaults (EUR account; product price in USD) ----
-PRODUCT_PRICE = float(os.getenv("PRODUCT_PRICE", "50") or 50)   # USD price of the product (used for tripwire)
+# ---- Environment / defaults (EUR account; Meta returns all values in EUR) ----
+PRODUCT_PRICE = float(os.getenv("PRODUCT_PRICE", "50") or 50)   # EUR price of the product (used for tripwire)
 BREAKEVEN_CPA = float(os.getenv("BREAKEVEN_CPA", "27.51") or 27.51)   # EUR (account currency)
 COGS_ENV = os.getenv("COGS_PER_PURCHASE")
 COGS_PER_PURCHASE = float(COGS_ENV) if COGS_ENV not in (None, "") else None
@@ -45,22 +45,6 @@ def _pct_growth(curr: float, prev: float) -> float:
     if prev <= 0:
         return 999.0 if curr > 0 else 0.0
     return (curr - prev) / prev * 100.0
-
-
-def _softmax(xs: List[float]) -> List[float]:
-    if not xs:
-        return []
-    m = max(xs)
-    ex = [math.exp(x - m) for x in xs]
-    s = sum(ex) or 1.0
-    return [v / s for v in ex]
-
-
-@dataclass
-class AdaptiveBands:
-    ctr_floor: float
-    cpa_max: float
-    roas_min: float
 
 
 # ---- Compatibility shims to keep working with older metrics signatures ----
@@ -149,17 +133,11 @@ class AdvancedRuleEngine:
         except Exception:
             self.account_tz = pytz.timezone("Europe/Amsterdam")
 
-        # --- Metrics config (EUR account; USD product; pass FX rate if provided)
-        fx_cfg = ((self.cfg.get("economics", {}) or {}).get("fx", {}) or {})
-        # From env > YAML default_rate > fallback 0.92
-        fx_rate_env = os.getenv(fx_cfg.get("env_rate_var", "USD_EUR_RATE") or "USD_EUR_RATE")
-        usd_eur_rate = float(fx_rate_env) if fx_rate_env else float(fx_cfg.get("default_rate", 0.92))
-
+        # --- Metrics config (EUR account; Meta returns all values in EUR)
         self.metrics_cfg = MetricsConfig(
             prefer_roas_field=(self.roas_source == "field"),
             account_currency=(self.cfg.get("economics", {}).get("account_currency") or "EUR"),
-            product_currency=(fx_cfg.get("base_product_currency") or "USD"),
-            usd_eur_rate=usd_eur_rate,
+            product_currency=(self.cfg.get("economics", {}).get("product_currency") or "EUR"),
         )
 
         # --- COGS source
@@ -271,35 +249,6 @@ class AdvancedRuleEngine:
         self._set_counter(key, 0)
         return False
 
-    # ---------- Account-level adaptives ----------
-    def _ewma(self, key: str, value: float, alpha: float = 0.2, default: float = 0.0) -> float:
-        prev = _f(self._get_flag_value("engine", "GLOBAL", key), default)
-        new = alpha * value + (1 - alpha) * prev
-        self._set_flag_value("engine", "GLOBAL", key, f"{new:.10f}")
-        return new
-
-    def adaptive_bands(self, account_rows: Iterable[Dict[str, Any]]) -> AdaptiveBands:
-        m = _aggregate_rows_compat(list(account_rows), cfg=self.metrics_cfg, smoothing_epsilon=self.eps)
-        ctr_floor = max(0.003, self._ewma("acct::ctr_floor", m.ctr or 0.0))
-        cpa_max = max(10.0, self._ewma("acct::cpa_max", (m.cpa or BREAKEVEN_CPA) * 1.0))
-        roas_min = max(0.5, self._ewma("acct::roas_min", m.roas or 1.0))
-        return AdaptiveBands(ctr_floor=ctr_floor, cpa_max=cpa_max, roas_min=roas_min)
-
-    # ---------- Creative compliance ----------
-    def creative_compliance(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        issues: List[str] = []
-        for f in self.cc_require_fields:
-            if not str(payload.get(f) or "").strip():
-                issues.append(f"Missing required field: {f}")
-        blob = " ".join(str(payload.get(k, "")) for k in ("primary_text", "headline", "description")).lower()
-        for bad in self.cc_forbid_terms:
-            if bad and bad in blob:
-                issues.append(f"Contains forbidden term: {bad}")
-        for k, max_len in self.cc_max_lengths.items():
-            val = str(payload.get(k, "") or "")
-            if max_len and len(val) > max_len:
-                issues.append(f"{k} exceeds max length {max_len}")
-        return {"ok": len(issues) == 0, "issues": issues}
 
     # ---------- Stage rule evaluation ----------
     def _eval(self, rule: Dict[str, Any], m: Metrics, row: Dict[str, Any]) -> Tuple[bool, str]:
@@ -327,8 +276,8 @@ class AdvancedRuleEngine:
             return ok, f"ROAS<{rule['roas_lt']}" if ok else ""
 
         if t == "spend_over_2x_price_no_purchase":
-            # Tripwire in account currency (EUR): 2 × (USD product price → EUR)
-            threshold = tripwire_threshold_account(PRODUCT_PRICE, multiple=2.0, cfg=self.metrics_cfg)
+            # Tripwire in EUR: 2 × product price (Meta returns all values in EUR, no conversion needed)
+            threshold = tripwire_threshold_account(PRODUCT_PRICE, multiple=2.0)
             ok = (m.spend or 0) >= threshold and (m.purchases or 0) == 0
             return ok, f"Spend≥2× price (€{threshold:.2f}) & 0 purchases" if ok else ""
 
@@ -607,272 +556,8 @@ class AdvancedRuleEngine:
 
         return False, ""
 
-    # ---------- Stage decisions ----------
-    def should_kill_testing(self, row: Dict[str, Any], entity_id: str = "ad") -> Tuple[bool, str]:
-        m = self.compute_metrics(row)
-        if not self._meets_minimums("testing", m):
-            return False, ""
-        for r in self.cfg.get("testing", {}).get("kill", []):
-            ok, reason = self._eval(r, m, row)
-            if ok and self._stable(entity_id, f"test_kill:{r['type']}", True):
-                return True, reason
-            self._stable(entity_id, f"test_kill:{r['type']}", False)
-        return False, ""
 
-    def should_advance_from_testing(self, row: Dict[str, Any], entity_id: str = "ad") -> Tuple[bool, str]:
-        m = self.compute_metrics(row)
-        adv = (self.cfg.get("testing", {}) or {}).get("advance", {}) or {}
-        op = (adv.get("operator") or "all").lower()
-        rules = adv.get("rules", []) or []
-        if not rules:
-            return False, ""
-        res = [self._eval(r, m, row) for r in rules]
-        if (any(ok for ok, _ in res) if op == "any" else all(ok for ok, _ in res)):
-            if self._stable(entity_id, f"test_adv:{op}", True):
-                reasons = ", ".join([txt for ok, txt in res if ok])
-                return True, reasons
-            self._stable(entity_id, f"test_adv:{op}", False)
-        return False, ""
 
-    def should_kill_validation(self, row: Dict[str, Any], entity_id: str = "ad") -> Tuple[bool, str]:
-        m = self.compute_metrics(row)
-        if not self._meets_minimums("validation", m):
-            return False, ""
-        for r in self.cfg.get("validation", {}).get("kill", []):
-            ok, reason = self._eval(r, m, row)
-            if ok and self._stable(entity_id, f"valid_kill:{r['type']}", True):
-                return True, reason
-            self._stable(entity_id, f"valid_kill:{r['type']}", False)
-        return False, ""
-
-    def _purchase_days(self, row: Dict[str, Any]) -> int:
-        return int(row.get("purchase_days", 0) or 0)
-
-    def should_advance_from_validation(self, row: Dict[str, Any], entity_id: str = "ad") -> Tuple[bool, str]:
-        m = self.compute_metrics(row)
-        adv = (self.cfg.get("validation", {}) or {}).get("advance", {}) or {}
-        op = (adv.get("operator") or "all").lower()
-        rules = adv.get("rules", []) or []
-        strict = (self.cfg.get("validation", {}).get("strictness", {}) or {})
-        if not rules:
-            return False, ""
-        res = [self._eval(r, m, row) for r in rules]
-        ok = any(ok for ok, _ in res) if op == "any" else all(ok for ok, _ in res)
-        if not ok:
-            return False, ""
-        need_days = int(strict.get("min_days_with_purchase", 0) or 0)
-        if need_days and self._purchase_days(row) < need_days:
-            return False, f"Needs purchases on {need_days} days"
-        if self._stable(entity_id, f"valid_adv:{op}", True):
-            reasons = ", ".join([txt for f, txt in res if f])
-            return True, reasons
-        self._stable(entity_id, f"valid_adv:{op}", False)
-        return False, ""
-
-    def should_kill_scaling(self, row: Dict[str, Any], entity_id: str = "ad") -> Tuple[bool, str]:
-        m = self.compute_metrics(row)
-        if not self._meets_minimums("scaling", m):
-            return False, ""
-        consec_key = self._key(entity_id, "scale_bad_days")
-        for r in self.cfg.get("scaling", {}).get("kill", []):
-            ok, reason = self._eval(r, m, row)
-            if r["type"] == "cpa_gte_consecutive_days":
-                if m.cpa is not None and m.cpa >= r["cpa_gte"]:
-                    days = self._incr(consec_key, 1)
-                    if days >= int(r.get("days", 2)):
-                        return True, f"{reason} for {days}d"
-                else:
-                    self._set_counter(consec_key, 0)
-            elif ok and self._stable(entity_id, f"scale_kill:{r['type']}", True):
-                return True, reason
-            self._stable(entity_id, f"scale_kill:{r['type']}", False)
-        return False, ""
-
-    def should_kill_asc_plus(self, row: Dict[str, Any], entity_id: str = "ad") -> Tuple[bool, str]:
-        """Evaluate ASC+ kill rules."""
-        m = self.compute_metrics(row)
-        if not self._meets_minimums("asc_plus", m):
-            return False, ""
-
-        asc_cfg = (self.cfg.get("asc_plus", {}) or {})
-        kill_rules = asc_cfg.get("kill", []) or []
-
-        for rule in kill_rules:
-            ok, reason = self._eval(rule, m, row)
-            rule_key = f"asc_plus_kill:{rule.get('type')}"
-            if ok and self._stable(entity_id, rule_key, True):
-                return True, reason
-            self._stable(entity_id, rule_key, False)
-
-        return False, ""
-
-    # ---------- Scaling actions (legacy YAML keys still supported) ----------
-    def scaling_increase_budget_pct(self, row: Dict[str, Any], entity_id: str = "ad") -> int:
-        """
-        Reads thresholds from scaling.scale_up + scaling.scale_up.hysteresis (legacy keys kept in rules.yaml).
-        scaling.py uses scaling.engine.*; this keeps compatibility for any callers still using RuleEngine.
-        """
-        m = self.compute_metrics(row)
-        cfg = (self.cfg.get("scaling", {}).get("scale_up", {}) or {})
-        steps = cfg.get("steps", []) or []
-        cool_h = int(cfg.get("cooldown_hours", 0) or 0)
-        hyst = cfg.get("hysteresis", {}) or {}
-        roas_band = float(hyst.get("roas_down_band", 0) or 0)
-        cpa_band = float(hyst.get("cpa_up_band", 9e9) or 9e9)
-
-        last_scale_iso = self._get_flag_value("ad", entity_id, "last_scale_ts")
-        if last_scale_iso:
-            try:
-                if (_utcnow() - datetime.fromisoformat(last_scale_iso)) < timedelta(hours=cool_h):
-                    return 0
-            except Exception:
-                pass
-
-        if (m.roas or 0.0) < roas_band or (m.cpa is not None and m.cpa > cpa_band):
-            return 0
-
-        for r in steps:
-            ok, _ = self._eval(r, m, row)
-            if ok:
-                pct = int(sorted(r.get("budget_increase_pct", [0]))[0])
-                if pct > 0:
-                    self._set_flag_value("ad", entity_id, "last_scale_ts", _utcnow().isoformat())
-                return pct
-        return 0
-
-    def scaling_duplicate_on_fire(self, row: Dict[str, Any], entity_id: str = "ad") -> int:
-        m = self.compute_metrics(row)
-        dup = (self.cfg.get("scaling", {}).get("duplicate_on_fire", {}) or {})
-        cap = int(dup.get("max_duplicates_per_24h", 3) or 3)
-        rules = dup.get("rules", []) or []
-        used_key = self._key(entity_id, "dups", self._today_key_account())
-        used = self._get_counter(used_key)
-        for r in rules:
-            ok, _ = self._eval(r, m, row)
-            if ok:
-                want = int(r.get("duplicates", 0) or 0)
-                allow = max(0, min(want, cap - used))
-                if allow > 0:
-                    self._set_counter(used_key, used + allow)
-                    return allow
-        return 0
-
-    # ---------- Pacing & guardrails ----------
-    def pacing_flags(self, spend_today: float, spend_yday: float, spend_48ago: float) -> Dict[str, Any]:
-        vcfg = ((self.cfg.get("pacing", {}) or {}).get("spend_velocity", {}) or {})
-        g24 = _pct_growth(spend_today, spend_yday)
-        g48 = _pct_growth(spend_today + spend_yday, spend_yday + spend_48ago)
-        warn24 = g24 >= float(vcfg.get("growth_pct_24h_warn", 150))
-        warn48 = g48 >= float(vcfg.get("growth_pct_48h_warn", 250))
-        freeze = bool(vcfg.get("freeze_scaling_if_exceeds", True)) and (warn24 or warn48)
-        return {"warn_24h": warn24, "warn_48h": warn48, "freeze_scaling": freeze, "g24": g24, "g48": g48}
-
-    def account_guardrails(self, account_cpa: Optional[float], hours_since_last_purchase: Optional[int]) -> Dict[str, Any]:
-        acc = ((self.cfg.get("safety_nets", {}) or {}).get("account", {}) or {})
-        out = {"pause_scaling": False, "reasons": []}
-        pause = acc.get("pause_scaling_if_account_cpa_high", {}) or {}
-        if bool(pause.get("enabled", True)) and account_cpa is not None:
-            if account_cpa > BREAKEVEN_CPA * float(pause.get("factor_over_breakeven", 1.5)):
-                out["pause_scaling"] = True
-                out["reasons"].append(f"CPA {account_cpa:.2f} > BE * {pause.get('factor_over_breakeven',1.5)}")
-        trip = acc.get("no_purchases_tripwire_hours", None)
-        if trip is not None and hours_since_last_purchase is not None and hours_since_last_purchase >= int(trip):
-            out["pause_scaling"] = True
-            out["reasons"].append(f"No purchases ≥{trip}h")
-        return out
-
-    # ---------- Fatigue & reinvest ----------
-    def fatigue_flag(self, window_rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
-        rows = list(window_rows)
-        if len(rows) < 2:
-            return {"fatigued": False}
-        m_old = self.compute_metrics(rows[0])
-        m_new = self.compute_metrics(rows[-1])
-        ctr_drop = (m_old.ctr or 0) > 0 and ((m_old.ctr - (m_new.ctr or 0)) / (m_old.ctr)) > 0.25
-        roas_drop = (m_old.roas or 0) > 0 and ((m_old.roas - (m_new.roas or 0)) / (m_old.roas)) > 0.25
-        return {"fatigued": ctr_drop or roas_drop, "ctr_drop": ctr_drop, "roas_drop": roas_drop}
-
-    def reinvest_allocation(self, winners: List[Dict[str, Any]], freed_budget: float, strategy: str = "proportional_to_roas") -> List[Tuple[str, float]]:
-        if not winners or freed_budget <= 0:
-            return []
-        if strategy == "even":
-            bump = freed_budget / len(winners)
-            return [(w["adset_id"], bump) for w in winners]
-        if strategy == "bias_to_new_winners":
-            ages = [max(1, int(w.get("days_live", 1))) for w in winners]
-            weights = [1.0 / a for a in ages]
-            sm = sum(weights) or 1.0
-            return [(w["adset_id"], freed_budget * (wgt / sm)) for w, wgt in zip(winners, weights)]
-        roas_vals = [max(0.1, _f(w.get("ROAS"), 0.1)) for w in winners]
-        probs = _softmax(roas_vals)
-        return [(w["adset_id"], freed_budget * p) for w, p in zip(winners, probs)]
-
-    # ---------- Engine accessors (NEW) ----------
-    def get_validation_engine_settings(self) -> Dict[str, Any]:
-        """
-        Convenience accessor mirroring rules.yaml: validation.engine.*
-        Helpful if you want to wire env vars for validation.py at runtime
-        or inspect configured thresholds from a single place.
-        """
-        return (self.cfg.get("validation", {}) or {}).get("engine", {}) or {}
-
-    def get_scaling_engine_settings(self) -> Dict[str, Any]:
-        """
-        Convenience accessor mirroring rules.yaml: scaling.engine.*
-        scaling.py reads the same structure directly; this helper is
-        provided for tooling/tests that only have RuleEngine around.
-        """
-        return (self.cfg.get("scaling", {}) or {}).get("engine", {}) or {}
-
-    def get_engine_attr_windows(self, stage: str) -> List[str]:
-        """
-        Return attribution windows from the stage's engine block if present,
-        else fall back to ["7d_click","1d_view"].
-        stage: "testing" | "validation" | "scaling"
-        """
-        stage = (stage or "").lower()
-        default = ["7d_click", "1d_view"]
-        eng = (self.cfg.get(stage, {}) or {}).get("engine", {}) or {}
-        wins = eng.get("attribution_windows")
-        if isinstance(wins, (list, tuple)) and wins:
-            return list(wins)
-        return default
-
-    def account_timezone(self) -> str:
-        return self.account_tz_name
-
-    # ---------- Explain / simulate ----------
-    def explain(self, stage: str, row: Dict[str, Any]) -> Dict[str, Any]:
-        m = self.compute_metrics(row)
-        thresholds = self.cfg.get("thresholds", {}) or {}
-        return {
-            "stage": stage,
-            "spend": m.spend,
-            "impressions": m.impressions,
-            "clicks": m.clicks,
-            "purchases": m.purchases,
-            "ctr": m.ctr,
-            "cpa": m.cpa,
-            "roas": m.roas,
-            "aov": m.aov,
-            "poas": m.poas,
-            "thresholds": thresholds,
-            "account_tz": self.account_tz_name,
-        }
-
-    def simulate_decision(self, stage: str, row: Dict[str, Any]) -> Dict[str, Any]:
-        if stage == "TEST":
-            k, kr = self.should_kill_testing(row, row.get("ad_id", "ad"))
-            a, ar = self.should_advance_from_testing(row, row.get("ad_id", "ad"))
-        elif stage == "VALID":
-            k, kr = self.should_kill_validation(row, row.get("ad_id", "ad"))
-            a, ar = self.should_advance_from_validation(row, row.get("ad_id", "ad"))
-        else:
-            k, kr = self.should_kill_scaling(row, row.get("ad_id", "ad"))
-            inc = self.scaling_increase_budget_pct(row, row.get("ad_id", "ad"))
-            dups = self.scaling_duplicate_on_fire(row, row.get("ad_id", "ad"))
-            return {"kill": k, "kill_reason": kr, "scale_up_pct": inc, "duplicate": dups, "explain": self.explain(stage, row)}
-        return {"kill": k, "kill_reason": kr, "advance": a, "advance_reason": ar, "explain": self.explain(stage, row)}
 
 
 RuleEngine = AdvancedRuleEngine

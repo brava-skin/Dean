@@ -1,276 +1,30 @@
 # =====================================================
 # PRODUCTION ENVIRONMENT CONFIGURATION
-# ML System, Profiles, and Environment Overrides
+# Minimal configuration - only actively used keys
 # =====================================================
 
 version: 2.0
 environment: production
 
-# ── Profile Settings ──────────────────────────────────
-profile:
-  name: "production"
-  dry_run: false
-  write_enabled: true
-  debug_mode: false
-
 # ── ML System Configuration ───────────────────────────
+# Only .enabled is used - all other ML config removed as unused
 ml_system:
   enabled: false  # ML system disabled - focusing on rule system and creative engine
-  mode: "disabled"  # enhanced | standard | disabled
-  fallback_to_legacy: true  # If ML fails, use rule-based system
-  
-  # Model Training
-  training:
-    retrain_frequency_hours: 24
-    min_data_points: 5
-    min_confidence: 0.7
-    cross_validation_folds: 5
-  
-  # Predictions
-  predictions:
-    enabled: true
-    horizon_hours: 24
-    confidence_threshold: 0.7
-    update_frequency_hours: 6
-  
-  # Learning Parameters
-  learning:
-    learning_rate: 0.1
-    adaptation_rate: 0.05
-    memory_decay: 0.95
-    max_adjustment_pct: 0.2
-  
-  # Feature Engineering
-  features:
-    rolling_windows: [1, 3, 7, 14, 30]
-    include_interactions: true
-    include_temporal: true
-    max_features: 100
 
 # ── Placements Overrides ──────────────────────────────
 placements:
   asc_plus:
     advantage_plus_placements: true  # Use Advantage+ Placements
 
-# ── Adaptive Rules Engine ─────────────────────────────
-adaptive_rules:
-  enabled: true
-  
-  # Target metrics (ML will adjust thresholds toward these)
-  targets:
-    cpa_eur: 27.50
-    roas: 2.0
-    ctr: 0.008
-    atc_rate: 0.005                        # ATC rate target (0.5%)
-    cpm_eur: 80                            # CPM target (€80)
-    cost_per_atc_eur: 15                   # Cost per ATC target (€15)
-    impression_drop_pct: 30                # Impression drop threshold (30%)
-  
-  # Adaptation parameters
-  adaptation:
-    learning_rate: 0.1
-    max_adjustment_pct: 0.2
-    confidence_weight: 0.8
-    min_data_points: 10
-  
-  # Rule types to adapt
-  adapt_rules:
-    - "kill_thresholds"
-    - "promotion_thresholds"
-    - "budget_allocation"
-    - "pacing_controls"
-    - "metric_based_rules"                  # New metric-based rules
-    - "4_day_testing_rules"                 # 4-day testing system rules
-    - "atc_performance_rules"               # ATC performance rules
-    - "cpm_management_rules"                # CPM management rules
-
-# ── Performance Tracking ──────────────────────────────
-performance_tracking:
-  enabled: true
-  
-  fatigue:
-    detection_enabled: true
-    analysis_frequency_hours: 12
-    decay_threshold: 0.2
-    half_life_calculation: true
-  
-  momentum:
-    tracking_enabled: true
-    acceleration_detection: true
-    trend_analysis: true
-  
-  quality_scores:
-    calculate: true
-    include_stability: true
-    include_momentum: true
-    include_metric_performance: true        # Include new metric performance
-    include_4_day_testing: true             # Include 4-day testing performance
-    include_atc_efficiency: true           # Include ATC efficiency metrics
-
-# ── Creative Intelligence ─────────────────────────────
-creative_intelligence:
-  enabled: true
-  
-  similarity:
-    analysis_enabled: true
-    threshold: 0.8
-    vector_dimensions: 384
-  
-  optimization:
-    enabled: true
-    recommend_variants: true
-    avoid_similar_fails: true
-  
-  patterns:
-    discovery_enabled: true
-    min_confidence: 0.7
-    min_occurrences: 3
-
-# ── Cross-Stage Learning ──────────────────────────────
-cross_stage_learning:
-  enabled: true
-  transfer_frequency_hours: 24
-  confidence_threshold: 0.75
-  impact_threshold: 0.6
-  
-  # What to transfer
-  transfer:
-    - "winning_patterns"
-    - "fatigue_signals"
-    - "creative_attributes"
-    - "optimal_budgets"
-
-# ── ML Reporting ──────────────────────────────────────
-ml_reporting:
-  enabled: true
-  
-  daily_reports:
-    enabled: true
-    send_to_slack: true
-    include_predictions: true
-    include_confidence: true
-    include_recommendations: true
-  
-  weekly_reports:
-    enabled: true
-    day_of_week: "monday"
-    include_learning_summary: true
-    include_model_performance: true
-  
-  insights:
-    predictive_insights: true
-    confidence_scoring: true
-    feature_importance: true
-
-# ── System Health Monitoring ──────────────────────────
-system_health:
-  monitoring:
-    enabled: true
-    check_frequency_hours: 6
-  
-  alerts:
-    enabled: true
-    low_confidence_threshold: 0.5
-    high_error_rate_pct: 10
-    model_degradation_threshold: 0.3
-  
-  auto_recovery:
-    enabled: true
-    retrain_on_degradation: true
-    fallback_on_failure: true
-
-# ── Database Configuration ────────────────────────────
-database:
-  supabase:
-    connection_pool_size: 10
-    query_timeout_seconds: 30
-    retry_attempts: 3
-    batch_insert_size: 100
-  
-  sqlite:
-    wal_mode: true
-    synchronous: "NORMAL"
-    journal_mode: "WAL"
-    timeout_seconds: 30
-
-# ── Logging Configuration ─────────────────────────────
-logging:
-  level: "INFO"  # DEBUG | INFO | WARNING | ERROR
-  
-  include:
-    ml_insights: true
-    performance_metrics: true
-    # Removed: learning_events (table no longer used)
-    predictions: true
-    model_updates: true
-    error_tracking: true
-  
-  output:
-    console: true
-    slack: true
-    file: true
-
-# ── Notification Settings ─────────────────────────────
-notifications:
-  slack:
-    enabled: true
-    
-    # What to send
-    send:
-      run_summaries: true
-      ml_insights: true
-      performance_alerts: true
-      learning_updates: true
-      error_notifications: true
-      prediction_highlights: true
-    
-    # Frequency
-    frequency:
-      immediate: ["errors", "critical_alerts"]
-      hourly: ["performance_summaries"]
-      daily: ["ml_reports", "learning_updates"]
-
-# ── Performance Optimizations ─────────────────────────
-optimizations:
-  caching:
-    enabled: true
-    ttl_seconds: 300
-  
-  parallel_processing:
-    enabled: true
-    max_workers: 4
-  
-  batch_operations:
-    enabled: true
-    batch_size: 50
-
 # ── Safety Overrides ──────────────────────────────────
 overrides:
-  # Manual controls (use with caution)
-  manual:
-    freeze_all_scaling: false
-    halt_testing_launches: false
-    read_only_mode: false
-    force_ml_retrain: false
-  
   # Emergency controls
   emergency:
-    stop_all_automation: false
-    pause_all_ads: false
-    disable_ml: false
-
-# ── Feature Flags ─────────────────────────────────────
-  features:
-    ml_predictions: false                   # Disabled during ATC learning phase
-    adaptive_thresholds: true
-    creative_similarity: true
-    fatigue_detection: true
-    temporal_analysis: true
-    cross_stage_transfer: false             # Disabled - single campaign focus
-    auto_budget_optimization: false         # Disabled - fixed €100/day budget
-    predictive_scaling: false                # Disabled - no scaling during learning phase
+    stop_all_automation: false  # Only this key is used
 
 # ── ASC+ Campaign Configuration ───────────────────────
+# Note: This section is duplicated from settings.yaml for production overrides
+# Most ASC+ config is in settings.yaml; this file only contains production-specific overrides
 asc_plus:
   daily_budget_eur: 100                    # Fixed budget: €100/day for 30 days (no scaling)
   keep_ads_live: 10

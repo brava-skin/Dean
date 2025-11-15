@@ -12,7 +12,7 @@ import schedule
 
 from .storage import Store
 from integrations.slack import (
-    notify, alert_kill, alert_promote, alert_scale, alert_fatigue, 
+    notify, alert_kill, alert_fatigue, 
     alert_data_quality, alert_error, alert_queue_empty, alert_new_launch,
     alert_system_health, alert_budget_alert, post_digest, client as slack_client
 )

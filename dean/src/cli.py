@@ -198,8 +198,6 @@ except Exception:
 # ML Intelligence System (NEW) - Conditional imports
 try:
     from ml.ml_intelligence import create_ml_system, MLConfig
-    from rules import IntelligentRuleEngine, RuleConfig, create_intelligent_rule_engine
-    from analytics import PerformanceTrackingSystem, create_performance_tracking_system
     from ml.ml_reporting import MLReportingSystem, create_ml_reporting_system
     from ml.ml_enhancements import (
         create_model_validator, create_data_progress_tracker, create_anomaly_detector,
@@ -227,13 +225,8 @@ except ImportError as e:
     # Create dummy classes for compatibility
     class SimpleMLIntelligenceSystem: pass
     class MLConfig: pass
-    class IntelligentRuleEngine: pass
-    class RuleConfig: pass
-    class PerformanceTrackingSystem: pass
     class MLReportingSystem: pass
     def create_ml_system(*args, **kwargs): return None
-    def create_intelligent_rule_engine(*args, **kwargs): return None
-    def create_performance_tracking_system(*args, **kwargs): return None
     def create_ml_reporting_system(*args, **kwargs): return None
     def create_model_validator(*args, **kwargs): return None
     def create_data_progress_tracker(*args, **kwargs): return None
@@ -388,84 +381,6 @@ def _normalize_video_id_cell(v: Any) -> str:
     # last resort: keep only digits if that yields something plausible
     digits = "".join(ch for ch in s if ch.isdigit())
     return digits if digits else ""
-
-
-def load_queue(path: str) -> pd.DataFrame:
-    """
-    Load creatives queue from a file path (CSV/XLSX). Expected optional columns:
-      video_id, filename, avatar, visual_style, script
-    Extended optional columns that may be present:
-      creative_id, name, thumbnail_url, primary_text, headline, description, page_id, utm_params
-    Supports .csv and .xlsx. Returns an empty, well-typed DataFrame on error.
-    """
-    cols = [
-        "creative_id",
-        "name",
-        "video_id",
-        "thumbnail_url",
-        "primary_text",
-        "headline",
-        "description",
-        "page_id",
-        "utm_params",
-        "avatar",
-        "visual_style",
-        "script",
-        "filename",
-        "status",  # NEW: keep status in DF for notify-once logic in stages
-    ]
-
-    if not path or not os.path.exists(path):
-        return pd.DataFrame(columns=cols)
-
-    # Read as strings to avoid pandas -> float/scientific coercion
-    try:
-        if path.lower().endswith((".xlsx", ".xls")):
-            df = pd.read_excel(
-                path,
-                dtype=str,
-                keep_default_na=False,
-                converters={"video_id": _normalize_video_id_cell},
-            )
-        else:
-            try:
-                df = pd.read_csv(
-                    path,
-                    dtype=str,
-                    keep_default_na=False,
-                )
-            except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError):
-                df = pd.read_csv(
-                    path,
-                    dtype=str,
-                    keep_default_na=False,
-                    encoding="utf-8-sig",
-                )
-    except (FileNotFoundError, IOError, OSError, pd.errors.ParserError):
-        return pd.DataFrame(columns=cols)
-
-    # Ensure all expected columns exist
-    for c in cols:
-        if c not in df.columns:
-            df[c] = ""
-
-    # Canonical order
-    df = df[cols]
-
-    # Normalize video_id for CSV (read_csv converters are not applied like read_excel ones)
-    try:
-        if "video_id" in df.columns:
-            df["video_id"] = df["video_id"].map(_normalize_video_id_cell)
-    except (KeyError, AttributeError, TypeError):
-        # video_id column may not exist or may not be mappable - not critical
-        pass
-
-    return df
-
-
-def save_queue(df: pd.DataFrame, path: str) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(path, index=False)
 
 
 def digest_path_for_today() -> str:
@@ -719,14 +634,6 @@ def _calculate_fatigue_index(ad_data: Dict[str, Any]) -> float:
         return 0.0
 
 
-def _get_next_stage(current_stage: str) -> Optional[str]:
-    """Get the next stage in the lifecycle - ASC+ only."""
-    # For new ads in ASC+ stage, there is no next stage yet
-    # Only return a next stage when the ad is actually transitioning
-    # For now, ASC+ is the only stage, so new ads have no next stage
-    return None
-
-
 def _calculate_stage_duration_hours(ad_id: str, current_stage: str) -> float:
     """Calculate how long the ad has been in the current stage."""
     try:
@@ -747,67 +654,6 @@ def _calculate_stage_duration_hours(ad_id: str, current_stage: str) -> float:
     except (AttributeError, TypeError, ValueError):
         # Age calculation failed - return 0
         return 0.0
-
-
-def _get_previous_stage(ad_id: str, current_stage: str) -> Optional[str]:
-    """Get the previous stage in the lifecycle - ASC+ only."""
-    # For new ads in ASC+ stage, there is no previous stage
-    # Only return a previous stage if the ad actually transitioned from another stage
-    # For now, ASC+ is the only stage, so new ads have no previous stage
-    return None
-
-
-def _get_stage_performance(ad_data: Dict[str, Any], stage: str) -> Optional[Dict[str, Any]]:
-    """Get performance metrics for the current stage."""
-    # For new ads with zero performance, return None (will be populated as data comes in)
-    try:
-        spend = safe_float(ad_data.get('spend', 0))
-        impressions = int(ad_data.get('impressions', 0))
-        purchases = int(ad_data.get('purchases', 0))
-        
-        # If ad has no performance data yet (all zeros), return None
-        if spend == 0 and impressions == 0 and purchases == 0:
-            return None
-        
-        return {
-            'ctr': safe_float(ad_data.get('ctr', 0)),
-            'cpa': safe_float(ad_data.get('cpa', 0)),
-            'roas': safe_float(ad_data.get('roas', 0)),
-            'spend': spend,
-            'purchases': purchases,
-            'stage': stage
-        }
-    except (ValueError, TypeError, KeyError) as e:
-        logger.error(f"Error getting stage performance: {e}", exc_info=True)
-        return None
-
-
-def _get_transition_reason(ad_data: Dict[str, Any], stage: str) -> Optional[str]:
-    """Get the reason for stage transition - ASC+ only."""
-    # For new ads, there is no transition reason yet
-    # Only return a reason when the ad actually transitions between stages
-    try:
-        spend = safe_float(ad_data.get('spend', 0))
-        impressions = int(ad_data.get('impressions', 0))
-        
-        # If ad has no performance data yet (all zeros), return None
-        if spend == 0 and impressions == 0:
-            return None
-        
-        ctr = safe_float(ad_data.get('ctr', 0))
-        cpa = safe_float(ad_data.get('cpa', 0))
-        roas = safe_float(ad_data.get('roas', 0))
-        
-        if stage == 'asc_plus':
-            if ctr >= 1.0 and cpa <= 30 and roas >= 1.0:
-                return 'ASC+ campaign performing well'
-            else:
-                return 'ASC+ campaign - monitoring performance'
-        else:
-            return None
-    except (KeyError, ValueError, TypeError):
-        # For new ads with no data, return None
-        return None
 
 
 def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any], stage: str, ml_system=None) -> None:
@@ -1024,38 +870,6 @@ def store_performance_data_in_supabase(supabase_client, ad_data: Dict[str, Any],
         logger.error(f"Failed to store performance data in Supabase: {e}", exc_info=True)
         notify(f"❌ Failed to store performance data in Supabase: {e}")
 
-def store_ml_insights_in_supabase(supabase_client, ad_id: str, insights: Dict[str, Any]) -> None:
-    """Store ML insights in Supabase with automatic validation."""
-    if not supabase_client:
-        return
-    
-    try:
-        # Get validated Supabase client for automatic validation
-        validated_client = _get_validated_supabase()
-        if not validated_client:
-            validated_client = supabase_client
-        
-        # Store creative intelligence data with validation
-        creative_type = insights.get('creative_type', 'image')
-        if creative_type not in ['image', 'video', 'carousel', 'collection', 'story', 'reels']:
-            creative_type = 'image'  # Default to image for ASC+ static image campaigns
-        
-        creative_data = {
-            'creative_id': insights.get('creative_id', f'creative_{ad_id}'),
-            'ad_id': ad_id,
-            'creative_type': creative_type,
-            'performance_score': float(insights.get('performance_score', 0)),
-            'fatigue_index': float(insights.get('fatigue_index', 0)),
-            'similarity_vector': insights.get('similarity_vector', None),  # Use None instead of empty list
-            'metadata': insights.get('metadata', {})
-        }
-        
-        # Upsert with automatic validation
-        validated_client.upsert('creative_intelligence', creative_data, on_conflict='creative_id,ad_id')
-        
-    except (KeyError, ValueError, TypeError) as e:
-        logger.error(f"Failed to store ML insights in Supabase: {e}", exc_info=True)
-
 
 def safe_float_global(value, max_val=None):
     """Safely convert value to float with bounds checking (global version)."""
@@ -1177,55 +991,6 @@ def collect_stage_ad_data(meta_client, settings: Dict[str, Any], stage: str) -> 
 
     return ad_data
 
-def store_creative_data_in_supabase(supabase_client, meta_client, ad_id: str, stage: str) -> None:
-    """Fetch and store creative intelligence data from Meta API (NEW)."""
-    if not supabase_client or not meta_client:
-        return
-    
-    # Fetch creative data from Meta API
-    try:
-        ad = meta_client.api.call(
-            'GET',
-            (ad_id,),
-            params={'fields': 'creative,name'}
-        )
-        
-        creative_id = ad.get('creative', {}).get('id') if isinstance(ad.get('creative'), dict) else ad.get('creative')
-        
-        if not creative_id:
-            return
-        
-        # Fetch creative details
-        creative = meta_client.api.call(
-            'GET',
-            (creative_id,),
-            params={'fields': 'title,body,image_url,video_id,object_type'}
-        )
-        
-        # Store in creative_intelligence with validation
-        creative_data = {
-            'creative_id': str(creative_id),
-            'ad_id': ad_id,
-            'creative_type': creative.get('object_type', 'image'),
-            'performance_score': 0.5,  # Will be updated by ML
-            'fatigue_index': 0.0,
-            'similarity_vector': None,  # Will be populated by ML later
-            'metadata': {}
-        }
-        
-        # Get validated client for automatic validation
-        validated_client = _get_validated_supabase()
-        if validated_client:
-            validated_client.upsert('creative_intelligence', creative_data, on_conflict='creative_id')
-        else:
-            supabase_client.table('creative_intelligence').upsert(creative_data, on_conflict='creative_id').execute()
-        notify(f"🎨 Creative data validated and stored for {ad_id}")
-        
-    except (KeyError, ValueError, TypeError, AttributeError) as e:
-        # Creative data is optional, log but don't fail
-        logger.debug(f"Failed to store creative data for {ad_id}: {e}")
-
-
 def initialize_creative_intelligence_system(supabase_client, settings) -> Optional[Any]:
     """Initialize the creative intelligence system."""
     try:
@@ -1240,8 +1005,7 @@ def initialize_creative_intelligence_system(supabase_client, settings) -> Option
             settings=settings
         )
         
-        # Load copy bank data to Supabase
-        creative_system.load_copy_bank_to_supabase()
+        # Copy bank loading removed - ASC+ uses AI-generated copy (ChatGPT-5) instead
         
         notify("🎨 Creative Intelligence System initialized")
         return creative_system
@@ -1249,188 +1013,6 @@ def initialize_creative_intelligence_system(supabase_client, settings) -> Option
     except Exception as e:
         notify(f"⚠️ Failed to initialize Creative Intelligence System: {e}")
         return None
-
-
-def setup_supabase_table():
-    """
-    Helper function to create the required Supabase table schema.
-    Run this once to set up your Supabase table with the correct columns.
-    """
-    sb = _get_supabase()
-    if not sb:
-        notify("❌ Supabase client not available. Check your SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables.")
-        return False
-    
-    table = os.getenv("SUPABASE_TABLE", "meta_creatives")
-    
-    # SQL to create the table with required columns
-    create_table_sql = f"""
-    CREATE TABLE IF NOT EXISTS {table} (
-        id SERIAL PRIMARY KEY,
-        video_id TEXT,
-        filename TEXT,
-        avatar TEXT,
-        visual_style TEXT,
-        script TEXT,
-        status TEXT DEFAULT 'pending',
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-    );
-    """
-    
-    try:
-        # Note: This requires SQL execution permissions in Supabase
-        # You might need to run this manually in your Supabase SQL editor
-        notify(f"📋 To set up your Supabase table, run this SQL in your Supabase SQL editor:")
-        notify(f"```sql")
-        notify(f"{create_table_sql}")
-        notify(f"```")
-        notify(f"📝 Table name: {table}")
-        notify(f"🔑 Required columns: id, video_id, filename, avatar, visual_style, script, status")
-        return True
-    except Exception as e:
-        notify(f"❗ Failed to create table: {e}")
-        return False
-
-
-def load_queue_supabase(
-    table: str = None,
-    status_filter: str = "pending",
-    limit: int = 64,
-) -> pd.DataFrame:
-    """
-    Read creative rows from Supabase and normalize to the columns Testing expects.
-    Selects rows where status is NULL or equals `status_filter`.
-
-    Returns a DataFrame with columns:
-      creative_id, name, video_id, thumbnail_url, primary_text, headline, description,
-      page_id, utm_params, avatar, visual_style, script, filename, status
-    """
-    cols = [
-        "creative_id",
-        "name",
-        "video_id",
-        "thumbnail_url",
-        "primary_text",
-        "headline",
-        "description",
-        "page_id",
-        "utm_params",
-        "avatar",
-        "visual_style",
-        "script",
-        "filename",
-        "status",  # NEW: expose DB status to stages
-    ]
-
-    sb = _get_supabase()
-    if not sb:
-        notify("⚠️ Supabase client not available; falling back to file-based queue.")
-        return pd.DataFrame(columns=cols)
-
-    table = table or os.getenv("SUPABASE_TABLE", "meta_creatives")
-    try:
-        # Build select query with required columns
-        select_columns = ["id", "video_id", "filename", "avatar", "visual_style", "script", "status"]
-        select_str = ", ".join(select_columns)
-        
-        q = (
-            sb.table(table)
-            .select(select_str)
-            .or_("status.is.null,status.eq.{}".format(status_filter))
-            .limit(limit)
-        )
-        data = q.execute().data or []
-    except Exception as e:
-        notify(f"❗ Supabase read failed: {e}")
-        return pd.DataFrame(columns=cols)
-
-    rows = []
-    for r in data:
-        rows.append(
-            {
-                "creative_id": r.get("id") or "",
-                "name": "",  # label is built from avatar/visual/script inside Testing tick
-                "video_id": _normalize_video_id_cell(r.get("video_id")),
-                "thumbnail_url": "",
-                "primary_text": "",
-                "headline": "",
-                "description": "",
-                "page_id": "",
-                "utm_params": "",
-                "avatar": r.get("avatar") or "",
-                "visual_style": r.get("visual_style") or "",
-                "script": r.get("script") or "",
-                "filename": r.get("filename") or "",
-                "status": (r.get("status") or "").lower(),  # keep raw status visible
-            }
-        )
-
-    df = pd.DataFrame(rows, columns=cols)
-    # Ensure string dtype and fill NA; normalize video_id
-    for c in cols:
-        if c not in df.columns:
-            df[c] = ""
-        df[c] = df[c].astype(str).fillna("")
-    try:
-        df["video_id"] = df["video_id"].map(_normalize_video_id_cell)
-    except Exception:
-        pass
-
-    # Queue loaded silently
-    return df
-
-
-def set_supabase_status(
-    ids_or_video_ids: List[str],
-    new_status: str,
-    *,
-    use_column: str = "id",
-    table: str = None,
-) -> None:
-    """
-    Generic status setter for meta_creatives.
-      use_column='id'       -> pass Supabase PKs (matches 'creative_id' in DF)
-      use_column='video_id' -> pass Meta video IDs
-    Examples:
-      set_supabase_status([creative_id], 'launched')
-      set_supabase_status([creative_id], 'paused')
-      set_supabase_status([creative_id], 'pending')
-    """
-    if not ids_or_video_ids:
-        return
-    sb = _get_supabase()
-    if not sb:
-        return
-
-    table = table or os.getenv("SUPABASE_TABLE", "meta_creatives")
-    try:
-        CHUNK = 100
-        for i in range(0, len(ids_or_video_ids), CHUNK):
-            chunk = ids_or_video_ids[i : i + CHUNK]
-            if use_column == "video_id":
-                (
-                    sb.table(table)
-                    .update({"status": new_status})
-                    .in_("video_id", chunk)
-                    .execute()
-                )
-            else:
-                (
-                    sb.table(table)
-                    .update({"status": new_status})
-                    .in_("id", chunk)
-                    .execute()
-                )
-    except Exception as e:
-        notify(f"⚠️ Supabase status update failed ({new_status}): {e}")
-
-
-def mark_supabase_launched(ids_or_video_ids: List[str], use_column: str = "id", table: str = None) -> None:
-    """
-    Backward-compat helper. Prefer set_supabase_status(..., 'launched').
-    """
-    set_supabase_status(ids_or_video_ids, "launched", use_column=use_column, table=table)
 
 
 # --------------------------- Config hygiene --------------------------------

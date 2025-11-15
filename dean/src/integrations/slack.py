@@ -378,11 +378,12 @@ def format_run_header(status: str, time_str: str, profile: str, spend: float, pu
     cpc_str = fmt_eur(cpc)
     cpm_str = fmt_eur(cpm)
 
-    # Simplified format: time Spend · ATC · IC · PUR CPA CPATC IMP · Clicks · CTR · CPC · CPM
+    # Improved format with better spacing and organization
     main_line = (
-        f"{time_str}"
-        f"Spend {spend_str} · ATC {atc} · IC {ic} · PUR {purch}"
-        f"CPA {cpa_str} CPATC {cost_per_atc_str} IMP {_fmt_int(impressions)} · Clicks {_fmt_int(clicks)} · "
+        f"{time_str} "
+        f"Spend {spend_str} · ATC {atc} · IC {ic} · PUR {purch} | "
+        f"CPA {cpa_str} · Cost/ATC {cost_per_atc_str} | "
+        f"IMP {_fmt_int(impressions)} · Clicks {_fmt_int(clicks)} · "
         f"CTR {ctr_str} · CPC {cpc_str} · CPM {cpm_str}"
     )
     return main_line
@@ -588,47 +589,6 @@ def template_kill(stage: str, entity_name: str, reason: str, metrics: Dict[str, 
         text=text,
         severity="warn",
         topic="alerts",
-    )
-
-def template_promote(src: str, dst: str, entity_name: str, budget: Optional[float] = None, link: Optional[str] = None) -> SlackMessage:
-    """
-    Human promotion message using new format.
-    """
-    # Clean up the ad name for display
-    clean_name = prettify_ad_name(entity_name)
-    
-    # Humanized message - like a media buyer colleague texting
-    text = f"🎉 Great news! {clean_name} is performing well\nMoving from {src} to {dst} stage"
-    
-    if budget is not None:
-        text += f"\nSetting budget to {fmt_eur(budget)}/day on FB + IG"
-    
-    text += "\nKeeping the same ad ID for tracking"
-    
-    return SlackMessage(
-        text=text,
-        topic="alerts",
-        severity="info",
-    )
-
-def template_scale(entity_name: str, pct: int, new_budget: Optional[float] = None, link: Optional[str] = None) -> SlackMessage:
-    """
-    Human scaling message using new format.
-    """
-    # Clean up the ad name for display
-    clean_name = prettify_ad_name(entity_name)
-    
-    # Humanized message - like a media buyer colleague texting
-    text = f"🚀 {clean_name} is crushing it! Scaling up by {pct}%"
-    
-    if new_budget is not None:
-        text += f"\nNew budget: {fmt_eur(new_budget)}/day on FB + IG"
-    
-    text += "\nThis one's a winner!"
-    
-    return SlackMessage(
-        text=text,
-        topic="scale",
     )
 
 def template_digest(date_label: str, stage_stats: Dict[str, Dict[str, Any]]) -> SlackMessage:
@@ -1136,51 +1096,12 @@ def alert_kill(stage: str = "ASC+", entity_name: str = "", reason: str = "", met
     """
     client().notify(template_kill(stage, entity_name, reason, metrics, link))
 
-def alert_promote(from_stage: str, to_stage: str, entity_name: str, budget: Optional[float] = None, link: Optional[str] = None) -> None:
-    """
-    Human promotion message.
-    """
-    client().notify(template_promote(from_stage, to_stage, entity_name, budget, link))
-
-def alert_scale(entity_name: str, pct: int, new_budget: Optional[float] = None, link: Optional[str] = None) -> None:
-    """
-    Human scaling message.
-    """
-    client().notify(template_scale(entity_name, pct, new_budget, link))
 
 def post_digest(date_label: str, stage_stats: Dict[str, Dict[str, Any]]) -> None:
     """
     Human daily digest.
     """
     client().notify(template_digest(date_label, stage_stats))
-
-def alert_fatigue(stage: str, entity_name: str, reason: str = "ctr drop vs trend, monitor") -> None:
-    """
-    Fatigue alert using new format.
-    """
-    clean_name = prettify_ad_name(entity_name)
-    text = f"⚠️ {clean_name} in {stage} is showing fatigue\n{reason}\nMight need fresh creative soon"
-    
-    msg = SlackMessage(
-        text=text,
-        severity="warn",
-        topic="alerts",
-    )
-    client().notify(msg)
-
-def alert_data_quality(stage: str, entity_name: str, reason: str) -> None:
-    """
-    Data quality alert using new format.
-    """
-    clean_name = prettify_ad_name(entity_name)
-    text = f"🔍 Tracking issue with {clean_name} in {stage}\n{reason}\nCheck your pixel setup"
-    
-    msg = SlackMessage(
-        text=text,
-        severity="warn",
-        topic="alerts",
-    )
-    client().notify(msg)
 
 def alert_error(error_msg: str) -> None:
     """
@@ -1191,19 +1112,6 @@ def alert_error(error_msg: str) -> None:
     msg = SlackMessage(
         text=text,
         severity="error",
-        topic="alerts",
-    )
-    client().notify(msg)
-
-def alert_insights_warning(warning_type: str = "date_preset format, retried") -> None:
-    """
-    Consolidated insights warning using new format.
-    """
-    text = f"⚠️ Meta API had an issue: {warning_type}\nRetrying automatically"
-    
-    msg = SlackMessage(
-        text=text,
-        severity="warn",
         topic="alerts",
     )
     client().notify(msg)
@@ -1312,20 +1220,6 @@ def alert_queue_empty() -> None:
     )
     client().notify(msg)
 
-def alert_new_launch(entity_name: str, stage: str) -> None:
-    """
-    Alert when a new ad is launched.
-    """
-    clean_name = prettify_ad_name(entity_name)
-    text = f"🚀 New ad launched: {clean_name}\nStarting in {stage} stage - let's see how it performs!"
-    
-    msg = SlackMessage(
-        text=text,
-        severity="info",
-        topic="alerts",
-    )
-    client().notify(msg)
-
 def alert_system_health(issue: str) -> None:
     """
     Alert for system health issues.
@@ -1367,53 +1261,7 @@ def alert_ad_account_health_warning(account_id: str, warnings: List[str]) -> Non
     )
     client().notify(msg)
 
-def alert_payment_issue(account_id: str, payment_status: str, details: str = "") -> None:
-    """
-    Alert for payment method issues that could disable the account.
-    """
-    text = f"💳 Payment Issue Detected\nAccount: {account_id}\nStatus: {payment_status}"
-    if details:
-        text += f"\nDetails: {details}"
-    text += "\n\n⚠️ This could disable your ad account. Check your payment method immediately!"
-    
-    msg = SlackMessage(
-        text=text,
-        severity="error",
-        topic="alerts",
-    )
-    client().notify(msg)
 
-def alert_account_balance_low(account_id: str, balance: float, currency: str = "EUR", auto_charge_threshold: float = None) -> None:
-    """
-    Alert when account balance is approaching auto-charge threshold.
-    """
-    if auto_charge_threshold is not None:
-        # Check if this is a dynamic threshold from Meta's API or a configured fallback
-        threshold_source = "Meta API" if auto_charge_threshold != 75.0 else "configured fallback"
-        text = f"💰 Account Balance Approaching Auto-Charge Threshold\nAccount: {account_id}\nCurrent Balance: {balance:.2f} {currency}\nAuto-charge threshold: {auto_charge_threshold:.2f} {currency} (from {threshold_source})\n\n⚠️ Your prepaid card will be charged when balance reaches the threshold. Check your card has sufficient funds!"
-    else:
-        text = f"💰 Account Balance Approaching Threshold\nAccount: {account_id}\nCurrent Balance: {balance:.2f} {currency}\n\n⚠️ Check your prepaid card balance to ensure sufficient funds for auto-charge."
-    
-    msg = SlackMessage(
-        text=text,
-        severity="warn",
-        topic="alerts",
-    )
-    client().notify(msg)
-
-
-def alert_threshold_updated(account_id: str, new_threshold: float, currency: str = "EUR") -> None:
-    """
-    Alert when auto-charge threshold has been updated.
-    """
-    text = f"🔄 Auto-Charge Threshold Updated\nAccount: {account_id}\nNew threshold: {new_threshold:.2f} {currency}\n\n✅ Threshold automatically increased by €5. Next charge will occur at {new_threshold:.2f} {currency}."
-    
-    msg = SlackMessage(
-        text=text,
-        severity="info",
-        topic="alerts",
-    )
-    client().notify(msg)
 
 def alert_spend_cap_approaching(account_id: str, spent: float, cap: float, currency: str = "EUR") -> None:
     """
@@ -1453,14 +1301,8 @@ __all__ = [
     "TokenBucket",
     "notify",
     "alert_kill",
-    "alert_promote",
-    "alert_scale",
-    "alert_fatigue",
-    "alert_data_quality",
     "alert_error",
-    "alert_insights_warning",
     "alert_queue_empty",
-    "alert_new_launch",
     "alert_system_health",
     "alert_budget_alert",
     "build_ads_snapshot",

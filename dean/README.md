@@ -110,9 +110,6 @@ dean/
 │   └── settings.yaml
 ├── data/                  # Runtime data
 ├── scripts/               # Utility scripts
-├── tests/                 # Test suite
-│   ├── unit/
-│   └── integration/
 ├── requirements.txt       # Dependencies
 ├── setup.py               # Package setup
 ├── pyproject.toml          # Modern Python config
@@ -175,18 +172,11 @@ dean/
 make install-dev
 ```
 
-**Run tests:**
-```bash
-make test
-# or
-pytest tests/ --cov=src --cov-report=html
-```
-
 **Format code:**
 ```bash
 make format
 # or
-black src/ tests/
+black src/
 ```
 
 **Lint code:**

@@ -636,44 +636,10 @@ class SelfHealingSystem:
 dead_letter_queue = DeadLetterQueue()
 
 
-def graceful_degradation(fallback_value: Any = None, fallback_func: Callable = None):
-    """Decorator for graceful degradation."""
-    def decorator(func: Callable[..., T]) -> Callable[..., T]:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs) -> T:
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                logger.warning(f"Graceful degradation for {func.__name__}: {e}")
-                
-                if fallback_func:
-                    return fallback_func(*args, **kwargs)
-                
-                return fallback_value
-        
-        return wrapper
-    return decorator
-
-
 # Global instances for enhanced error recovery
 _enhanced_retry_handler = EnhancedRetryHandler()
 _error_pattern_detector = ErrorPatternDetector()
 _self_healing_system = SelfHealingSystem()
-
-
-def get_enhanced_retry_handler() -> EnhancedRetryHandler:
-    """Get global enhanced retry handler."""
-    return _enhanced_retry_handler
-
-
-def get_error_pattern_detector() -> ErrorPatternDetector:
-    """Get global error pattern detector."""
-    return _error_pattern_detector
-
-
-def get_self_healing_system() -> SelfHealingSystem:
-    """Get global self-healing system."""
-    return _self_healing_system
 
 
 # Enhanced retry wrapper that uses new system
@@ -706,14 +672,10 @@ __all__ = [
     "ErrorPatternDetector",
     "DeadLetterQueueEntry",
     "SelfHealingSystem",
-    "get_enhanced_retry_handler",
-    "get_error_pattern_detector",
-    "get_self_healing_system",
     "with_circuit_breaker",
     "CircuitBreakerManager",
     "circuit_breaker_manager",
     "DeadLetterQueue",
     "dead_letter_queue",
-    "graceful_degradation",
 ]
 
