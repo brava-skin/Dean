@@ -2917,7 +2917,7 @@ class MetaClient:
 
     def check_account_health(self) -> Dict[str, Any]:
         """
-        Comprehensive ad account health check including payment status, billing issues, and account restrictions.
+        Comprehensive ad account health check including account restrictions.
         Returns detailed health information for monitoring and alerting.
         """
         if self.dry_run or not USE_SDK:
