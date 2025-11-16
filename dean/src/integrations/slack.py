@@ -308,14 +308,46 @@ def format_run_header(status: str, time_str: str, profile: str, spend: float, pu
     cpc_str = fmt_eur(cpc)
     cpm_str = fmt_eur(cpm)
 
-    main_line = (
-        f"{time_str} "
-        f"Spend {spend_str} · ATC {atc} · IC {ic} · PUR {purch} | "
-        f"CPA {cpa_str} · Cost/ATC {cost_per_atc_str} | "
-        f"IMP {_fmt_int(impressions)} · Clicks {_fmt_int(clicks)} · "
-        f"CTR {ctr_str} · CPC {cpc_str} · CPM {cpm_str}"
-    )
-    return main_line
+    lines = []
+    lines.append(f"*{time_str}* · Spend {spend_str}")
+    
+    conversions = []
+    if atc > 0:
+        conversions.append(f"ATC {atc}")
+    if ic > 0:
+        conversions.append(f"IC {ic}")
+    if purch > 0:
+        conversions.append(f"PUR {purch}")
+    if conversions:
+        lines.append("  " + " · ".join(conversions))
+    
+    cost_metrics = []
+    if cpa_str != "-":
+        cost_metrics.append(f"CPA {cpa_str}")
+    if cost_per_atc_str != "-":
+        cost_metrics.append(f"Cost/ATC {cost_per_atc_str}")
+    if cost_metrics:
+        lines.append("  " + " · ".join(cost_metrics))
+    
+    performance = []
+    if ctr_str != "-":
+        performance.append(f"CTR {ctr_str}")
+    if cpc_str != "-":
+        performance.append(f"CPC {cpc_str}")
+    if cpm_str != "-":
+        performance.append(f"CPM {cpm_str}")
+    if performance:
+        lines.append("  " + " · ".join(performance))
+    
+    volume = []
+    if impressions > 0:
+        volume.append(f"IMP {_fmt_int(impressions)}")
+    if clicks > 0:
+        volume.append(f"Clicks {_fmt_int(clicks)}")
+    if volume:
+        lines.append("  " + " · ".join(volume))
+    
+    return "\n".join(lines)
 
 def format_stage_line(stage: str, counts: Dict[str, any]) -> str:
     actions = []

@@ -63,12 +63,16 @@ def _purchase_and_atc_counts(row: Dict[str, Any]) -> Tuple[int, int]:
     for a in acts:
         t = a.get("action_type")
         v = safe_f(a.get("value"), 0.0)
-        if t == "purchase":
+        if t == "omni_purchase":
             purch += int(v)
+        elif t == "purchase":
+            if purch == 0:
+                purch += int(v)
         elif t == "omni_add_to_cart":
             atc += int(v)
         elif t == "add_to_cart":
-            atc += int(v)
+            if atc == 0:
+                atc += int(v)
     return purch, atc
 
 
@@ -1468,8 +1472,11 @@ def _build_ad_metrics(
         elif action_type == "initiate_checkout":
             if initiate_checkout == 0:
                 initiate_checkout = int(value)
-        elif action_type == "purchase":
+        elif action_type == "omni_purchase":
             purchases += int(value)
+        elif action_type == "purchase":
+            if purchases == 0:
+                purchases += int(value)
 
     revenue = 0.0
     for action_value in row.get("action_values") or []:
@@ -1658,8 +1665,11 @@ def _summarize_today_metrics(
                 elif action_type == "initiate_checkout":
                     if initiate_checkout == 0:
                         initiate_checkout = int(value)
-                elif action_type == "purchase":
+                elif action_type == "omni_purchase":
                     purchases += int(value)
+                elif action_type == "purchase":
+                    if purchases == 0:
+                        purchases += int(value)
             
             totals["spend"] += spend_val
             totals["impressions"] += impressions_val
