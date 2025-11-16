@@ -297,6 +297,8 @@ def build_basic_blocks(title: str, lines: List[str], severity: str = "info", foo
 def format_run_header(status: str, time_str: str, profile: str, spend: float, purch: int, cpa: Optional[float], be: Optional[float], impressions: int = 0, clicks: int = 0, ctr: Optional[float] = None, cpc: Optional[float] = None, cpm: Optional[float] = None, atc: int = 0, ic: int = 0, cost_per_atc: Optional[float] = None) -> str:
     spend_str = _fmt_currency(spend)
     cpa_str = fmt_eur(cpa)
+    if cost_per_atc is None and atc > 0 and spend is not None:
+        cost_per_atc = spend / float(atc)
     cost_per_atc_str = fmt_eur(cost_per_atc)
 
     def _fmt_int(value: int) -> str:

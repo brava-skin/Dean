@@ -158,7 +158,7 @@ def get_reconciled_counters(account_snapshot, stage_result=None):
 from infrastructure import Store
 from infrastructure.supabase_storage import create_supabase_storage
 from infrastructure.data_validation import validate_all_timestamps
-from integrations import notify, post_run_header_and_get_thread_ts, post_thread_ads_snapshot
+from integrations import notify, post_run_header_and_get_thread_ts
 from integrations import MetaClient, AccountAuth, ClientConfig
 from rules.rules import AdvancedRuleEngine as RuleEngine
 from stages.asc_plus import run_asc_plus_tick
@@ -970,6 +970,8 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
         if link_clicks <= 0 and all_clicks > 0:
             link_clicks = all_clicks
         for r in rows:
+            row_atc = 0.0
+            has_omni = False
             for a in (r.get("actions") or []):
                 action_type = a.get("action_type")
                 try:
@@ -977,13 +979,16 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
                     if action_type == "purchase":
                         purch += value
                     elif action_type == "omni_add_to_cart":
-                        atc += value
+                        row_atc += value
+                        has_omni = True
                     elif action_type == "add_to_cart":
-                        atc += value
+                        if not has_omni:
+                            row_atc += value
                     elif action_type == "initiate_checkout":
                         ic += value
                 except (KeyError, TypeError, ValueError):
                     continue
+            atc += row_atc
         link_clicks = max(link_clicks, 0.0)
         all_clicks = max(all_clicks, 0.0)
         cpa = (spend / purch) if purch > 0 else None
@@ -1336,7 +1341,7 @@ def main() -> None:
         time_str = local_now.strftime("%H:%M %Z")
         degraded_mode = failures_in_row > 0 or (overall.get("asc_plus", {}).get("health") == "WARNING")
         status = "DEGRADED" if degraded_mode else "OK"
-        thread_ts = post_run_header_and_get_thread_ts(
+        post_run_header_and_get_thread_ts(
             status=status,
             time_str=time_str,
             profile=profile,
@@ -1354,56 +1359,6 @@ def main() -> None:
             ic=account_info['ic'],
             cost_per_atc=account_info.get('cost_per_atc')
         )
-        try:
-            if stage_choice in ("all", "asc_plus"):
-                import zoneinfo
-                attr_windows = ["7d_click", "1d_view"]
-                local_tz = zoneinfo.ZoneInfo(tz_name)
-                now = datetime.now(local_tz)
-                midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-                asc_plus_adset_id = settings.get("ids", {}).get("asc_plus_adset_id")
-                filtering_today = []
-                filtering_lifetime = []
-                if asc_plus_adset_id:
-                    filtering_today = [{"field": "adset.id", "operator": "IN", "value": [asc_plus_adset_id]}]
-                    filtering_lifetime = [{"field": "adset.id", "operator": "IN", "value": [asc_plus_adset_id]}]
-                rows_today_raw = client.get_ad_insights(
-                    level="ad",
-                    filtering=filtering_today,
-                    fields=["ad_id", "ad_name", "spend", "actions"],
-                    time_range={
-                        "since": midnight.strftime("%Y-%m-%d"),
-                        "until": now.strftime("%Y-%m-%d")
-                    },
-                    action_attribution_windows=list(attr_windows),
-                    paginate=True
-                ) or []
-                try:
-                    active_ad_ids = set()
-                    if asc_plus_adset_id:
-                        active_ads = client.list_ads_in_adset(asc_plus_adset_id)
-                        active_ad_ids = {str(ad.get("id", "")) for ad in active_ads if str(ad.get("status", "")).upper() == "ACTIVE"}
-                    rows_today = [r for r in rows_today_raw if str(r.get("ad_id", "")) in active_ad_ids] if active_ad_ids else rows_today_raw
-                except Exception as e:
-                    logger.warning(f"Failed to filter active ads, using all: {e}")
-                    rows_today = rows_today_raw
-                rows_lifetime = client.get_ad_insights(
-                    level="ad",
-                    filtering=filtering_lifetime,
-                    fields=["ad_id", "spend", "actions"],
-                    time_range={
-                        "since": "2024-01-01",
-                        "until": now.strftime("%Y-%m-%d")
-                    },
-                    action_attribution_windows=list(attr_windows),
-                    paginate=True
-                ) or []
-                from integrations import build_ads_snapshot
-                ad_lines = build_ads_snapshot(rows_today or [], rows_lifetime or [], tz_name)
-                if ad_lines:
-                    post_thread_ads_snapshot(thread_ts, ad_lines)
-        except (AttributeError, TypeError, ValueError) as e:
-            logger.debug(f"Failed to post ads snapshot: {e}")
 
     import pytz
     amsterdam_tz = pytz.timezone('Europe/Amsterdam')
