@@ -416,6 +416,26 @@ class AdvancedRuleEngine:
                     return True, f"Mandatory kill after {rule.get('days', 7)}d (age: {ad_age_days:.1f}d)"
             return False, ""
 
+        if t == "ctr_spend_floor":
+            spend_ok = (m.spend or 0) >= rule["spend_gte"]
+            ctr_ok = (m.ctr or 0.0) < rule["ctr_lt"]
+            return spend_ok and ctr_ok, f"Spend≥€{rule['spend_gte']} & CTR<{rule['ctr_lt']:.2%}" if spend_ok and ctr_ok else ""
+
+        if t == "cpc_spend_combo":
+            spend_ok = (m.spend or 0) >= rule["spend_gte"]
+            cpc_ok = (m.cpc or 0.0) > rule["cpc_gt"]
+            return spend_ok and cpc_ok, f"Spend≥€{rule['spend_gte']} & CPC>€{rule['cpc_gt']}" if spend_ok and cpc_ok else ""
+
+        if t == "cpm_ctr_combo":
+            cpm_ok = (m.cpm or 0.0) > rule["cpm_gt"]
+            ctr_ok = (m.ctr or 0.0) < rule["ctr_lt"]
+            return cpm_ok and ctr_ok, f"CPM>€{rule['cpm_gt']} & CTR<{rule['ctr_lt']:.2%}" if cpm_ok and ctr_ok else ""
+
+        if t == "atc_efficiency_fail":
+            spend_ok = (m.spend or 0) >= rule["spend_gte"]
+            atc_ok = (m.add_to_cart or 0) < rule["atc_lt"]
+            return spend_ok and atc_ok, f"Spend≥€{rule['spend_gte']} & ATC<{rule['atc_lt']}" if spend_ok and atc_ok else ""
+
         if t == "cpm_spike":
             ad_id = row.get("ad_id")
             if not ad_id:

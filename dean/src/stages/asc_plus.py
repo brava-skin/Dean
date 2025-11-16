@@ -400,6 +400,7 @@ def _sync_ad_lifecycle_records(
     stage: str = "asc_plus",
     campaign_id: Optional[str] = None,
     adset_id: Optional[str] = None,
+    rules: Optional[Dict[str, Any]] = None,
 ) -> None:
     if not ads:
         return
@@ -505,15 +506,31 @@ def _sync_ad_lifecycle_records(
         if status == "killed" and not kill_reason:
             metrics = metrics_map.get(ad_id)
             if metrics:
-                if metrics.get("ctr", 0) < 0.008:
-                    kill_reason = "low_ctr"
-                elif metrics.get("cpc", 0) > 1.90:
-                    kill_reason = "high_cpc"
-                elif metrics.get("cpm", 0) > 80:
-                    kill_reason = "high_cpm"
-                elif metrics.get("add_to_cart", 0) < 1:
-                    kill_reason = "low_atc"
-                else:
+                rules = rules or {}
+                asc_rules = rules.get("asc_plus_atc", {})
+                kill_rules = asc_rules.get("kill", [])
+                
+                ctr = safe_f(metrics.get("ctr", 0))
+                cpc = safe_f(metrics.get("cpc", 0))
+                cpm = safe_f(metrics.get("cpm", 0))
+                atc = safe_f(metrics.get("add_to_cart", 0))
+                
+                for rule in kill_rules:
+                    rule_type = rule.get("type", "")
+                    if rule_type == "ctr_spend_floor" and ctr < safe_f(rule.get("ctr_lt", 0.008)):
+                        kill_reason = "low_ctr"
+                        break
+                    elif rule_type == "cpc_spend_combo" and cpc > safe_f(rule.get("cpc_gt", 1.90)):
+                        kill_reason = "high_cpc"
+                        break
+                    elif rule_type == "cpm_ctr_combo" and cpm > safe_f(rule.get("cpm_gt", 80)):
+                        kill_reason = "high_cpm"
+                        break
+                    elif rule_type == "atc_efficiency_fail" and atc < safe_f(rule.get("atc_lt", 1)):
+                        kill_reason = "low_atc"
+                        break
+                
+                if not kill_reason:
                     kill_reason = "performance_threshold"
             else:
                 kill_reason = "manual_or_meta_status"
@@ -1289,27 +1306,20 @@ def _sync_creative_performance_records(
         _CREATIVE_PERFORMANCE_STAGE_DISABLED = False
 
 
-def _guardrail_kill(metrics: Dict[str, Any], rules: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
-    impressions = safe_f(metrics.get("impressions"))
-    clicks = safe_f(metrics.get("clicks"))
-    spend = safe_f(metrics.get("spend"))
-    ctr_fraction = safe_f(metrics.get("ctr"))
-    ctr_pct = ctr_fraction * 100.0
-    atc = safe_f(metrics.get("add_to_cart"))
-    purchases = safe_f(metrics.get("purchases"))
-    roas = safe_f(metrics.get("roas"))
-    cpm = safe_f(metrics.get("cpm"))
-    cpc = safe_f(metrics.get("cpc"))
-    stage_hours = safe_f(metrics.get("stage_duration_hours"))
-
+def _guardrail_kill(metrics: Dict[str, Any], rules: Optional[Dict[str, Any]] = None, rule_engine: Optional[Any] = None) -> Tuple[bool, str]:
     rules = rules or {}
     asc_rules = rules.get("asc_plus_atc", {})
     engine_rules = asc_rules.get("engine", {})
     fairness_rules = engine_rules.get("fairness", {})
+    kill_rules = asc_rules.get("kill", [])
+    minimums = asc_rules.get("minimums", {})
     
     min_spend_before_kill = safe_f(fairness_rules.get("min_spend_before_kill_eur", 55))
     min_runtime_hours = safe_f(fairness_rules.get("min_runtime_hours", 48))
+    min_impressions = safe_f(minimums.get("min_impressions", 2500))
     
+    spend = safe_f(metrics.get("spend"))
+    stage_hours = safe_f(metrics.get("stage_duration_hours"))
     ad_age_days = safe_f(metrics.get("ad_age_days"))
     derived_age_days = max(ad_age_days, (stage_hours / 24.0) if stage_hours else 0.0)
     derived_runtime_hours = derived_age_days * 24.0
@@ -1317,17 +1327,24 @@ def _guardrail_kill(metrics: Dict[str, Any], rules: Optional[Dict[str, Any]] = N
     if spend < min_spend_before_kill or derived_runtime_hours < min_runtime_hours:
         return False, ""
 
-    reasons: List[str] = []
+    if rule_engine and kill_rules:
+        try:
+            from analytics.metrics import metrics_from_row, MetricsConfig
+            metrics_cfg = MetricsConfig(
+                prefer_roas_field=False,
+                account_currency="EUR",
+                product_currency="EUR",
+            )
+            m = metrics_from_row(metrics, cfg=metrics_cfg)
+            row = {"ad_id": metrics.get("ad_id", "")}
+            
+            for rule in kill_rules:
+                ok, reason = rule_engine._eval(rule, m, row)
+                if ok:
+                    return True, reason
+        except Exception as exc:
+            _asc_log(logging.WARNING, "Failed to evaluate kill rules: %s", exc)
 
-    if impressions >= 2500 and ctr_pct < 0.45 and clicks < 20:
-        reasons.append(f"CTR {ctr_pct:.2f}% after {int(impressions)} impressions")
-    if spend >= min_spend_before_kill and cpm > 90:
-        reasons.append(f"CPM €{cpm:.2f} after spend €{spend:.2f}")
-    if spend >= min_spend_before_kill and atc == 0 and ctr_pct < 0.7:
-        reasons.append(f"No ATC after spend €{spend:.2f} with CTR {ctr_pct:.2f}%")
-
-    if reasons:
-        return True, reasons[0]
     return False, ""
 
 
@@ -2413,6 +2430,8 @@ def run_asc_plus_tick(
     ml_system: Optional[Any] = None,
 ) -> Dict[str, Any]:
     validate_asc_plus_config(settings)
+    from rules.rules import AdvancedRuleEngine as RuleEngine
+    rule_engine = RuleEngine(rules, store)
     timekit = Timekit()
     target_count = cfg(settings, "asc_plus.target_active_ads") or 10
     max_active = cfg(settings, "asc_plus.max_active_ads") or target_count
@@ -2484,6 +2503,7 @@ def run_asc_plus_tick(
         stage="asc_plus",
         campaign_id=campaign_id,
         adset_id=adset_id,
+        rules=rules,
     )
     _sync_performance_metrics_records(
         metrics_map,
@@ -2542,7 +2562,7 @@ def run_asc_plus_tick(
             creation_time=creation_times.get(str(ad_id)) if creation_times else None,
             now_ts=now_utc,
         )
-        kill, kill_reason = _guardrail_kill(metrics, rules)
+        kill, kill_reason = _guardrail_kill(metrics, rules, rule_engine)
         if kill:
             if _pause_ad(client, ad_id, kill_reason):
                 killed_ads.append((ad_id, kill_reason))
