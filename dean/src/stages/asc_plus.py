@@ -1002,6 +1002,16 @@ def _sync_performance_metrics_records(
         add_to_cart = int(safe_f(metrics.get("add_to_cart")))
         initiate_checkout = int(safe_f(metrics.get("initiate_checkout") or metrics.get("ic")))
         revenue = safe_f(metrics.get("revenue"))
+        
+        if impressions > 0 and clicks > impressions:
+            _asc_log(
+                logging.WARNING,
+                "Data quality issue for ad %s: %d clicks from %d impressions (impossible). Capping clicks to impressions.",
+                ad_id,
+                clicks,
+                impressions,
+            )
+            clicks = impressions
 
         ctr = _fraction_or_none(metrics.get("ctr"))
         cpc = _float_or_none(metrics.get("cpc"))
@@ -2193,9 +2203,29 @@ def _create_creative_and_ad(
                     if not isinstance(ad_copy_dict, dict):
                         ad_copy_dict = {}
                     
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    supabase_storage_url = creative_data.get("supabase_storage_url", "")
+                    if supabase_storage_url:
+                        storage_path = creative_data.get("storage_path", supabase_storage_url.split("/")[-1] if "/" in supabase_storage_url else f"creative_{meta_creative_id}.jpg")
+                    else:
+                        storage_path = creative_data.get("storage_path", f"creative_{meta_creative_id}.jpg")
+                    file_size_bytes = creative_data.get("file_size_bytes", 0)
+                    if not file_size_bytes:
+                        try:
+                            image_path = creative_data.get("image_path")
+                            if image_path and os.path.exists(image_path):
+                                file_size_bytes = os.path.getsize(image_path)
+                        except Exception:
+                            pass
+                    
                     creative_intel_data = {
                         "creative_id": str(meta_creative_id),
                         "ad_id": ad_id,
+                        "status": "active",
+                        "storage_url": supabase_storage_url or "",
+                        "storage_path": storage_path,
+                        "file_size_bytes": int(file_size_bytes) if file_size_bytes else 0,
+                        "file_type": "image/jpeg",
                         "headline": ad_copy_dict.get("headline", ""),
                         "primary_text": ad_copy_dict.get("primary_text", ""),
                         "description": ad_copy_dict.get("description", ""),
@@ -2205,9 +2235,9 @@ def _create_creative_and_ad(
                             "storage_creative_id": storage_creative_id,
                             "scenario_description": creative_data.get("scenario_description"),
                         },
+                        "created_at": now_iso,
+                        "updated_at": now_iso,
                     }
-                    if creative_data.get("supabase_storage_url"):
-                        creative_intel_data["storage_url"] = creative_data.get("supabase_storage_url")
                     if creative_data.get("image_prompt"):
                         creative_intel_data["image_prompt"] = creative_data.get("image_prompt")
                     if creative_data.get("text_overlay"):
@@ -2227,10 +2257,23 @@ def _create_creative_and_ad(
                     except Exception as opt_error:
                         logger.debug(f"Failed to calculate metrics: {opt_error}")
                     
-                    supabase_client.table("ads").upsert(
-                        creative_intel_data,
-                        on_conflict="ad_id"
-                    ).execute()
+                    try:
+                        from infrastructure.data_validation import validate_supabase_data
+                        validation = validate_supabase_data("ads", creative_intel_data, strict_mode=True)
+                        if not validation.is_valid:
+                            logger.warning(
+                                "Validation failed for new ad %s: %s",
+                                ad_id,
+                                "; ".join(validation.errors),
+                            )
+                        else:
+                            supabase_client.table("ads").upsert(
+                                validation.sanitized_data if validation.sanitized_data else creative_intel_data,
+                                on_conflict="ad_id"
+                            ).execute()
+                            logger.debug(f"✅ Successfully upserted new ad {ad_id} to Supabase")
+                    except Exception as e:
+                        logger.warning(f"Failed to upsert new ad {ad_id} to Supabase: {e}")
                     
                     try:
                         from infrastructure.data_validation import CreativeIntelligenceOptimizer
