@@ -96,6 +96,48 @@ def _log_supabase_error(operation: str, table: str, error: Any, payload: Optiona
         "; ".join(suggestions) or "n/a",
         sample,
     )
+    
+    if operation in ("insert", "insert_batch") and table != "insert_failures":
+        _record_insert_failure(table, payload, message, code, details)
+
+
+def _record_insert_failure(table: str, payload: Optional[Dict[str, Any]], error_message: str, error_code: Optional[str] = None, error_details: Optional[str] = None) -> None:
+    try:
+        error_table = os.getenv("SUPABASE_INSERT_ERROR_TABLE", "insert_failures")
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
+        
+        if not (url and key):
+            logger.debug("Cannot record insert failure: Supabase credentials not available")
+            return
+        
+        try:
+            client = create_client(url, key)
+        except Exception:
+            logger.debug("Cannot record insert failure: Failed to create Supabase client")
+            return
+        
+        full_message = error_message
+        if error_code:
+            full_message = f"[{error_code}] {full_message}"
+        if error_details:
+            full_message = f"{full_message} | Details: {error_details}"
+        
+        failure_record = {
+            "table_name": table,
+            "payload": payload or {},
+            "error_message": full_message[:2000],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "retry_count": 0,
+        }
+        
+        try:
+            client.table(error_table).insert(failure_record).execute()
+            logger.debug(f"✅ Recorded insert failure for {table} in {error_table}")
+        except Exception as e:
+            logger.debug(f"Failed to record insert failure in {error_table}: {e}")
+    except Exception as e:
+        logger.debug(f"Error recording insert failure: {e}")
 
 
 class SupabaseStorage:
@@ -430,6 +472,8 @@ class ValidatedSupabaseClient:
             except Exception as e:
                 sample = validated_records[0] if validated_records else None
                 _log_supabase_error("insert_batch", table, e, sample)
+                for record in validated_records:
+                    _record_insert_failure(table, record, str(e))
                 raise e
         else:
             return None

@@ -503,7 +503,7 @@ def _sync_ad_lifecycle_records(
         )
 
         kill_reason = existing.get("kill_reason")
-        if status == "killed" and not kill_reason:
+        if (status == "killed" or status == "paused") and not kill_reason:
             metrics = metrics_map.get(ad_id)
             if metrics:
                 rules = rules or {}
@@ -676,9 +676,13 @@ def _sync_creative_intelligence_records(
                 metadata.setdefault("storage_metadata", {})
                 metadata["storage_metadata"]["file_size_bytes"] = file_size_bytes
             storage_url = storage_info.get("storage_url")
+            if storage_url and "placeholder" in storage_url.lower():
+                storage_url = None
         else:
             file_size_mb = None
-            storage_url = existing.get("supabase_storage_url")
+            storage_url = existing.get("storage_url") or existing.get("supabase_storage_url")
+            if storage_url and "placeholder" in storage_url.lower():
+                storage_url = None
 
         metadata["source"] = "asc_plus_sync"
         metadata.setdefault("ad_id", ad_id)
@@ -708,7 +712,11 @@ def _sync_creative_intelligence_records(
         ) or 0.0
 
         description = existing.get("description") or metadata.get("ad_copy", {}).get("description") or ""
-        headline = existing.get("headline") or metadata.get("ad_copy", {}).get("headline") or ad.get("name") or ""
+        headline = existing.get("headline") or metadata.get("ad_copy", {}).get("headline") or ""
+        if not headline and ad.get("name"):
+            ad_name = ad.get("name", "")
+            if ad_name.startswith("[ASC+]"):
+                headline = ad_name.replace("[ASC+]", "").strip().split(" - ")[0] or ""
         primary_text = existing.get("primary_text") or metadata.get("ad_copy", {}).get("primary_text") or ""
         similarity_vector = existing.get("similarity_vector")
 
@@ -734,12 +742,31 @@ def _sync_creative_intelligence_records(
         if performance_rank < 1:
             performance_rank = 1
 
+        file_size_bytes_val = None
+        if storage_info and storage_info.get("file_size_bytes"):
+            file_size_bytes_val = int(storage_info.get("file_size_bytes"))
+        elif existing.get("file_size_bytes"):
+            file_size_bytes_val = int(existing.get("file_size_bytes"))
+        
+        storage_path_val = None
+        if storage_info and storage_info.get("storage_path"):
+            storage_path_val = storage_info.get("storage_path")
+        elif existing.get("storage_path"):
+            storage_path_val = existing.get("storage_path")
+        elif storage_url:
+            storage_path_val = storage_url.split("/")[-1] if "/" in storage_url else f"creative_{creative_id}.jpg"
+        
+        if not storage_url:
+            storage_url = existing.get("storage_url") or ""
+        
         record: Dict[str, Any] = {
             "creative_id": creative_id,
             "ad_id": ad_id,
             "creative_type": existing.get("creative_type") or "image",
             "aspect_ratio": "1:1",
             "file_size_mb": file_size_mb if file_size_mb is not None else _safe_float(existing.get("file_size_mb")),
+            "file_size_bytes": file_size_bytes_val if file_size_bytes_val is not None else (existing.get("file_size_bytes") or 0),
+            "storage_path": storage_path_val or existing.get("storage_path") or f"creative_{creative_id}.jpg",
             "resolution": existing.get("resolution") or "1080x1080",
             "color_palette": existing.get("color_palette") or metadata.get("color_palette") or "[]",
             "text_overlay": existing.get("text_overlay") if existing.get("text_overlay") is not None else True,
@@ -756,7 +783,7 @@ def _sync_creative_intelligence_records(
             "lifecycle_id": lifecycle_id,
             "stage": stage,
             "metadata": metadata,
-            "supabase_storage_url": storage_url,
+            "storage_url": storage_url or "",
             "image_prompt": existing.get("image_prompt"),
             "text_overlay_content": existing.get("text_overlay_content"),
             "created_at": created_at,
@@ -848,23 +875,33 @@ def _fetch_and_update_creative_content(
                     continue
                 
                 creative_obj = AdCreative(str(creative_id))
-                creative_data = creative_obj.api_get(fields=["object_story_spec", "name"])
+                creative_data = creative_obj.api_get(fields=["object_story_spec", "name", "body", "title", "link_url", "image_url"])
+                
+                headline = ""
+                primary_text = ""
+                description = ""
                 
                 oss = creative_data.get("object_story_spec", {})
-                link_data = oss.get("link_data", {})
+                if oss:
+                    link_data = oss.get("link_data", {})
+                    if link_data:
+                        headline = link_data.get("name", "") or link_data.get("headline", "")
+                        primary_text = link_data.get("message", "") or link_data.get("description", "")
+                        description = link_data.get("description", "") or link_data.get("caption", "")
                 
-                headline = link_data.get("name", "")
-                primary_text = link_data.get("message", "")
-                description = link_data.get("description", "")
+                if not headline:
+                    headline = creative_data.get("title", "") or creative_data.get("name", "")
+                if not primary_text:
+                    primary_text = creative_data.get("body", "")
                 
                 if headline or primary_text or description:
                     updates.append({
                         "ad_id": ad_id,
-                        "headline": headline,
-                        "primary_text": primary_text,
-                        "description": description,
+                        "headline": headline[:200] if headline else "",
+                        "primary_text": primary_text[:1000] if primary_text else "",
+                        "description": description[:500] if description else "",
                     })
-                    logger.debug(f"Fetched creative content for ad {ad_id}: headline={headline[:50]}...")
+                    logger.debug(f"Fetched creative content for ad {ad_id}: headline={headline[:50] if headline else 'N/A'}...")
                 
             except Exception as e:
                 logger.debug(f"Failed to fetch creative content for ad {ad_id}: {e}")
@@ -971,10 +1008,8 @@ def _sync_performance_metrics_records(
     metrics_map: Dict[str, Dict[str, Any]],
     stage: str,
     date_label: str,
+    active_ad_ids: Optional[List[str]] = None,
 ) -> None:
-    if not metrics_map:
-        return
-
     try:
         from infrastructure.supabase_storage import get_validated_supabase_client, SupabaseStorage
     except ImportError:
@@ -989,6 +1024,8 @@ def _sync_performance_metrics_records(
     now = datetime.now(timezone.utc)
 
     upserts: List[Dict[str, Any]] = []
+    
+    processed_ad_ids = set()
 
     for ad_id, metrics in metrics_map.items():
         if not ad_id:
@@ -1048,6 +1085,41 @@ def _sync_performance_metrics_records(
         }
 
         upserts.append(record)
+        processed_ad_ids.add(ad_id)
+    
+    if active_ad_ids:
+        for ad_id in active_ad_ids:
+            ad_id_str = str(ad_id)
+            if ad_id_str in processed_ad_ids or not ad_id_str:
+                continue
+            
+            try:
+                existing_check = supabase_client.table("ads").select("ad_id").eq("ad_id", ad_id_str).limit(1).execute()
+                if not existing_check.data:
+                    continue
+            except Exception:
+                continue
+            
+            zero_record = {
+                "ad_id": ad_id_str,
+                "window_type": "1d",
+                "date_start": date_label,
+                "date_end": date_label,
+                "impressions": 0,
+                "clicks": 0,
+                "spend": 0.0,
+                "purchases": 0,
+                "add_to_cart": 0,
+                "initiate_checkout": 0,
+                "ctr": None,
+                "cpc": None,
+                "cpm": None,
+                "roas": None,
+                "cpa": None,
+                "atc_rate": None,
+                "purchase_rate": None,
+            }
+            upserts.append(zero_record)
 
     if not upserts:
         return
@@ -1945,15 +2017,16 @@ def _record_lifecycle_event(ad_id: str, status: str, reason: str) -> None:
         payload = {
             "ad_id": ad_id,
             "status": lifecycle_status,
-            "kill_reason": reason if lifecycle_status == "killed" else None,
-            "killed_at": datetime.now(timezone.utc).isoformat() if lifecycle_status == "killed" else None,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-        if lifecycle_status != "killed":
-            payload.pop("kill_reason", None)
-            payload.pop("killed_at", None)
         
-        client.upsert("ads", payload, on_conflict="ad_id")
+        if lifecycle_status == "killed":
+            payload["kill_reason"] = reason
+            payload["killed_at"] = datetime.now(timezone.utc).isoformat()
+        elif lifecycle_status == "paused" and reason:
+            payload["kill_reason"] = reason
+        
+        client.table("ads").upsert(payload, on_conflict="ad_id").execute()
     except Exception as exc:
         _asc_log(logging.DEBUG, "Lifecycle logging failed for %s: %s", ad_id, exc)
 
@@ -2548,10 +2621,17 @@ def run_asc_plus_tick(
         adset_id=adset_id,
         rules=rules,
     )
+    allowed_statuses = {"ACTIVE", "ELIGIBLE"}
+    active_ad_ids = [
+        str(ad.get("id"))
+        for ad in ads_list
+        if str(ad.get("effective_status") or ad.get("status", "")).upper() in allowed_statuses
+    ]
     _sync_performance_metrics_records(
         metrics_map,
         stage="asc_plus",
         date_label=account_today,
+        active_ad_ids=active_ad_ids,
     )
     storage_map = _sync_creative_intelligence_records(
         client,
