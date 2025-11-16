@@ -1289,7 +1289,7 @@ def _sync_creative_performance_records(
         _CREATIVE_PERFORMANCE_STAGE_DISABLED = False
 
 
-def _guardrail_kill(metrics: Dict[str, Any]) -> Tuple[bool, str]:
+def _guardrail_kill(metrics: Dict[str, Any], rules: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
     impressions = safe_f(metrics.get("impressions"))
     clicks = safe_f(metrics.get("clicks"))
     spend = safe_f(metrics.get("spend"))
@@ -1299,27 +1299,32 @@ def _guardrail_kill(metrics: Dict[str, Any]) -> Tuple[bool, str]:
     purchases = safe_f(metrics.get("purchases"))
     roas = safe_f(metrics.get("roas"))
     cpm = safe_f(metrics.get("cpm"))
+    cpc = safe_f(metrics.get("cpc"))
     stage_hours = safe_f(metrics.get("stage_duration_hours"))
 
-    MIN_AGE_DAYS_FOR_KILL = 3.0
+    rules = rules or {}
+    asc_rules = rules.get("asc_plus_atc", {})
+    engine_rules = asc_rules.get("engine", {})
+    fairness_rules = engine_rules.get("fairness", {})
+    
+    min_spend_before_kill = safe_f(fairness_rules.get("min_spend_before_kill_eur", 55))
+    min_runtime_hours = safe_f(fairness_rules.get("min_runtime_hours", 48))
+    
     ad_age_days = safe_f(metrics.get("ad_age_days"))
     derived_age_days = max(ad_age_days, (stage_hours / 24.0) if stage_hours else 0.0)
+    derived_runtime_hours = derived_age_days * 24.0
 
-    if derived_age_days < MIN_AGE_DAYS_FOR_KILL:
+    if spend < min_spend_before_kill or derived_runtime_hours < min_runtime_hours:
         return False, ""
 
     reasons: List[str] = []
 
-    if spend >= 12 and purchases == 0 and ctr_pct < 0.6:
-        reasons.append(f"Spend €{spend:.2f} with CTR {ctr_pct:.2f}% and no conversions")
     if impressions >= 2500 and ctr_pct < 0.45 and clicks < 20:
         reasons.append(f"CTR {ctr_pct:.2f}% after {int(impressions)} impressions")
-    if spend >= 8 and roas < 0.5 and purchases == 0:
-        reasons.append(f"ROAS {roas:.2f} after spend €{spend:.2f}")
-    if spend >= 6 and cpm > 90:
+    if spend >= min_spend_before_kill and cpm > 90:
         reasons.append(f"CPM €{cpm:.2f} after spend €{spend:.2f}")
-    if spend >= 5 and atc == 0 and purchases == 0 and ctr_pct < 0.7:
-        reasons.append("No intent events despite initial spend")
+    if spend >= min_spend_before_kill and atc == 0 and ctr_pct < 0.7:
+        reasons.append(f"No ATC after spend €{spend:.2f} with CTR {ctr_pct:.2f}%")
 
     if reasons:
         return True, reasons[0]
@@ -2537,7 +2542,7 @@ def run_asc_plus_tick(
             creation_time=creation_times.get(str(ad_id)) if creation_times else None,
             now_ts=now_utc,
         )
-        kill, kill_reason = _guardrail_kill(metrics)
+        kill, kill_reason = _guardrail_kill(metrics, rules)
         if kill:
             if _pause_ad(client, ad_id, kill_reason):
                 killed_ads.append((ad_id, kill_reason))
