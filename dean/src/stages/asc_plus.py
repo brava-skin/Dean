@@ -1463,8 +1463,11 @@ def _build_ad_metrics(
         elif action_type == "add_to_cart":
             if add_to_cart == 0:
                 add_to_cart = int(value)
-        elif action_type == "initiate_checkout":
+        elif action_type == "omni_initiate_checkout":
             initiate_checkout += int(value)
+        elif action_type == "initiate_checkout":
+            if initiate_checkout == 0:
+                initiate_checkout = int(value)
         elif action_type == "purchase":
             purchases += int(value)
 
@@ -1611,6 +1614,7 @@ def _summarize_today_metrics(
         "impressions": 0.0,
         "clicks": 0.0,
         "add_to_cart": 0.0,
+        "initiate_checkout": 0.0,
         "purchases": 0.0,
     }
     try:
@@ -1639,6 +1643,7 @@ def _summarize_today_metrics(
             
             actions = row.get("actions") or []
             add_to_cart = 0
+            initiate_checkout = 0
             purchases = 0
             for action in actions:
                 action_type = action.get("action_type")
@@ -1648,6 +1653,11 @@ def _summarize_today_metrics(
                 elif action_type == "add_to_cart":
                     if add_to_cart == 0:
                         add_to_cart = int(value)
+                elif action_type == "omni_initiate_checkout":
+                    initiate_checkout += int(value)
+                elif action_type == "initiate_checkout":
+                    if initiate_checkout == 0:
+                        initiate_checkout = int(value)
                 elif action_type == "purchase":
                     purchases += int(value)
             
@@ -1655,6 +1665,7 @@ def _summarize_today_metrics(
             totals["impressions"] += impressions_val
             totals["clicks"] += clicks_val
             totals["add_to_cart"] += add_to_cart
+            totals["initiate_checkout"] += initiate_checkout
             totals["purchases"] += purchases
     except Exception as exc:
         _asc_log(logging.WARNING, "Failed to fetch today's metrics for health summary: %s", exc)
@@ -2153,7 +2164,6 @@ def _create_creative_and_ad(
                     creative_intel_data = {
                         "creative_id": str(meta_creative_id),
                         "ad_id": ad_id,
-                        "creative_type": "image",
                         "headline": ad_copy_dict.get("headline", ""),
                         "primary_text": ad_copy_dict.get("primary_text", ""),
                         "description": ad_copy_dict.get("description", ""),

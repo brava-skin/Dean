@@ -971,7 +971,9 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
             link_clicks = all_clicks
         for r in rows:
             row_atc = 0.0
-            has_omni = False
+            row_ic = 0.0
+            has_omni_atc = False
+            has_omni_ic = False
             for a in (r.get("actions") or []):
                 action_type = a.get("action_type")
                 try:
@@ -980,15 +982,20 @@ def account_guardrail_ping(meta: MetaClient, settings: Dict[str, Any]) -> Dict[s
                         purch += value
                     elif action_type == "omni_add_to_cart":
                         row_atc += value
-                        has_omni = True
+                        has_omni_atc = True
                     elif action_type == "add_to_cart":
-                        if not has_omni:
+                        if not has_omni_atc:
                             row_atc += value
+                    elif action_type == "omni_initiate_checkout":
+                        row_ic += value
+                        has_omni_ic = True
                     elif action_type == "initiate_checkout":
-                        ic += value
+                        if not has_omni_ic:
+                            row_ic += value
                 except (KeyError, TypeError, ValueError):
                     continue
             atc += row_atc
+            ic += row_ic
         link_clicks = max(link_clicks, 0.0)
         all_clicks = max(all_clicks, 0.0)
         cpa = (spend / purch) if purch > 0 else None
