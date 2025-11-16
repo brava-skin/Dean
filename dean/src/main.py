@@ -149,6 +149,10 @@ except Exception:
     create_client = None
 
 def get_reconciled_counters(account_snapshot, stage_result=None):
+    if stage_result and isinstance(stage_result, dict):
+        active_count = stage_result.get("active_count")
+        if active_count is not None:
+            account_snapshot["active_ads"] = active_count
     return account_snapshot, stage_result or {}
 
 from infrastructure import Store

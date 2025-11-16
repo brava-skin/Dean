@@ -11,6 +11,7 @@ from collections import defaultdict, deque, Counter
 from threading import Lock
 import json
 import logging
+import warnings
 import requests
 from datetime import datetime, timedelta, timezone
 
@@ -18,6 +19,8 @@ from .slack import notify
 from infrastructure.error_handling import circuit_breaker_manager
 
 logger = logging.getLogger(__name__)
+
+warnings.filterwarnings("ignore", message=".*date_preset.*", category=UserWarning)
 
 
 class InsightsDataLimitError(RuntimeError):

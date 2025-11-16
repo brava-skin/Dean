@@ -1599,6 +1599,69 @@ def _summarize_metrics(metrics_map: Dict[str, Dict[str, Any]]) -> Dict[str, floa
     return totals
 
 
+def _summarize_today_metrics(
+    client: MetaClient,
+    adset_id: str,
+    campaign_id: str,
+    account_today: str,
+    active_ad_ids_set: Set[str],
+) -> Dict[str, float]:
+    totals = {
+        "spend": 0.0,
+        "impressions": 0.0,
+        "clicks": 0.0,
+        "add_to_cart": 0.0,
+        "purchases": 0.0,
+    }
+    try:
+        filters = []
+        if adset_id:
+            filters.append({"field": "adset.id", "operator": "EQUAL", "value": adset_id})
+        if campaign_id:
+            filters.append({"field": "campaign.id", "operator": "EQUAL", "value": campaign_id})
+        
+        today_rows = client.get_ad_insights(
+            level="ad",
+            date_preset="today",
+            filtering=filters,
+            fields=["ad_id", "spend", "impressions", "clicks", "actions"],
+            limit=500,
+        ) or []
+        
+        for row in today_rows:
+            ad_id = str(row.get("ad_id", ""))
+            if ad_id not in active_ad_ids_set:
+                continue
+            
+            spend_val = safe_f(row.get("spend"))
+            impressions_val = safe_f(row.get("impressions"))
+            clicks_val = safe_f(row.get("clicks"))
+            
+            actions = row.get("actions") or []
+            add_to_cart = 0
+            purchases = 0
+            for action in actions:
+                action_type = action.get("action_type")
+                value = safe_f(action.get("value"))
+                if action_type == "omni_add_to_cart":
+                    add_to_cart += int(value)
+                elif action_type == "add_to_cart":
+                    if add_to_cart == 0:
+                        add_to_cart = int(value)
+                elif action_type == "purchase":
+                    purchases += int(value)
+            
+            totals["spend"] += spend_val
+            totals["impressions"] += impressions_val
+            totals["clicks"] += clicks_val
+            totals["add_to_cart"] += add_to_cart
+            totals["purchases"] += purchases
+    except Exception as exc:
+        _asc_log(logging.WARNING, "Failed to fetch today's metrics for health summary: %s", exc)
+    
+    return totals
+
+
 def _ad_health_score(metrics: Dict[str, Any]) -> float:
     roas = safe_f(metrics.get("roas"))
     purchases = safe_f(metrics.get("purchases"))
@@ -2582,10 +2645,13 @@ def run_asc_plus_tick(
     result["health_message"] = health_message
 
     result["hydrated_active_count"] = hydrated_active_count
+    
+    final_active_ad_ids = {str(ad.get("id")) for ad in hydrated_active_ads if ad.get("id")}
+    today_totals = _summarize_today_metrics(client, adset_id, campaign_id, account_today, final_active_ad_ids)
     health_summary = _emit_health_notification(
         health_status,
         health_message,
-        totals,
+        today_totals,
         active_count,
         result["target_count"],
     )
