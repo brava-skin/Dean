@@ -1,28 +1,17 @@
 from __future__ import annotations
 
-import logging
-import os
+import hashlib
 import json
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple, Iterable, Set
+import logging
 import math
-
+import os
+import re
+import sys
+import time
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple, Iterable, Set, TypedDict
 from zoneinfo import ZoneInfo
 
-logger = logging.getLogger(__name__)
-
-
-def _asc_log(level: int, message: str, *args: Any) -> None:
-    logger.log(level, f"[ASC] {message}", *args)
-
-from integrations.slack import notify, alert_error
-from integrations import fmt_eur, fmt_int, fmt_pct
-from integrations.meta_client import MetaClient
-from infrastructure.utils import (
-    cfg, cfg_or_env_f,
-    safe_f, today_str, Timekit
-)
-from creative.image_generator import create_image_generator, ImageCreativeGenerator
 from config import (
     ASC_PLUS_BUDGET_MIN,
     ASC_PLUS_BUDGET_MAX,
@@ -30,20 +19,260 @@ from config import (
     CREATIVE_PERFORMANCE_STAGE_VALUE,
     validate_asc_plus_config
 )
+from creative.image_generator import create_image_generator, ImageCreativeGenerator
 from infrastructure.data_validation import (
     validate_all_timestamps,
     validate_supabase_data,
     ValidationError,
     validate_and_sanitize_data,
 )
+from infrastructure.utils import (
+    cfg, cfg_or_env_f,
+    safe_f, today_str, Timekit
+)
+from integrations import fmt_eur, fmt_int, fmt_pct
+from integrations.meta_client import MetaClient
+from integrations.slack import notify, alert_error
+
+logger = logging.getLogger(__name__)
 
 UTC = timezone.utc
 LOCAL_TZ = ZoneInfo(os.getenv("ACCOUNT_TZ", os.getenv("ACCOUNT_TIMEZONE", "Europe/Amsterdam")))
 ACCOUNT_CURRENCY = os.getenv("ACCOUNT_CURRENCY", "EUR")
 HYDRATION_SECONDS = int(os.getenv("ASC_PLUS_HYDRATION_SECONDS", "180"))
 
-
 _CREATIVE_PERFORMANCE_STAGE_DISABLED = False
+
+HEADLINE_MAX_LENGTH_CREATIVE = 15
+HEADLINE_MAX_LENGTH_AD = 12
+HEADLINE_WORD_LIMIT = 2
+HEADLINE_WORD_CHARS = 6
+CREATIVE_NAME_MAX_LENGTH = 80
+AD_NAME_MAX_LENGTH = 100
+PRIMARY_TEXT_MAX_LENGTH = 150
+CREATIVE_ID_SHORT_LENGTH = 8
+INSIGHTS_LIMIT = 500
+DATE_FORMAT = "%d%m%y"
+
+STATUS_ACTIVE = "ACTIVE"
+STATUS_PAUSED = "PAUSED"
+STATUS_ELIGIBLE = "ELIGIBLE"
+STATUS_ARCHIVED = "ARCHIVED"
+CALL_TO_ACTION_SHOP_NOW = "SHOP_NOW"
+
+PERFORMANCE_SCORE_CTR_WEIGHT = 0.3
+PERFORMANCE_SCORE_CTR_THRESHOLD = 1.0
+PERFORMANCE_SCORE_CTR_DIVISOR = 5.0
+PERFORMANCE_SCORE_ROAS_WEIGHT = 0.3
+PERFORMANCE_SCORE_ROAS_THRESHOLD = 1.0
+PERFORMANCE_SCORE_ROAS_DIVISOR = 10.0
+PERFORMANCE_SCORE_CPA_WEIGHT = 0.2
+PERFORMANCE_SCORE_CPA_BASE = 50.0
+
+FATIGUE_CTR_WEIGHT = 0.3
+FATIGUE_CTR_THRESHOLD = 1.0
+FATIGUE_CPA_WEIGHT = 0.3
+FATIGUE_CPA_THRESHOLD = 30.0
+FATIGUE_ROAS_WEIGHT = 0.4
+FATIGUE_ROAS_THRESHOLD = 1.0
+
+LIFECYCLE_PREFIX = "lifecycle_"
+CREATIVE_PREFIX = "creative_"
+ASC_PLUS_PREFIX = "[ASC+]"
+
+
+def _get_performance_score_config(settings: Optional[Dict[str, Any]] = None) -> Dict[str, float]:
+    """Get performance score configuration from settings or defaults.
+    
+    Returns:
+        Dictionary with performance score weights and thresholds.
+    """
+    if not settings:
+        return {
+            "ctr_weight": PERFORMANCE_SCORE_CTR_WEIGHT,
+            "ctr_threshold": PERFORMANCE_SCORE_CTR_THRESHOLD,
+            "ctr_divisor": PERFORMANCE_SCORE_CTR_DIVISOR,
+            "roas_weight": PERFORMANCE_SCORE_ROAS_WEIGHT,
+            "roas_threshold": PERFORMANCE_SCORE_ROAS_THRESHOLD,
+            "roas_divisor": PERFORMANCE_SCORE_ROAS_DIVISOR,
+            "cpa_weight": PERFORMANCE_SCORE_CPA_WEIGHT,
+            "cpa_base": PERFORMANCE_SCORE_CPA_BASE,
+        }
+    
+    asc_config = settings.get("asc_plus", {})
+    perf_config = asc_config.get("performance_scoring", {})
+    
+    return {
+        "ctr_weight": perf_config.get("ctr_weight", PERFORMANCE_SCORE_CTR_WEIGHT),
+        "ctr_threshold": perf_config.get("ctr_threshold", PERFORMANCE_SCORE_CTR_THRESHOLD),
+        "ctr_divisor": perf_config.get("ctr_divisor", PERFORMANCE_SCORE_CTR_DIVISOR),
+        "roas_weight": perf_config.get("roas_weight", PERFORMANCE_SCORE_ROAS_WEIGHT),
+        "roas_threshold": perf_config.get("roas_threshold", PERFORMANCE_SCORE_ROAS_THRESHOLD),
+        "roas_divisor": perf_config.get("roas_divisor", PERFORMANCE_SCORE_ROAS_DIVISOR),
+        "cpa_weight": perf_config.get("cpa_weight", PERFORMANCE_SCORE_CPA_WEIGHT),
+        "cpa_base": perf_config.get("cpa_base", PERFORMANCE_SCORE_CPA_BASE),
+    }
+
+
+def _get_fatigue_index_config(settings: Optional[Dict[str, Any]] = None) -> Dict[str, float]:
+    """Get fatigue index configuration from settings or defaults.
+    
+    Returns:
+        Dictionary with fatigue index weights and thresholds.
+    """
+    if not settings:
+        return {
+            "ctr_weight": FATIGUE_CTR_WEIGHT,
+            "ctr_threshold": FATIGUE_CTR_THRESHOLD,
+            "cpa_weight": FATIGUE_CPA_WEIGHT,
+            "cpa_threshold": FATIGUE_CPA_THRESHOLD,
+            "roas_weight": FATIGUE_ROAS_WEIGHT,
+            "roas_threshold": FATIGUE_ROAS_THRESHOLD,
+        }
+    
+    asc_config = settings.get("asc_plus", {})
+    fatigue_config = asc_config.get("fatigue_index", {})
+    
+    return {
+        "ctr_weight": fatigue_config.get("ctr_weight", FATIGUE_CTR_WEIGHT),
+        "ctr_threshold": fatigue_config.get("ctr_threshold", FATIGUE_CTR_THRESHOLD),
+        "cpa_weight": fatigue_config.get("cpa_weight", FATIGUE_CPA_WEIGHT),
+        "cpa_threshold": fatigue_config.get("cpa_threshold", FATIGUE_CPA_THRESHOLD),
+        "roas_weight": fatigue_config.get("roas_weight", FATIGUE_ROAS_WEIGHT),
+        "roas_threshold": fatigue_config.get("roas_threshold", FATIGUE_ROAS_THRESHOLD),
+    }
+
+
+# TypedDict classes for commonly used data structures
+class AdMetricsDict(TypedDict, total=False):
+    """Type definition for ad metrics dictionary."""
+    ad_id: str
+    spend: float
+    impressions: int
+    clicks: int
+    purchases: int
+    add_to_cart: int
+    ctr: Optional[float]
+    cpc: Optional[float]
+    cpm: Optional[float]
+    roas: Optional[float]
+    cpa: Optional[float]
+    revenue: Optional[float]
+    lifecycle_id: Optional[str]
+    hydrated: bool
+    hours_live: float
+
+
+class CreativeDataDict(TypedDict, total=False):
+    """Type definition for creative data dictionary."""
+    storage_creative_id: Optional[str]
+    image_path: Optional[str]
+    supabase_storage_url: Optional[str]
+    images_by_aspect: Optional[Dict[str, str]]
+    supabase_storage_urls: Optional[Dict[str, str]]
+    ad_copy: Optional[Dict[str, str]]
+    image_prompt: Optional[str]
+    text_overlay: Optional[str]
+
+
+class AdCopyDict(TypedDict, total=False):
+    """Type definition for ad copy dictionary."""
+    headline: str
+    primary_text: str
+    description: str
+
+
+class ASCPlusResultDict(TypedDict, total=False):
+    """Type definition for ASC+ tick result dictionary."""
+    ok: bool
+    campaign_id: Optional[str]
+    adset_id: Optional[str]
+    active_count: int
+    target_count: int
+    max_active_count: int
+    kills: List[Tuple[str, str]]
+    promotions: List[Any]
+    created_ads: List[str]
+    created_details: List[Dict[str, Any]]
+    ad_metrics: Dict[str, Dict[str, Any]]
+    health: str
+    health_message: str
+    health_summary: str
+    hydrated_active_count: int
+
+
+def _asc_log(level: int, message: str, *args: Any) -> None:
+    logger.log(level, f"[ASC] {message}", *args)
+
+
+def _get_supabase_client() -> Optional[Any]:
+    try:
+        from infrastructure.supabase_storage import get_validated_supabase_client
+        return get_validated_supabase_client(enable_validation=True)
+    except ImportError:
+        logger.debug("Supabase storage unavailable")
+        return None
+
+
+def _get_ad_copy_dict(creative_data: CreativeDataDict) -> AdCopyDict:
+    ad_copy_dict = creative_data.get("ad_copy") or {}
+    if not isinstance(ad_copy_dict, dict):
+        ad_copy_dict = {}
+    return ad_copy_dict
+
+
+def _clean_headline_for_naming(headline: str, default: str = "creative", max_length: int = HEADLINE_MAX_LENGTH_CREATIVE) -> str:
+    if not headline:
+        return default
+    headline_clean = headline.replace(":", "").replace("/", "").replace("\\", "").replace(",", "").strip()
+    headline_words = headline_clean.split()[:HEADLINE_WORD_LIMIT]
+    headline_key = "_".join(word.lower()[:HEADLINE_WORD_CHARS] for word in headline_words if word)
+    if not headline_key:
+        headline_key = default
+    if len(headline_key) > max_length:
+        headline_key = headline_key[:max_length]
+    return headline_key
+
+
+def _generate_creative_name(date_str: str, headline: str, creative_id_short: str) -> str:
+    headline_key = _clean_headline_for_naming(headline, "creative", HEADLINE_MAX_LENGTH_CREATIVE)
+    creative_name = f"{ASC_PLUS_PREFIX} ASC+_{date_str}_{headline_key}_{creative_id_short}"
+    if len(creative_name) > CREATIVE_NAME_MAX_LENGTH:
+        creative_name = f"{ASC_PLUS_PREFIX} ASC+_{date_str}_{headline_key[:10]}_{creative_id_short}"
+    return creative_name
+
+
+def _generate_ad_name(date_str: str, headline: str, seq_num: int) -> str:
+    headline_key = _clean_headline_for_naming(headline, "ad", HEADLINE_MAX_LENGTH_AD)
+    ad_name = f"{ASC_PLUS_PREFIX} ASC+_{date_str}_{headline_key}_{seq_num:02d}"
+    if len(ad_name) > AD_NAME_MAX_LENGTH:
+        ad_name = f"{ASC_PLUS_PREFIX} ASC+_{date_str}_{headline_key[:8]}_{seq_num:02d}"
+    return ad_name
+
+
+def _get_lifecycle_id(ad_id: str) -> str:
+    return f"{LIFECYCLE_PREFIX}{ad_id}"
+
+
+def _get_current_date_str() -> str:
+    return datetime.now().strftime(DATE_FORMAT)
+
+
+def _sanitize_primary_text(primary_text: str) -> str:
+    if not primary_text:
+        return ""
+    primary_text = primary_text.replace("Brava Product", "").replace("—", ",").replace("–", ",").strip()
+    primary_text = re.sub(r'\s+', ' ', primary_text).strip()
+    if len(primary_text) > PRIMARY_TEXT_MAX_LENGTH:
+        primary_text = primary_text[:147] + "..."
+    return primary_text
+
+
+def _get_first_available(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
 
 
 def _roas(row: Dict[str, Any]) -> float:
@@ -217,9 +446,9 @@ def _parse_created_time(value: Any) -> Optional[datetime]:
 
 def _normalize_lifecycle_status(raw_status: Optional[str]) -> str:
     status_map = {
-        "ACTIVE": "active",
-        "PAUSED": "paused",
-        "ARCHIVED": "completed",
+        STATUS_ACTIVE: "active",
+        STATUS_PAUSED: "paused",
+        STATUS_ARCHIVED: "completed",
         "DELETED": "completed",
         "WITH_ISSUES": "failed",
         "DISAPPROVED": "failed",
@@ -262,37 +491,77 @@ def _calculate_creative_performance(metrics: Optional[Dict[str, Any]]) -> Dict[s
     return {"avg_ctr": avg_ctr, "avg_cpa": avg_cpa, "avg_roas": _safe_float(avg_roas)}
 
 
-def _calculate_performance_score(perf: Dict[str, float]) -> float:
+def _calculate_performance_score(perf: Dict[str, float], config: Optional[Dict[str, float]] = None) -> float:
+    """Calculate performance score with configurable weights and thresholds.
+    
+    Args:
+        perf: Performance metrics dictionary.
+        config: Optional configuration dictionary. If None, uses defaults.
+    
+    Returns:
+        Performance score between 0.0 and 1.0.
+    """
+    if config is None:
+        config = {
+            "ctr_weight": PERFORMANCE_SCORE_CTR_WEIGHT,
+            "ctr_threshold": PERFORMANCE_SCORE_CTR_THRESHOLD,
+            "ctr_divisor": PERFORMANCE_SCORE_CTR_DIVISOR,
+            "roas_weight": PERFORMANCE_SCORE_ROAS_WEIGHT,
+            "roas_threshold": PERFORMANCE_SCORE_ROAS_THRESHOLD,
+            "roas_divisor": PERFORMANCE_SCORE_ROAS_DIVISOR,
+            "cpa_weight": PERFORMANCE_SCORE_CPA_WEIGHT,
+            "cpa_base": PERFORMANCE_SCORE_CPA_BASE,
+        }
+    
     ctr_fraction = perf.get("avg_ctr") or 0.0
     ctr_pct = ctr_fraction * 100.0
     cpa = perf.get("avg_cpa") or 0.0
     roas = perf.get("avg_roas") or 0.0
 
     score = 0.0
-    if ctr_pct >= 1.0:
-        score += 0.3
+    if ctr_pct >= config["ctr_threshold"]:
+        score += config["ctr_weight"]
     else:
-        score += max(0.0, min(ctr_pct / 5.0, 0.3))
-    if roas >= 1.0:
-        score += min(roas / 10.0, 0.3)
+        score += max(0.0, min(ctr_pct / config["ctr_divisor"], config["ctr_weight"]))
+    if roas >= config["roas_threshold"]:
+        score += min(roas / config["roas_divisor"], config["roas_weight"])
     if cpa > 0:
-        score += max(0.0, min((50 - cpa) / 50, 0.2))
+        score += max(0.0, min((config["cpa_base"] - cpa) / config["cpa_base"], config["cpa_weight"]))
 
     return _safe_float(max(0.0, min(score, 1.0)))
 
 
-def _calculate_fatigue_index(perf: Dict[str, float]) -> float:
+def _calculate_fatigue_index(perf: Dict[str, float], config: Optional[Dict[str, float]] = None) -> float:
+    """Calculate fatigue index with configurable weights and thresholds.
+    
+    Args:
+        perf: Performance metrics dictionary.
+        config: Optional configuration dictionary. If None, uses defaults.
+    
+    Returns:
+        Fatigue index between 0.0 and 1.0.
+    """
+    if config is None:
+        config = {
+            "ctr_weight": FATIGUE_CTR_WEIGHT,
+            "ctr_threshold": FATIGUE_CTR_THRESHOLD,
+            "cpa_weight": FATIGUE_CPA_WEIGHT,
+            "cpa_threshold": FATIGUE_CPA_THRESHOLD,
+            "roas_weight": FATIGUE_ROAS_WEIGHT,
+            "roas_threshold": FATIGUE_ROAS_THRESHOLD,
+        }
+    
     ctr_pct = (perf.get("avg_ctr") or 0.0) * 100.0
     cpa = perf.get("avg_cpa") or 0.0
     roas = perf.get("avg_roas") or 0.0
 
     fatigue = 0.0
-    if ctr_pct < 1.0:
-        fatigue += 0.3
-    if cpa > 30:
-        fatigue += 0.3
-    if roas < 1.0:
-        fatigue += 0.4
+    if ctr_pct < config["ctr_threshold"]:
+        fatigue += config["ctr_weight"]
+    if cpa > config["cpa_threshold"]:
+        fatigue += config["cpa_weight"]
+    if roas < config["roas_threshold"]:
+        fatigue += config["roas_weight"]
     return _safe_float(min(fatigue, 1.0))
 
 
@@ -300,13 +569,14 @@ def _sync_ad_creation_records(client: MetaClient, ads: List[Dict[str, Any]], sta
     creation_map: Dict[str, datetime] = {}
     if not ads:
         return creation_map
+    
     try:
-        from infrastructure.supabase_storage import get_validated_supabase_client, SupabaseStorage
+        from infrastructure.supabase_storage import SupabaseStorage
     except ImportError:
         logger.debug("Supabase storage unavailable; skipping ad creation sync")
         return creation_map
 
-    supabase_client = get_validated_supabase_client(enable_validation=True)
+    supabase_client = _get_supabase_client()
     if not supabase_client:
         return creation_map
 
@@ -342,7 +612,7 @@ def _sync_ad_creation_records(client: MetaClient, ads: List[Dict[str, Any]], sta
         lifecycle_id = (
             ad.get("lifecycle_id")
             or (existing.get("lifecycle_id") if existing else "")
-            or f"lifecycle_{ad_id}"
+            or _get_lifecycle_id(ad_id)
         )
 
         needs_sync = False
@@ -404,13 +674,14 @@ def _sync_ad_lifecycle_records(
 ) -> None:
     if not ads:
         return
+    
     try:
-        from infrastructure.supabase_storage import get_validated_supabase_client, SupabaseStorage
+        from infrastructure.supabase_storage import SupabaseStorage
     except ImportError:
         logger.debug("Supabase storage unavailable; skipping lifecycle sync")
         return
 
-    supabase_client = get_validated_supabase_client(enable_validation=True)
+    supabase_client = _get_supabase_client()
     if not supabase_client:
         return
 
@@ -449,7 +720,7 @@ def _sync_ad_lifecycle_records(
         lifecycle_id = (
             ad.get("lifecycle_id")
             or existing.get("lifecycle_id")
-            or f"lifecycle_{ad_id}"
+            or _get_lifecycle_id(ad_id)
         )
 
         creative_id = (
@@ -476,7 +747,7 @@ def _sync_ad_lifecycle_records(
             or existing.get("status")
         )
         status = _normalize_lifecycle_status(raw_status)
-        if status in ["ACTIVE", "PAUSED"]:
+        if status in [STATUS_ACTIVE, STATUS_PAUSED]:
             status = status.lower()
         elif status in ["DELETED", "ARCHIVED", "DISAPPROVED"]:
             status = "killed"
@@ -587,68 +858,22 @@ def _collect_storage_metadata(
         return {}
 
 
-def _sync_creative_intelligence_records(
-    client: MetaClient,
+def _prepare_creative_intelligence_data(
     ads: List[Dict[str, Any]],
+    existing_map: Dict[Tuple[str, str], Dict[str, Any]],
+    storage_map: Dict[str, Dict[str, Any]],
     metrics_map: Dict[str, Dict[str, Any]],
-    stage: str = "asc_plus",
-) -> Dict[str, Dict[str, Any]]:
-    if not ads:
-        return {}
-
-    try:
-        from infrastructure.supabase_storage import get_validated_supabase_client
-    except ImportError:
-        logger.debug("Supabase storage unavailable; skipping creative intelligence sync")
-        return {}
-
-    supabase_client = get_validated_supabase_client(enable_validation=True)
-    if not supabase_client:
-        return {}
-
-    ad_ids = [str(ad.get("id")) for ad in ads if ad.get("id")]
-    if not ad_ids:
-        return {}
-
-    try:
-        existing_resp = (
-            supabase_client.table("ads")
-            .select("ad_id, creative_id, headline, primary_text, description, image_prompt, performance_score, fatigue_index, metadata")
-            .in_("ad_id", ad_ids)
-            .execute()
-        )
-        existing_rows = getattr(existing_resp, "data", None) or []
-    except Exception as exc:
-        logger.debug(f"Unable to load ads records: {exc}")
-        existing_rows = []
-
-    existing_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    storage_ids: set[str] = set()
-    ads_needing_creative_content: List[str] = []
+    now_iso: str,
+    stage: str,
+    settings: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Prepare creative intelligence records from ads data.
     
-    for row in existing_rows:
-        creative_id = str(row.get("creative_id") or "")
-        ad_id = str(row.get("ad_id") or "")
-        if creative_id and ad_id:
-            existing_map[(creative_id, ad_id)] = row
-            metadata = _parse_metadata(row.get("metadata"))
-            storage_id = metadata.get("storage_creative_id")
-            if storage_id:
-                storage_ids.add(storage_id)
-            storage_ids.add(creative_id)
-            
-            if not row.get("headline") and not row.get("primary_text"):
-                ads_needing_creative_content.append(ad_id)
-
-    for ad in ads:
-        creative_id = ad.get("creative_id")
-        if creative_id:
-            storage_ids.add(str(creative_id))
-
-    storage_map = _collect_storage_metadata(supabase_client, storage_ids)
-    now_iso = datetime.now(timezone.utc).isoformat()
-    sanitized_records: List[Dict[str, Any]] = []
-
+    Returns:
+        List of prepared records ready for validation and DB operations.
+    """
+    prepared_records: List[Dict[str, Any]] = []
+    
     for ad in ads:
         ad_id = str(ad.get("id") or "")
         creative_id = str(ad.get("creative_id") or "")
@@ -691,21 +916,26 @@ def _sync_creative_intelligence_records(
             metadata["ad_name"] = ad.get("name")
 
         created_at = existing.get("created_at") or now_iso
-        lifecycle_id = f"lifecycle_{ad_id}"
+        lifecycle_id = _get_lifecycle_id(ad_id)
         avg_ctr = _clamp(avg_ctr, -9.9999, 9.9999) or 0.0
         avg_cpa = _clamp(avg_cpa, -9.9999, 9.9999) or 0.0
         avg_roas = _clamp(avg_roas, -9.9999, 9.9999) or 0.0
 
+        perf_config = _get_performance_score_config(settings)
+        fatigue_config = _get_fatigue_index_config(settings)
+        
         performance_score = _clamp(
             _calculate_performance_score(
-            {"avg_ctr": avg_ctr, "avg_cpa": avg_cpa, "avg_roas": avg_roas}
+                {"avg_ctr": avg_ctr, "avg_cpa": avg_cpa, "avg_roas": avg_roas},
+                config=perf_config
             ),
             0.0,
             1.0,
         ) or 0.0
         fatigue_index = _clamp(
             _calculate_fatigue_index(
-            {"avg_ctr": avg_ctr, "avg_cpa": avg_cpa, "avg_roas": avg_roas}
+                {"avg_ctr": avg_ctr, "avg_cpa": avg_cpa, "avg_roas": avg_roas},
+                config=fatigue_config
             ),
             0.0,
             1.0,
@@ -791,18 +1021,36 @@ def _sync_creative_intelligence_records(
         }
 
         record = validate_all_timestamps(record)
+        prepared_records.append(record)
+    
+    return prepared_records
 
+
+def _validate_and_sanitize_creative_intelligence_records(
+    prepared_records: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Validate and sanitize prepared creative intelligence records.
+    
+    Returns:
+        List of sanitized records ready for DB upsert.
+    """
+    sanitized_records: List[Dict[str, Any]] = []
+    
+    for record in prepared_records:
+        ad_id = record.get("ad_id")
+        creative_id = record.get("creative_id")
+        
         ads_update: Dict[str, Any] = {
             "ad_id": ad_id,
             "creative_id": creative_id,
-            "headline": headline,
-            "primary_text": primary_text,
-            "description": description,
-            "image_prompt": existing.get("image_prompt"),
-            "performance_score": performance_score,
-            "fatigue_index": fatigue_index,
-            "metadata": metadata,
-            "updated_at": now_iso,
+            "headline": record.get("headline"),
+            "primary_text": record.get("primary_text"),
+            "description": record.get("description"),
+            "image_prompt": record.get("image_prompt"),
+            "performance_score": record.get("performance_score"),
+            "fatigue_index": record.get("fatigue_index"),
+            "metadata": record.get("metadata"),
+            "updated_at": record.get("updated_at"),
         }
 
         validation = validate_supabase_data("ads", ads_update, strict_mode=True)
@@ -816,7 +1064,84 @@ def _sync_creative_intelligence_records(
             continue
 
         sanitized_records.append(validation.sanitized_data)
+    
+    return sanitized_records
 
+
+def _sync_creative_intelligence_records(
+    client: MetaClient,
+    ads: List[Dict[str, Any]],
+    metrics_map: Dict[str, Dict[str, Any]],
+    stage: str = "asc_plus",
+    settings: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Sync creative intelligence records to Supabase.
+    
+    Splits the work into data preparation, validation, and DB operations.
+    
+    Returns:
+        Storage map dictionary.
+    """
+    if not ads:
+        return {}
+
+    supabase_client = _get_supabase_client()
+    if not supabase_client:
+        return {}
+
+    ad_ids = [str(ad.get("id")) for ad in ads if ad.get("id")]
+    if not ad_ids:
+        return {}
+
+    # Load existing records
+    try:
+        existing_resp = (
+            supabase_client.table("ads")
+            .select("ad_id, creative_id, headline, primary_text, description, image_prompt, performance_score, fatigue_index, metadata")
+            .in_("ad_id", ad_ids)
+            .execute()
+        )
+        existing_rows = getattr(existing_resp, "data", None) or []
+    except Exception as exc:
+        logger.warning(f"Unable to load ads records for {len(ad_ids)} ads: {exc}")
+        existing_rows = []
+
+    # Build existing map and collect storage IDs
+    existing_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    storage_ids: set[str] = set()
+    ads_needing_creative_content: List[str] = []
+    
+    for row in existing_rows:
+        creative_id = str(row.get("creative_id") or "")
+        ad_id = str(row.get("ad_id") or "")
+        if creative_id and ad_id:
+            existing_map[(creative_id, ad_id)] = row
+            metadata = _parse_metadata(row.get("metadata"))
+            storage_id = metadata.get("storage_creative_id")
+            if storage_id:
+                storage_ids.add(storage_id)
+            storage_ids.add(creative_id)
+            
+            if not row.get("headline") and not row.get("primary_text"):
+                ads_needing_creative_content.append(ad_id)
+
+    for ad in ads:
+        creative_id = ad.get("creative_id")
+        if creative_id:
+            storage_ids.add(str(creative_id))
+
+    storage_map = _collect_storage_metadata(supabase_client, storage_ids)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    
+    # Data preparation
+    prepared_records = _prepare_creative_intelligence_data(
+        ads, existing_map, storage_map, metrics_map, now_iso, stage
+    )
+    
+    # Validation and sanitization
+    sanitized_records = _validate_and_sanitize_creative_intelligence_records(prepared_records)
+
+    # DB operations
     if not sanitized_records:
         return storage_map
 
@@ -825,11 +1150,13 @@ def _sync_creative_intelligence_records(
             sanitized_records,
             on_conflict="ad_id",
         ).execute()
+        logger.debug(f"Successfully upserted {len(sanitized_records)} creative intelligence records")
     except ValidationError as exc:
-        logger.error("Ads upsert blocked: %s", exc)
+        logger.error("Ads upsert blocked by validation: %s", exc)
     except Exception as exc:
-        logger.debug(f"Failed to upsert ads records: {exc}")
+        logger.warning(f"Failed to upsert {len(sanitized_records)} ads records: {exc}")
     
+    # Fetch creative content for ads that need it
     if ads_needing_creative_content and client:
         _fetch_and_update_creative_content(client, supabase_client, ads_needing_creative_content)
 
@@ -904,7 +1231,7 @@ def _fetch_and_update_creative_content(
                     logger.debug(f"Fetched creative content for ad {ad_id}: headline={headline[:50] if headline else 'N/A'}...")
                 
             except Exception as e:
-                logger.debug(f"Failed to fetch creative content for ad {ad_id}: {e}")
+                logger.warning(f"Failed to fetch creative content for ad {ad_id} (creative {creative_id}): {e}")
                 continue
         
         if updates:
@@ -920,7 +1247,7 @@ def _fetch_and_update_creative_content(
     except ImportError:
         logger.debug("Facebook SDK not available for fetching creative content")
     except Exception as e:
-        logger.debug(f"Error fetching creative content: {e}")
+        logger.warning(f"Error fetching creative content for {len(ad_ids)} ads: {e}")
 
 
 def _sync_creative_storage_records(
@@ -931,20 +1258,14 @@ def _sync_creative_storage_records(
     if not storage_map or not ads:
         return
 
-    try:
-        from infrastructure.supabase_storage import get_validated_supabase_client
-    except ImportError:
-        logger.debug("Supabase storage unavailable; skipping creative storage sync")
-        return
-
-    supabase_client = get_validated_supabase_client(enable_validation=True)
+    supabase_client = _get_supabase_client()
     if not supabase_client:
         return
 
     now_iso = datetime.now(timezone.utc).isoformat()
     updates: List[Dict[str, Any]] = []
 
-    allowed_statuses = {"ACTIVE", "ELIGIBLE"}
+    allowed_statuses = {STATUS_ACTIVE, STATUS_ELIGIBLE}
     archived_statuses = {"ARCHIVED"}
 
     for ad in ads:
@@ -1016,7 +1337,7 @@ def _sync_performance_metrics_records(
         logger.debug("Supabase storage unavailable; skipping performance metrics sync")
         return
 
-    supabase_client = get_validated_supabase_client(enable_validation=True)
+    supabase_client = _get_supabase_client()
     if not supabase_client:
         return
 
@@ -1031,7 +1352,7 @@ def _sync_performance_metrics_records(
         if not ad_id:
             continue
 
-        lifecycle_id = metrics.get("lifecycle_id") or f"lifecycle_{ad_id}"
+        lifecycle_id = metrics.get("lifecycle_id") or _get_lifecycle_id(ad_id)
         spend = safe_f(metrics.get("spend"))
         impressions = int(safe_f(metrics.get("impressions")))
         clicks = int(safe_f(metrics.get("clicks")))
@@ -1155,7 +1476,7 @@ def _sync_historical_data_records(
         logger.debug("Supabase storage unavailable; skipping historical data sync")
         return
 
-    supabase_client = get_validated_supabase_client(enable_validation=True)
+    supabase_client = _get_supabase_client()
     if not supabase_client:
         return
 
@@ -1165,7 +1486,7 @@ def _sync_historical_data_records(
         if not ad_id:
             continue
 
-        lifecycle_id = metrics.get("lifecycle_id") or f"lifecycle_{ad_id}"
+        lifecycle_id = metrics.get("lifecycle_id") or _get_lifecycle_id(ad_id)
         spend = safe_f(metrics.get("spend"))
         impressions = safe_f(metrics.get("impressions"))
         clicks = safe_f(metrics.get("clicks"))
@@ -1221,13 +1542,7 @@ def _sync_creative_performance_records(
     if not ads or not metrics_map:
         return
 
-    try:
-        from infrastructure.supabase_storage import get_validated_supabase_client
-    except ImportError:
-        logger.debug("Supabase storage unavailable; skipping creative performance sync")
-        return
-
-    supabase_client = get_validated_supabase_client(enable_validation=True)
+    supabase_client = _get_supabase_client()
     if not supabase_client:
         return
 
@@ -1278,7 +1593,7 @@ def _sync_creative_performance_records(
         engagement_rate = _safe_float(clicks / impressions) if impressions > 0 else None
         conversion_rate = _safe_float(purchases / clicks) if clicks > 0 else None
         conversions = int(purchases)
-        lifecycle_id = f"lifecycle_{ad_id}"
+        lifecycle_id = _get_lifecycle_id(ad_id)
 
         record = {
             "creative_id": creative_id,
@@ -1479,12 +1794,15 @@ def _enforce_hard_cap(
             for ad in refreshed_ads
             if str(ad.get("effective_status") or ad.get("status", "")).upper() in allowed_statuses
         ]
+    
+    def _get_active_count_internal() -> int:
+        try:
+            return client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
+        except Exception:
+            return len(_active_ads_snapshot())
 
     active_ads = _active_ads_snapshot()
-    try:
-        active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
-    except Exception:
-        active_count = len(active_ads)
+    active_count = _get_active_count_internal()
 
     while active_count > max_active and safety_counter < 5:
         overflow = active_count - max_active
@@ -1523,10 +1841,7 @@ def _enforce_hard_cap(
             break
         safety_counter += 1
         active_ads = _active_ads_snapshot()
-        try:
-            active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
-        except Exception:
-            active_count = len(active_ads)
+        active_count = _get_active_count_internal()
 
     hydrated_candidates = []
     hydrated_count = 0
@@ -1550,16 +1865,10 @@ def _build_ad_metrics(
     ad_id = row.get("ad_id")
     spend_val = safe_f(row.get("spend"))
 
-    def _first_non_null(*values: Any) -> Any:
-        for value in values:
-            if value not in (None, ""):
-                return value
-        return None
-
-    impressions_source = _first_non_null(row.get("impressions"))
+    impressions_source = _get_first_available(row.get("impressions"))
     impressions_val = safe_f(impressions_source)
 
-    clicks_source = _first_non_null(
+    clicks_source = _get_first_available(
         row.get("inline_link_clicks"),
         row.get("link_clicks"),
         row.get("clicks"),
@@ -1665,7 +1974,7 @@ def _build_ad_metrics(
 
     metrics = {
         "ad_id": ad_id,
-        "lifecycle_id": f"lifecycle_{ad_id}",
+            "lifecycle_id": _get_lifecycle_id(ad_id),
         "stage": stage,
         "status": "active",
         "spend": spend_val,
@@ -1747,7 +2056,7 @@ def _summarize_today_metrics(
             date_preset="today",
             filtering=filters,
             fields=["ad_id", "spend", "impressions", "clicks", "inline_link_clicks", "actions"],
-            limit=500,
+            limit=INSIGHTS_LIMIT,
         ) or []
         
         for row in today_rows:
@@ -1891,7 +2200,6 @@ def _generate_creatives_for_deficit(
     settings: Dict[str, Any],
     campaign_id: str,
     adset_id: str,
-    ml_system: Optional[Any],
     base_active_count: int,
 ) -> List[Dict[str, Any]]:
     if deficit <= 0:
@@ -1903,7 +2211,7 @@ def _generate_creatives_for_deficit(
     try:
         from infrastructure.supabase_storage import get_validated_supabase_client, create_creative_storage_manager
 
-        supabase_client = get_validated_supabase_client()
+        supabase_client = _get_supabase_client()
         if supabase_client:
             storage_manager = create_creative_storage_manager(supabase_client)
     except Exception as exc:
@@ -1946,7 +2254,6 @@ def _generate_creatives_for_deficit(
             active_count=base_active_count,
             created_count=created_count,
             existing_creative_ids=set(),
-            ml_system=ml_system,
             campaign_id=campaign_id,
         )
         if success and ad_id:
@@ -1979,7 +2286,6 @@ def _generate_creatives_for_deficit(
             active_count=base_active_count,
             created_count=created_count,
             existing_creative_ids=set(),
-            ml_system=ml_system,
             campaign_id=campaign_id,
         )
         if success and ad_id:
@@ -2019,9 +2325,9 @@ def _pause_ad(client: MetaClient, ad_id: str, reason: Optional[str] = None) -> b
 
 
 def _record_lifecycle_event(ad_id: str, status: str, reason: str) -> None:
+    """Record a lifecycle status change event in Supabase."""
     try:
-        from infrastructure.supabase_storage import get_validated_supabase_client
-        client = get_validated_supabase_client()
+        client = _get_supabase_client()
         if not client:
             return
         lifecycle_status = _normalize_lifecycle_status(status)
@@ -2043,6 +2349,320 @@ def _record_lifecycle_event(ad_id: str, status: str, reason: str) -> None:
         _asc_log(logging.DEBUG, "Lifecycle logging failed for %s: %s", ad_id, exc)
 
 
+def _create_meta_creative(
+    client: MetaClient,
+    creative_data: Dict[str, Any],
+    storage_creative_id: str,
+    creative_name: str,
+    ad_copy_dict: Dict[str, Any],
+    page_id: str,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Create a Meta image creative via API.
+    
+    Returns:
+        Tuple of (meta_creative_id, instagram_actor_id) or (None, None) on failure.
+    """
+    if not page_id or not page_id.strip():
+        logger.error("Invalid page_id for creative creation: page_id=%s", page_id)
+        return None, None
+    supabase_storage_url = creative_data.get("supabase_storage_url")
+    image_path = creative_data.get("image_path")
+    
+    env_instagram_actor_id = os.getenv("IG_ACTOR_ID")
+    instagram_actor_id = env_instagram_actor_id or client.get_instagram_actor_id(page_id)
+    
+    if instagram_actor_id:
+        try:
+            int(instagram_actor_id)
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid Instagram actor ID format: {instagram_actor_id}. Will skip Instagram placements.")
+            instagram_actor_id = None
+    
+    if not instagram_actor_id:
+        logger.debug("Instagram actor ID unavailable; creative will not run on Instagram placements unless the page is linked.")
+    
+    primary_text = _sanitize_primary_text(ad_copy_dict.get("primary_text", ""))
+    images_by_aspect = creative_data.get("images_by_aspect")
+    supabase_storage_urls = creative_data.get("supabase_storage_urls")
+    
+    try:
+        creative = client.create_image_creative(
+            page_id=page_id,
+            name=creative_name,
+            supabase_storage_url=supabase_storage_url,
+            image_path=image_path if not supabase_storage_url else None,
+            images_by_aspect=images_by_aspect,
+            supabase_storage_urls=supabase_storage_urls,
+            primary_text=primary_text,
+            headline=ad_copy_dict.get("headline", ""),
+            description=ad_copy_dict.get("description", ""),
+            call_to_action=CALL_TO_ACTION_SHOP_NOW,
+            instagram_actor_id=instagram_actor_id,
+            creative_id=storage_creative_id,
+        )
+        logger.info(f"Meta API create_image_creative response: {creative}")
+        return creative.get("id"), instagram_actor_id
+    except Exception as e:
+        error_str = str(e)
+        if instagram_actor_id and "instagram_actor_id" in error_str.lower():
+            logger.warning("Meta creative creation failed due to instagram_actor_id (%s). Retrying without Instagram placements.", error_str)
+            try:
+                creative = client.create_image_creative(
+                    page_id=page_id,
+                    name=creative_name,
+                    supabase_storage_url=supabase_storage_url,
+                    image_path=image_path if not supabase_storage_url else None,
+                    images_by_aspect=images_by_aspect,
+                    supabase_storage_urls=supabase_storage_urls,
+                    primary_text=primary_text,
+                    headline=ad_copy_dict.get("headline", ""),
+                    description=ad_copy_dict.get("description", ""),
+                    call_to_action=CALL_TO_ACTION_SHOP_NOW,
+                    instagram_actor_id=None,
+                    use_env_instagram_actor=False,
+                    creative_id=storage_creative_id,
+                )
+                logger.info("Meta API create_image_creative succeeded without instagram_actor_id. Creative will run on Facebook placements only.")
+                return creative.get("id"), None
+            except Exception as retry_exc:
+                logger.error("Meta API create_image_creative retry without instagram_actor_id failed: %s", retry_exc, exc_info=True)
+                return None, None
+        else:
+            logger.error(f"Meta API create_image_creative failed: {e}", exc_info=True)
+            return None, None
+
+
+def _create_meta_ad(
+    client: MetaClient,
+    adset_id: str,
+    meta_creative_id: str,
+    ad_name: str,
+    instagram_actor_id: Optional[str],
+) -> Optional[str]:
+    """Create a Meta ad via API.
+    
+    Returns:
+        Ad ID string on success, None on failure.
+    """
+    if not adset_id or not adset_id.strip():
+        logger.error("Invalid adset_id for ad creation: adset_id=%s", adset_id)
+        return None
+    if not meta_creative_id:
+        logger.error("Invalid meta_creative_id for ad creation: meta_creative_id=%s", meta_creative_id)
+        return None
+    
+    logger.info("Creating ad with name='%s', adset_id='%s', creative_id='%s', instagram_actor_id=%s", ad_name, adset_id, meta_creative_id, bool(instagram_actor_id))
+    
+    creative_id_str = str(meta_creative_id).strip()
+    if not creative_id_str or not creative_id_str.isdigit():
+        logger.error("Invalid creative_id format for ad creation: creative_id=%s (expected numeric string), adset_id=%s", meta_creative_id, adset_id)
+        return None
+    
+    try:
+        from infrastructure.error_handling import retry_with_backoff
+        
+        @retry_with_backoff(max_retries=3, initial_delay=1.0, max_delay=10.0, retryable_exceptions=(RuntimeError, Exception))
+        def _create_ad_with_retry():
+            return client.create_ad(
+                adset_id=adset_id,
+                name=ad_name,
+                creative_id=creative_id_str,
+                status=STATUS_ACTIVE,
+                instagram_actor_id=instagram_actor_id,
+                use_env_instagram_actor=bool(instagram_actor_id),
+                tracking_specs=None,
+            )
+        
+        ad = _create_ad_with_retry()
+        logger.info(f"Meta API create_ad response: {ad}")
+        return ad.get("id")
+    except ImportError:
+        logger.debug("retry_with_backoff not available, using direct call")
+        try:
+            ad = client.create_ad(
+                adset_id=adset_id,
+                name=ad_name,
+                creative_id=creative_id_str,
+                status=STATUS_ACTIVE,
+                instagram_actor_id=instagram_actor_id,
+                use_env_instagram_actor=bool(instagram_actor_id),
+                tracking_specs=None,
+            )
+            logger.info(f"Meta API create_ad response: {ad}")
+            return ad.get("id")
+        except ValueError as ve:
+            logger.error(f"Validation error creating ad: {ve}")
+            return None
+        except RuntimeError as re:
+            error_str = str(re)
+            if "500" in error_str or "unknown error" in error_str.lower():
+                logger.warning(f"Meta API 500 error (may be transient): {re}")
+                return None
+            else:
+                logger.error(f"Meta API error creating ad: {re}")
+                return None
+        except Exception as e:
+            logger.error(f"Meta API create_ad failed: {e}", exc_info=True)
+            return None
+    except ValueError as ve:
+        logger.error(f"Validation error creating ad: {ve}")
+        return None
+    except RuntimeError as re:
+        error_str = str(re)
+        if "500" in error_str or "unknown error" in error_str.lower():
+            logger.warning(f"Meta API 500 error (may be transient): {re}")
+            return None
+        else:
+            logger.error(f"Meta API error creating ad: {re}")
+            return None
+    except Exception as e:
+        logger.error(f"Meta API create_ad failed: {e}", exc_info=True)
+        return None
+
+
+def _store_new_ad_data(
+    client: MetaClient,
+    supabase_client: Any,
+    ad_id: str,
+    meta_creative_id: str,
+    creative_data: Dict[str, Any],
+    ad_copy_dict: Dict[str, Any],
+    storage_creative_id: str,
+    adset_id: str,
+    campaign_id: Optional[str],
+) -> None:
+    """Store new ad data in Supabase including lifecycle, creative intelligence, and performance metrics."""
+    try:
+        from infrastructure.supabase_storage import SupabaseStorage
+        storage = SupabaseStorage(supabase_client)
+        lifecycle_id = _get_lifecycle_id(ad_id)
+        storage.record_ad_creation(ad_id, lifecycle_id, "asc_plus")
+        storage.store_historical_data(ad_id, lifecycle_id, "asc_plus", "spend", 0.0)
+        storage.store_historical_data(ad_id, lifecycle_id, "asc_plus", "impressions", 0.0)
+        storage.store_historical_data(ad_id, lifecycle_id, "asc_plus", "clicks", 0.0)
+        storage.store_historical_data(ad_id, lifecycle_id, "asc_plus", "purchases", 0.0)
+        logger.debug(f"✅ Recorded ad creation and initial historical data for {ad_id}")
+    except Exception as e:
+        logger.warning(f"Failed to record ad creation/historical data for ad {ad_id}: {e}")
+    
+    now_iso = datetime.now(timezone.utc).isoformat()
+    supabase_storage_url = creative_data.get("supabase_storage_url", "")
+    if supabase_storage_url:
+        storage_path = creative_data.get("storage_path", supabase_storage_url.split("/")[-1] if "/" in supabase_storage_url else f"{CREATIVE_PREFIX}{meta_creative_id}.jpg")
+    else:
+        storage_path = creative_data.get("storage_path", f"{CREATIVE_PREFIX}{meta_creative_id}.jpg")
+    
+    file_size_bytes = creative_data.get("file_size_bytes", 0)
+    if not file_size_bytes:
+        try:
+            image_path = creative_data.get("image_path")
+            if image_path and os.path.exists(image_path):
+                file_size_bytes = os.path.getsize(image_path)
+        except Exception:
+            pass
+    
+    creative_intel_data = {
+        "creative_id": str(meta_creative_id),
+        "ad_id": ad_id,
+        "status": "active",
+        "storage_url": supabase_storage_url or "",
+        "storage_path": storage_path,
+        "file_size_bytes": int(file_size_bytes) if file_size_bytes else 0,
+        "file_type": "image/jpeg",
+        "headline": ad_copy_dict.get("headline", ""),
+        "primary_text": ad_copy_dict.get("primary_text", ""),
+        "description": ad_copy_dict.get("description", ""),
+        "metadata": {
+            "ad_copy": creative_data.get("ad_copy"),
+            "flux_request_id": creative_data.get("flux_request_id"),
+            "storage_creative_id": storage_creative_id,
+            "scenario_description": creative_data.get("scenario_description"),
+        },
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    
+    if creative_data.get("image_prompt"):
+        # Truncate image_prompt to 2000 characters to match database constraint
+        image_prompt = creative_data.get("image_prompt", "")
+        creative_intel_data["image_prompt"] = image_prompt[:2000] if len(image_prompt) > 2000 else image_prompt
+    if creative_data.get("text_overlay"):
+        creative_intel_data["text_overlay_content"] = creative_data.get("text_overlay")
+    
+    try:
+        from infrastructure.data_validation import CreativeIntelligenceOptimizer
+        optimizer = CreativeIntelligenceOptimizer(supabase_client)
+        metrics = optimizer.calculate_performance_metrics(str(meta_creative_id), ad_id)
+        creative_intel_data['performance_score'] = metrics.get('performance_score', 0.0)
+        creative_intel_data['fatigue_index'] = metrics.get('fatigue_index', 0.0)
+    except ImportError:
+        logger.debug(f"CreativeIntelligenceOptimizer not available for ad {ad_id}")
+    except Exception as opt_error:
+        logger.warning(f"Failed to calculate performance metrics for ad {ad_id}, creative {meta_creative_id}: {opt_error}")
+    
+    try:
+        from infrastructure.data_validation import validate_supabase_data
+        validation = validate_supabase_data("ads", creative_intel_data, strict_mode=True)
+        if not validation.is_valid:
+            logger.warning("Validation failed for new ad %s: %s", ad_id, "; ".join(validation.errors))
+        else:
+            supabase_client.table("ads").upsert(
+                validation.sanitized_data if validation.sanitized_data else creative_intel_data,
+                on_conflict="ad_id"
+            ).execute()
+            logger.debug(f"✅ Successfully upserted new ad {ad_id} to Supabase")
+    except Exception as e:
+        logger.warning(f"Failed to upsert new ad {ad_id} to Supabase: {e}")
+    
+    try:
+        from infrastructure.data_validation import CreativeIntelligenceOptimizer
+        optimizer = CreativeIntelligenceOptimizer(supabase_client)
+        optimizer.update_creative_performance(str(meta_creative_id), ad_id)
+    except ImportError:
+        logger.debug(f"CreativeIntelligenceOptimizer not available for updating creative {meta_creative_id}")
+    except Exception as update_error:
+        logger.warning(f"Failed to update creative performance for ad {ad_id}, creative {meta_creative_id}: {update_error}")
+    
+    try:
+        final_campaign_id = campaign_id or ''
+        if not final_campaign_id:
+            try:
+                adset_info = client._graph_get_object(f"{adset_id}", params={"fields": "campaign_id"})
+                if adset_info:
+                    final_campaign_id = adset_info.get('campaign_id', '')
+            except Exception:
+                pass
+        
+        account_today = today_str()
+        initial_metrics = {
+            ad_id: {
+                "ad_id": ad_id,
+                "lifecycle_id": _get_lifecycle_id(ad_id),
+                "stage": "asc_plus",
+                "status": "active",
+                "spend": 0.0,
+                "impressions": 0,
+                "clicks": 0,
+                "purchases": 0,
+                "add_to_cart": 0,
+                "initiate_checkout": 0,
+                "ctr": None,
+                "cpc": None,
+                "cpm": None,
+                "roas": None,
+                "cpa": None,
+                "campaign_id": final_campaign_id,
+                "adset_id": adset_id,
+                "date_start": account_today,
+                "date_end": account_today,
+            }
+        }
+        _sync_performance_metrics_records(initial_metrics, "asc_plus", account_today, [ad_id])
+        logger.debug(f"✅ Stored initial performance data for new ad {ad_id}")
+    except Exception as e:
+        logger.warning(f"Failed to store initial performance data for ad {ad_id}: {e}")
+
+
 def _create_creative_and_ad(
     client: MetaClient,
     image_generator: ImageCreativeGenerator,
@@ -2051,56 +2671,34 @@ def _create_creative_and_ad(
     active_count: int,
     created_count: int,
     existing_creative_ids: set,
-    ml_system: Optional[Any] = None,
     campaign_id: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[str], bool]:
-    if not client or not adset_id or not creative_data:
-        logger.error("Invalid input: client, adset_id, and creative_data are required")
+    if not client:
+        logger.error("Invalid input: MetaClient is required")
+        return None, None, False
+    if not adset_id or not adset_id.strip():
+        logger.error("Invalid input: adset_id is required and cannot be empty")
+        return None, None, False
+    if not creative_data:
+        logger.error("Invalid input: creative_data is required")
         return None, None, False
     
     storage_creative_id = creative_data.get("storage_creative_id")
     if not storage_creative_id:
-        import hashlib
         image_path = creative_data.get("image_path")
         if image_path and os.path.exists(image_path):
             with open(image_path, "rb") as f:
                 image_hash = hashlib.md5(f.read()).hexdigest()
-            storage_creative_id = f"creative_{image_hash[:12]}"
+            storage_creative_id = f"{CREATIVE_PREFIX}{image_hash[:12]}"
         else:
-            import time
-            storage_creative_id = f"creative_{int(time.time())}"
+            storage_creative_id = f"{CREATIVE_PREFIX}{int(time.time())}"
     
     try:
-        ad_copy_dict = creative_data.get("ad_copy") or {}
-        if not isinstance(ad_copy_dict, dict):
-            ad_copy_dict = {}
-        
-        from datetime import datetime
-        now = datetime.now()
-        date_str = now.strftime("%d%m%y")
-        time_str = now.strftime("%H%M")
-        
+        ad_copy_dict = _get_ad_copy_dict(creative_data)
+        date_str = _get_current_date_str()
         headline = ad_copy_dict.get("headline", "")
-        primary_text = ad_copy_dict.get("primary_text", "")
-        
-        creative_id_short = storage_creative_id.replace("creative_", "")[:8] if storage_creative_id else "new"
-        
-        if headline:
-            headline_clean = headline.replace(":", "").replace("/", "").replace("\\", "").replace(",", "").strip()
-            headline_words = headline_clean.split()[:2]
-            headline_key = "_".join(word.lower()[:6] for word in headline_words if word)
-            if not headline_key:
-                headline_key = "creative"
-        else:
-            headline_key = "creative"
-        
-        if len(headline_key) > 15:
-            headline_key = headline_key[:15]
-        
-        creative_name = f"[ASC+] ASC+_{date_str}_{headline_key}_{creative_id_short}"
-        
-        if len(creative_name) > 80:
-            creative_name = f"[ASC+] ASC+_{date_str}_{headline_key[:10]}_{creative_id_short}"
+        creative_id_short = storage_creative_id.replace(CREATIVE_PREFIX, "")[:CREATIVE_ID_SHORT_LENGTH] if storage_creative_id else "new"
+        creative_name = _generate_creative_name(date_str, headline, creative_id_short)
         
         supabase_storage_url = creative_data.get("supabase_storage_url")
         image_path = creative_data.get("image_path")
@@ -2109,333 +2707,41 @@ def _create_creative_and_ad(
             logger.error("Creative data must have either supabase_storage_url or image_path")
             return None, None, False
         
-            ad_copy_dict = {}
-        
         page_id = os.getenv("FB_PAGE_ID")
         if not page_id:
             logger.error("FB_PAGE_ID environment variable is required")
             return None, None, False
         
-        env_instagram_actor_id = os.getenv("IG_ACTOR_ID")
-        instagram_actor_id = env_instagram_actor_id or client.get_instagram_actor_id(page_id)
-        
-        if instagram_actor_id:
-            try:
-                int(instagram_actor_id)
-            except (ValueError, TypeError):
-                logger.warning(
-                    f"Invalid Instagram actor ID format: {instagram_actor_id}. Will skip Instagram placements."
-                )
-                instagram_actor_id = None
-        
-        if not instagram_actor_id:
-            logger.debug(
-                "Instagram actor ID unavailable; creative will not run on Instagram placements unless the page is linked."
-            )
-        
-        logger.info(
-            "Creating Meta creative: name='%s', page_id='%s', instagram_actor_id=%s, has_supabase_url=%s, has_image_path=%s",
-            creative_name,
-            page_id,
-            bool(instagram_actor_id),
-            bool(supabase_storage_url),
-            bool(image_path),
+        meta_creative_id, resolved_instagram_actor_id = _create_meta_creative(
+            client, creative_data, storage_creative_id, creative_name, ad_copy_dict, page_id
         )
-        resolved_instagram_actor_id = instagram_actor_id
-        try:
-            primary_text = ad_copy_dict.get("primary_text", "")
-            if primary_text:
-                import re
-                primary_text = primary_text.replace("Brava Product", "").replace("—", ",").replace("–", ",").strip()
-                primary_text = re.sub(r'\s+', ' ', primary_text).strip()
-                if len(primary_text) > 150:
-                    primary_text = primary_text[:147] + "..."
-            
-            images_by_aspect = creative_data.get("images_by_aspect")
-            supabase_storage_urls = creative_data.get("supabase_storage_urls")
-            
-            creative = client.create_image_creative(
-                page_id=page_id,
-                name=creative_name,
-                supabase_storage_url=supabase_storage_url,
-                image_path=image_path if not supabase_storage_url else None,
-                images_by_aspect=images_by_aspect,
-                supabase_storage_urls=supabase_storage_urls,
-                primary_text=primary_text,
-                headline=ad_copy_dict.get("headline", ""),
-                description=ad_copy_dict.get("description", ""),
-                call_to_action="SHOP_NOW",
-                instagram_actor_id=instagram_actor_id,
-                creative_id=storage_creative_id,
-            )
-            logger.info(f"Meta API create_image_creative response: {creative}")
-        except Exception as e:
-            error_str = str(e)
-            if instagram_actor_id and "instagram_actor_id" in error_str.lower():
-                logger.warning(
-                    "Meta creative creation failed due to instagram_actor_id (%s). Retrying without Instagram placements.",
-                    error_str,
-                )
-                resolved_instagram_actor_id = None
-                try:
-                    creative = client.create_image_creative(
-                        page_id=page_id,
-                        name=creative_name,
-                        supabase_storage_url=supabase_storage_url,
-                        image_path=image_path if not supabase_storage_url else None,
-                        images_by_aspect=images_by_aspect,
-                        supabase_storage_urls=supabase_storage_urls,
-                        primary_text=primary_text,
-                        headline=ad_copy_dict.get("headline", ""),
-                        description=ad_copy_dict.get("description", ""),
-                        call_to_action="SHOP_NOW",
-                        instagram_actor_id=None,
-                        use_env_instagram_actor=False,
-                        creative_id=storage_creative_id,
-                    )
-                    logger.info(
-                        "Meta API create_image_creative succeeded without instagram_actor_id. Creative will run on Facebook placements only."
-                    )
-                except Exception as retry_exc:
-                    logger.error(
-                        "Meta API create_image_creative retry without instagram_actor_id failed: %s",
-                        retry_exc,
-                        exc_info=True,
-                    )
-                    return None, None, False
-            else:
-                logger.error(f"Meta API create_image_creative failed: {e}", exc_info=True)
-                return None, None, False
         
-        meta_creative_id = creative.get("id")
         if not meta_creative_id:
-            logger.error(f"Failed to get creative ID from Meta response. Response: {creative}")
             return None, None, False
         
         if str(meta_creative_id) in existing_creative_ids:
             logger.debug(f"Skipping duplicate creative: {meta_creative_id}")
             return str(meta_creative_id), None, False
         
-        headline = ad_copy_dict.get("headline", "")
-        primary_text = ad_copy_dict.get("primary_text", "")
-        
-        if headline:
-            headline_clean = headline.replace(":", "").replace("/", "").replace("\\", "").replace(",", "").strip()
-            headline_words = headline_clean.split()[:2]
-            headline_key = "_".join(word.lower()[:6] for word in headline_words if word)
-            if not headline_key:
-                headline_key = "ad"
-        else:
-            headline_key = "ad"
-        
-        if len(headline_key) > 12:
-            headline_key = headline_key[:12]
-        
         seq_num = active_count + created_count + 1
-        from datetime import datetime
-        date_str = datetime.now().strftime("%d%m%y")
+        ad_name = _generate_ad_name(date_str, headline, seq_num)
         
-        ad_name = f"[ASC+] ASC+_{date_str}_{headline_key}_{seq_num:02d}"
+        ad_id = _create_meta_ad(client, adset_id, str(meta_creative_id), ad_name, resolved_instagram_actor_id)
         
-        if len(ad_name) > 100:
-            ad_name = f"[ASC+] ASC+_{date_str}_{headline_key[:8]}_{seq_num:02d}"
+        if not ad_id:
+            return str(meta_creative_id), None, False
         
-        logger.info(
-            "Creating ad with name='%s', adset_id='%s', creative_id='%s', instagram_actor_id=%s",
-            ad_name,
-            adset_id,
-            meta_creative_id,
-            bool(resolved_instagram_actor_id),
-        )
-        try:
-            creative_id_str = str(meta_creative_id).strip()
-            if not creative_id_str or not creative_id_str.isdigit():
-                logger.error(f"Invalid creative_id format: {meta_creative_id} (expected numeric string)")
-                return None, None, False
-            
-            ad = client.create_ad(
-                adset_id=adset_id,
-                name=ad_name,
-                creative_id=creative_id_str,
-                status="ACTIVE",
-                instagram_actor_id=resolved_instagram_actor_id,
-                use_env_instagram_actor=bool(resolved_instagram_actor_id),
-                tracking_specs=None,
+        logger.info(f"Successfully created ad with ad_id={ad_id}")
+        existing_creative_ids.add(str(meta_creative_id))
+        
+        supabase_client = _get_supabase_client()
+        if supabase_client:
+            _store_new_ad_data(
+                client, supabase_client, ad_id, str(meta_creative_id),
+                creative_data, ad_copy_dict, storage_creative_id, adset_id, campaign_id
             )
-            logger.info(f"Meta API create_ad response: {ad}")
-        except ValueError as ve:
-            logger.error(f"Validation error creating ad: {ve}")
-            return None, None, False
-        except RuntimeError as re:
-            error_str = str(re)
-            if "500" in error_str or "unknown error" in error_str.lower():
-                logger.warning(f"Meta API 500 error (may be transient): {re}")
-                return None, None, False
-            else:
-                logger.error(f"Meta API error creating ad: {re}")
-                return None, None, False
-        except Exception as e:
-            logger.error(f"Meta API create_ad failed: {e}", exc_info=True)
-            return str(meta_creative_id), None, False
         
-        ad_id = ad.get("id")
-        if ad_id:
-            logger.info(f"Successfully created ad with ad_id={ad_id}")
-            existing_creative_ids.add(str(meta_creative_id))
-            
-            try:
-                from infrastructure.supabase_storage import get_validated_supabase_client, SupabaseStorage
-                supabase_client = get_validated_supabase_client()
-                if supabase_client:
-                    try:
-                        storage = SupabaseStorage(supabase_client)
-                        lifecycle_id = f"lifecycle_{ad_id}"
-                        storage.record_ad_creation(ad_id, lifecycle_id, "asc_plus")
-                        logger.debug(f"✅ Recorded ad creation time for {ad_id}")
-                    except Exception as e:
-                        logger.debug(f"Failed to record ad creation time: {e}")
-                    
-                    try:
-                        storage = SupabaseStorage(supabase_client)
-                        lifecycle_id = f"lifecycle_{ad_id}"
-                        storage.store_historical_data(ad_id, lifecycle_id, "asc_plus", "spend", 0.0)
-                        storage.store_historical_data(ad_id, lifecycle_id, "asc_plus", "impressions", 0.0)
-                        storage.store_historical_data(ad_id, lifecycle_id, "asc_plus", "clicks", 0.0)
-                        storage.store_historical_data(ad_id, lifecycle_id, "asc_plus", "purchases", 0.0)
-                        logger.debug(f"✅ Stored initial historical data for {ad_id}")
-                    except Exception as e:
-                        logger.debug(f"Failed to store initial historical data: {e}")
-                    ad_copy_dict = creative_data.get("ad_copy") or {}
-                    if not isinstance(ad_copy_dict, dict):
-                        ad_copy_dict = {}
-                    
-                    now_iso = datetime.now(timezone.utc).isoformat()
-                    supabase_storage_url = creative_data.get("supabase_storage_url", "")
-                    if supabase_storage_url:
-                        storage_path = creative_data.get("storage_path", supabase_storage_url.split("/")[-1] if "/" in supabase_storage_url else f"creative_{meta_creative_id}.jpg")
-                    else:
-                        storage_path = creative_data.get("storage_path", f"creative_{meta_creative_id}.jpg")
-                    file_size_bytes = creative_data.get("file_size_bytes", 0)
-                    if not file_size_bytes:
-                        try:
-                            image_path = creative_data.get("image_path")
-                            if image_path and os.path.exists(image_path):
-                                file_size_bytes = os.path.getsize(image_path)
-                        except Exception:
-                            pass
-                    
-                    creative_intel_data = {
-                        "creative_id": str(meta_creative_id),
-                        "ad_id": ad_id,
-                        "status": "active",
-                        "storage_url": supabase_storage_url or "",
-                        "storage_path": storage_path,
-                        "file_size_bytes": int(file_size_bytes) if file_size_bytes else 0,
-                        "file_type": "image/jpeg",
-                        "headline": ad_copy_dict.get("headline", ""),
-                        "primary_text": ad_copy_dict.get("primary_text", ""),
-                        "description": ad_copy_dict.get("description", ""),
-                        "metadata": {
-                            "ad_copy": creative_data.get("ad_copy"),
-                            "flux_request_id": creative_data.get("flux_request_id"),
-                            "storage_creative_id": storage_creative_id,
-                            "scenario_description": creative_data.get("scenario_description"),
-                        },
-                        "created_at": now_iso,
-                        "updated_at": now_iso,
-                    }
-                    if creative_data.get("image_prompt"):
-                        creative_intel_data["image_prompt"] = creative_data.get("image_prompt")
-                    if creative_data.get("text_overlay"):
-                        creative_intel_data["text_overlay_content"] = creative_data.get("text_overlay")
-                    
-                    try:
-                        from infrastructure.data_validation import CreativeIntelligenceOptimizer
-                        optimizer = CreativeIntelligenceOptimizer(supabase_client)
-                        metrics = optimizer.calculate_performance_metrics(
-                            str(meta_creative_id),
-                            ad_id,
-                        )
-                        creative_intel_data['performance_score'] = metrics.get('performance_score', 0.0)
-                        creative_intel_data['fatigue_index'] = metrics.get('fatigue_index', 0.0)
-                    except ImportError:
-                        pass
-                    except Exception as opt_error:
-                        logger.debug(f"Failed to calculate metrics: {opt_error}")
-                    
-                    try:
-                        from infrastructure.data_validation import validate_supabase_data
-                        validation = validate_supabase_data("ads", creative_intel_data, strict_mode=True)
-                        if not validation.is_valid:
-                            logger.warning(
-                                "Validation failed for new ad %s: %s",
-                                ad_id,
-                                "; ".join(validation.errors),
-                            )
-                        else:
-                            supabase_client.table("ads").upsert(
-                                validation.sanitized_data if validation.sanitized_data else creative_intel_data,
-                                on_conflict="ad_id"
-                            ).execute()
-                            logger.debug(f"✅ Successfully upserted new ad {ad_id} to Supabase")
-                    except Exception as e:
-                        logger.warning(f"Failed to upsert new ad {ad_id} to Supabase: {e}")
-                    
-                    try:
-                        from infrastructure.data_validation import CreativeIntelligenceOptimizer
-                        optimizer = CreativeIntelligenceOptimizer(supabase_client)
-                        optimizer.update_creative_performance(str(meta_creative_id), ad_id)
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.warning(f"Failed to update ads table with storage URL: {e}")
-            
-            try:
-                from infrastructure.supabase_storage import get_validated_supabase_client
-                supabase_client = get_validated_supabase_client()
-                if supabase_client:
-                    final_campaign_id = campaign_id or ''
-                    if not final_campaign_id:
-                        try:
-                            adset_info = client._graph_get_object(f"{adset_id}", params={"fields": "campaign_id"})
-                            if adset_info:
-                                final_campaign_id = adset_info.get('campaign_id', '')
-                        except Exception:
-                            pass
-                    
-                    initial_ad_data = {
-                        'ad_id': ad_id,
-                        'creative_id': str(meta_creative_id),
-                        'campaign_id': final_campaign_id,
-                        'adset_id': adset_id,
-                        'lifecycle_id': f'lifecycle_{ad_id}',
-                        'spend': 0.0,
-                        'impressions': 0,
-                        'clicks': 0,
-                        'purchases': 0,
-                        'atc': 0,
-                        'ic': 0,
-                        'ctr': 0.0,
-                        'cpc': 0.0,
-                        'cpm': 0.0,
-                        'roas': 0.0,
-                        'cpa': None,
-                        'status': 'active',
-                    }
-                    import sys
-                    src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                    if src_dir not in sys.path:
-                        sys.path.insert(0, src_dir)
-                    from main import store_performance_data_in_supabase
-                    store_performance_data_in_supabase(supabase_client, initial_ad_data, "asc_plus", None)
-                    logger.debug(f"✅ Stored initial performance data for new ad {ad_id}")
-            except Exception as e:
-                logger.debug(f"Failed to store initial performance data (non-critical): {e}")
-            
-            return str(meta_creative_id), ad_id, True
-        else:
-            logger.warning(f"Failed to get ad ID from Meta response")
-            return str(meta_creative_id), None, False
+        return str(meta_creative_id), ad_id, True
             
     except Exception as e:
         logger.error(f"Error creating creative and ad: {e}", exc_info=True)
@@ -2571,13 +2877,193 @@ def generate_new_creative(
         return None
 
 
+def _collect_metrics(
+    client: MetaClient,
+    adset_id: str,
+    campaign_id: str,
+    ads_list: List[Dict[str, Any]],
+    account_today: str,
+    creation_times: Dict[str, datetime],
+    now_utc: datetime,
+) -> Dict[str, Dict[str, Any]]:
+    """Collect recent ad insights and build metrics map for all ads with retry logic."""
+    try:
+        from infrastructure.error_handling import retry_with_backoff
+        
+        @retry_with_backoff(max_retries=3, initial_delay=1.0, max_delay=10.0)
+        def _fetch_insights():
+            return client.get_recent_ad_insights(adset_id=adset_id, campaign_id=campaign_id)
+        
+        insight_rows = _fetch_insights()
+    except ImportError:
+        logger.debug("retry_with_backoff not available, using direct call")
+        insight_rows = client.get_recent_ad_insights(adset_id=adset_id, campaign_id=campaign_id)
+    except Exception as e:
+        logger.warning(f"Failed to fetch recent ad insights with retries: {e}")
+        insight_rows = client.get_recent_ad_insights(adset_id=adset_id, campaign_id=campaign_id)
+    
+    def _process_insight_row(row: Dict[str, Any]) -> Optional[Tuple[str, AdMetricsDict]]:
+        """Process a single insight row and return (ad_id, metrics) tuple or None."""
+        ad_id = row.get("ad_id")
+        if not ad_id:
+            return None
+        metrics = _build_ad_metrics(
+            row,
+            "asc_plus",
+            account_today,
+            creation_time=creation_times.get(str(ad_id)) if creation_times else None,
+            now_ts=now_utc,
+        )
+        return (ad_id, metrics)
+    
+    # Use generator for processing large insight datasets
+    metrics_items = (_process_insight_row(row) for row in insight_rows)
+    metrics_map: Dict[str, AdMetricsDict] = {
+        ad_id: metrics for ad_id, metrics in metrics_items if ad_id and metrics
+    }
+    return metrics_map
+
+
+def _evaluate_and_kill_ads(
+    client: MetaClient,
+    active_ads: List[Dict[str, Any]],
+    metrics_map: Dict[str, Dict[str, Any]],
+    lifetime_metrics_map: Dict[str, Dict[str, Any]],
+    rules: Dict[str, Any],
+    rule_engine: Any,
+    creation_times: Dict[str, datetime],
+    account_today: str,
+    now_utc: datetime,
+) -> Tuple[List[Tuple[str, str]], Set[str]]:
+    """Evaluate kill rules and pause underperforming ads.
+    
+    Returns:
+        Tuple of (killed_ads list, killed_ids set).
+    """
+    killed_ads: List[Tuple[str, str]] = []
+    killed_ids = set()
+    
+    for ad in active_ads:
+        ad_id = ad.get("id")
+        if not ad_id:
+            continue
+        ad_id_str = str(ad_id)
+        metrics = lifetime_metrics_map.get(ad_id_str) or metrics_map.get(ad_id_str) or _build_ad_metrics(
+            {"ad_id": ad_id_str, "spend": 0, "impressions": 0, "clicks": 0},
+            "asc_plus",
+            account_today,
+            creation_time=creation_times.get(ad_id_str) if creation_times else None,
+            now_ts=now_utc,
+        )
+        kill, kill_reason = _guardrail_kill(metrics, rules, rule_engine)
+        if kill:
+            if _pause_ad(client, ad_id, kill_reason):
+                killed_ads.append((ad_id, kill_reason))
+                killed_ids.add(ad_id)
+                _record_lifecycle_event(ad_id, STATUS_PAUSED, kill_reason)
+    
+    return killed_ads, killed_ids
+
+
+def _enforce_caps(
+    client: MetaClient,
+    campaign_id: str,
+    adset_id: str,
+    active_ads: List[Dict[str, Any]],
+    hydrated_active_ads: List[Dict[str, Any]],
+    metrics_map: Dict[str, AdMetricsDict],
+    killed_ids: Set[str],
+    max_active: int,
+    creation_times: Dict[str, datetime],
+) -> Tuple[int, List[Dict[str, Any]], int, List[Tuple[str, str]]]:
+    """Enforce hard cap on active ads by pausing lowest performers.
+    
+    Returns:
+        Tuple of (active_count, hydrated_active_ads, hydrated_active_count, forced_kills).
+    """
+    allowed_statuses = {STATUS_ACTIVE, STATUS_ELIGIBLE}
+    
+    def get_active_count_internal() -> int:
+        try:
+            return client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
+        except Exception:
+            return len([ad for ad in active_ads if str(ad.get("effective_status") or ad.get("status", "")).upper() in allowed_statuses])
+    
+    current_active_count = get_active_count_internal()
+    
+    excess = max(0, current_active_count - max_active)
+    trimmed: List[Tuple[str, str]] = []
+    
+    if excess > 0:
+        cap_pool = hydrated_active_ads if hydrated_active_ads else active_ads
+        cap_candidates = _select_ads_for_cap(cap_pool, metrics_map, list(killed_ids), excess * 2)
+        for _, candidate_ad_id, candidate_metrics in cap_candidates:
+            if len(trimmed) >= excess:
+                break
+            if candidate_ad_id in killed_ids:
+                continue
+            reason = f"Capped to maintain {max_active} live ads (score {_ad_health_score(candidate_metrics):.2f})"
+            if _pause_ad(client, candidate_ad_id, reason):
+                trimmed.append((candidate_ad_id, reason))
+                killed_ids.add(candidate_ad_id)
+                current_active_count = max(0, current_active_count - 1)
+                if candidate_metrics.get("hydrated", True):
+                    hydrated_active_count = max(0, len(hydrated_active_ads) - 1)
+                _record_lifecycle_event(candidate_ad_id, STATUS_PAUSED, reason)
+        
+        if trimmed:
+            trimmed_ids = {ad_id for ad_id, _ in trimmed}
+            hydrated_active_ads = [ad for ad in hydrated_active_ads if str(ad.get("id")) not in trimmed_ids]
+        
+        current_active_count = get_active_count_internal()
+    
+    active_count, hydrated_active_ads, hydrated_active_count, forced_kills, killed_ids = _enforce_hard_cap(
+        client, campaign_id, adset_id, metrics_map, creation_times or {},
+        max_active, killed_ids, allowed_statuses,
+    )
+    
+    if forced_kills:
+        trimmed.extend(forced_kills)
+    
+    hydrated_active_count = len(hydrated_active_ads)
+    
+    return active_count, hydrated_active_ads, hydrated_active_count, trimmed
+
+
+def _build_result(
+    result: ASCPlusResultDict,
+    active_count: int,
+    hydrated_active_count: int,
+    killed_ads: List[Tuple[str, str]],
+    created_records: List[Dict[str, Any]],
+    metrics_map: Dict[str, AdMetricsDict],
+    effective_target: int,
+    max_active: int,
+    health_status: str,
+    health_message: str,
+    health_summary: str,
+) -> ASCPlusResultDict:
+    """Build final result dictionary with all tick results."""
+    result["active_count"] = active_count
+    result["caps_enforced"] = bool(active_count == result["target_count"])
+    result["kills"] = killed_ads
+    result["created_ads"] = [record["ad_id"] for record in created_records if record.get("ad_id")]
+    result["created_details"] = created_records
+    result["ad_metrics"] = metrics_map
+    result["health"] = health_status
+    result["health_message"] = health_message
+    result["health_summary"] = health_summary
+    result["hydrated_active_count"] = hydrated_active_count
+    result["ok"] = True
+    return result
+
+
 def run_asc_plus_tick(
     client: MetaClient,
     settings: Dict[str, Any],
     rules: Dict[str, Any],
     store: Any,
-    ml_system: Optional[Any] = None,
-) -> Dict[str, Any]:
+) -> ASCPlusResultDict:
     validate_asc_plus_config(settings)
     from rules.rules import AdvancedRuleEngine as RuleEngine
     rule_engine = RuleEngine(rules, store)
@@ -2585,7 +3071,7 @@ def run_asc_plus_tick(
     target_count = cfg(settings, "asc_plus.target_active_ads") or 10
     max_active = cfg(settings, "asc_plus.max_active_ads") or target_count
 
-    result: Dict[str, Any] = {
+    result: ASCPlusResultDict = {
         "ok": False,
         "campaign_id": None,
         "adset_id": None,
@@ -2617,31 +3103,21 @@ def run_asc_plus_tick(
     result["adset_id"] = adset_id
 
     ads_list = client.list_ads_in_adset(adset_id)
-
-    insight_rows = client.get_recent_ad_insights(adset_id=adset_id, campaign_id=campaign_id)
     account_today = timekit.today_ymd_account()
-    metrics_map: Dict[str, Dict[str, Any]] = {}
     now_utc = datetime.now(timezone.utc)
     creation_times = _sync_ad_creation_records(client, ads_list, stage="asc_plus")
-    for row in insight_rows:
-        ad_id = row.get("ad_id")
-        if not ad_id:
-            continue
-        metrics_map[ad_id] = _build_ad_metrics(
-            row,
-            "asc_plus",
-            account_today,
-            creation_time=creation_times.get(str(ad_id)) if creation_times else None,
-            now_ts=now_utc,
-        )
-
+    
+    metrics_map = _collect_metrics(client, adset_id, campaign_id, ads_list, account_today, creation_times, now_utc)
     totals = _summarize_metrics(metrics_map)
 
-    try:
-        active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
-    except Exception as exc:
-        _asc_log(logging.WARNING, "Active ad consensus failed: %s", exc)
-        active_count = 0
+    def get_active_count() -> int:
+        try:
+            return client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
+        except Exception as exc:
+            _asc_log(logging.WARNING, "Active ad consensus failed: %s", exc)
+            return len([ad for ad in ads_list if str(ad.get("effective_status") or ad.get("status", "")).upper() in {STATUS_ACTIVE, STATUS_ELIGIBLE}])
+    
+    active_count = get_active_count()
     result["active_count"] = active_count
 
     _sync_ad_creation_records(client, ads_list)
@@ -2654,7 +3130,7 @@ def run_asc_plus_tick(
         adset_id=adset_id,
         rules=rules,
     )
-    allowed_statuses = {"ACTIVE", "ELIGIBLE"}
+    allowed_statuses = {STATUS_ACTIVE, STATUS_ELIGIBLE}
     active_ad_ids = [
         str(ad.get("id"))
         for ad in ads_list
@@ -2671,6 +3147,7 @@ def run_asc_plus_tick(
         ads_list,
         metrics_map,
         stage="asc_plus",
+        settings=settings,
     )
     _sync_creative_performance_records(
         ads_list,
@@ -2687,146 +3164,102 @@ def run_asc_plus_tick(
         metrics_map,
         stage="asc_plus",
     )
-    allowed_statuses = {"ACTIVE", "ELIGIBLE"}
+    allowed_statuses = {STATUS_ACTIVE, STATUS_ELIGIBLE}
     active_ads = [
-        ad
-        for ad in ads_list
+        ad for ad in ads_list
         if str(ad.get("effective_status") or ad.get("status", "")).upper() in allowed_statuses
     ]
-
-    hydrated_active_ads = []
-    for ad in active_ads:
-        ad_id = str(ad.get("id") or "")
-        if not ad_id:
-            continue
-        metrics = metrics_map.get(ad_id)
-        if metrics and metrics.get("hydrated", True):
-            hydrated_active_ads.append(ad)
+    
+    hydrated_active_ads = [
+        ad for ad in active_ads
+        if metrics_map.get(str(ad.get("id") or ""), {}).get("hydrated", True)
+    ]
     hydrated_active_count = len(hydrated_active_ads)
-    result["hydrated_active_count"] = hydrated_active_count
-
-    killed_ads: List[Tuple[str, str]] = []
-    killed_ids = set()
     
-    lifetime_metrics_map: Dict[str, Dict[str, Any]] = {}
+    lifetime_metrics_map: Dict[str, AdMetricsDict] = {}
     try:
-        lifetime_rows = client.get_ad_insights(
-            level="ad",
-            date_preset="maximum",
-            filtering=[{"field": "adset.id", "operator": "EQUAL", "value": adset_id}],
-            fields=["ad_id", "spend", "impressions", "clicks", "inline_link_clicks", "actions"],
-            limit=500,
-        ) or []
-        for row in lifetime_rows:
-            ad_id = row.get("ad_id")
-            if ad_id:
-                lifetime_metrics_map[str(ad_id)] = _build_ad_metrics(
-                    row,
-                    "asc_plus",
-                    account_today,
-                    creation_time=creation_times.get(str(ad_id)) if creation_times else None,
-                    now_ts=now_utc,
-                )
-    except Exception as exc:
-        _asc_log(logging.WARNING, "Failed to fetch lifetime metrics for kill evaluation: %s", exc)
-    
-    for ad in active_ads:
-        ad_id = ad.get("id")
-        if not ad_id:
-            continue
-        ad_id_str = str(ad_id)
-        metrics = lifetime_metrics_map.get(ad_id_str) or metrics_map.get(ad_id_str) or _build_ad_metrics(
-            {"ad_id": ad_id_str, "spend": 0, "impressions": 0, "clicks": 0},
-            "asc_plus",
-            account_today,
-            creation_time=creation_times.get(ad_id_str) if creation_times else None,
-            now_ts=now_utc,
-        )
-        kill, kill_reason = _guardrail_kill(metrics, rules, rule_engine)
-        if kill:
-            if _pause_ad(client, ad_id, kill_reason):
-                killed_ads.append((ad_id, kill_reason))
-                killed_ids.add(ad_id)
-                active_count = max(0, active_count - 1)
-                if metrics.get("hydrated", True):
-                    hydrated_active_count = max(0, hydrated_active_count - 1)
-                _record_lifecycle_event(ad_id, "PAUSED", kill_reason)
-            continue
-
-    try:
-        active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
-    except Exception:
-        pass
-    if killed_ids:
-        hydrated_active_ads = [
-            ad for ad in hydrated_active_ads if str(ad.get("id")) not in killed_ids
-        ]
-        hydrated_active_count = len(hydrated_active_ads)
-
-    planning_active_count = active_count
-
-    excess = max(0, planning_active_count - max_active)
-    if excess > 0:
-        cap_pool = hydrated_active_ads if hydrated_active_ads else active_ads
-        cap_candidates = _select_ads_for_cap(cap_pool, metrics_map, list(killed_ids), excess * 2)
-        trimmed: List[Tuple[str, str]] = []
-        for _, candidate_ad_id, candidate_metrics in cap_candidates:
-            if len(trimmed) >= excess:
-                break
-            if candidate_ad_id in killed_ids:
-                continue
-            reason = f"Capped to maintain {max_active} live ads (score { _ad_health_score(candidate_metrics):.2f})"
-            if _pause_ad(client, candidate_ad_id, reason):
-                trimmed.append((candidate_ad_id, reason))
-                killed_ids.add(candidate_ad_id)
-                active_count = max(0, active_count - 1)
-                planning_active_count = max(0, planning_active_count - 1)
-                if candidate_metrics.get("hydrated", True):
-                    hydrated_active_count = max(0, hydrated_active_count - 1)
-                _record_lifecycle_event(candidate_ad_id, "PAUSED", reason)
-        if trimmed:
-            killed_ads.extend(trimmed)
-            trimmed_ids = {ad_id for ad_id, _ in trimmed}
-            hydrated_active_ads = [
-                ad for ad in hydrated_active_ads if str(ad.get("id")) not in trimmed_ids
-            ]
-            hydrated_active_count = len(hydrated_active_ads)
+        from infrastructure.error_handling import retry_with_backoff
+        
+        @retry_with_backoff(max_retries=3, initial_delay=1.0, max_delay=10.0)
+        def _fetch_lifetime_insights():
+            return client.get_ad_insights(
+                level="ad",
+                date_preset="maximum",
+                filtering=[{"field": "adset.id", "operator": "EQUAL", "value": adset_id}],
+                fields=["ad_id", "spend", "impressions", "clicks", "inline_link_clicks", "actions"],
+                limit=INSIGHTS_LIMIT,
+            ) or []
+        
+        lifetime_rows = _fetch_lifetime_insights()
+    except ImportError:
+        logger.debug("retry_with_backoff not available, using direct call")
         try:
-            active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
-        except Exception:
-            pass
-        planning_active_count = active_count
-
-    (
-        active_count,
-        hydrated_active_ads,
-        hydrated_active_count,
-        forced_kills,
-        killed_ids,
-    ) = _enforce_hard_cap(
-        client,
-        campaign_id,
-        adset_id,
-        metrics_map,
-        creation_times or {},
-        max_active,
-        killed_ids,
-        allowed_statuses,
+            lifetime_rows = client.get_ad_insights(
+                level="ad",
+                date_preset="maximum",
+                filtering=[{"field": "adset.id", "operator": "EQUAL", "value": adset_id}],
+                fields=["ad_id", "spend", "impressions", "clicks", "inline_link_clicks", "actions"],
+                limit=INSIGHTS_LIMIT,
+            ) or []
+        except Exception as exc:
+            _asc_log(logging.WARNING, "Failed to fetch lifetime metrics for kill evaluation: %s", exc)
+            lifetime_rows = []
+    except Exception as exc:
+        _asc_log(logging.WARNING, "Failed to fetch lifetime metrics for kill evaluation with retries: %s", exc)
+        try:
+            lifetime_rows = client.get_ad_insights(
+                level="ad",
+                date_preset="maximum",
+                filtering=[{"field": "adset.id", "operator": "EQUAL", "value": adset_id}],
+                fields=["ad_id", "spend", "impressions", "clicks", "inline_link_clicks", "actions"],
+                limit=INSIGHTS_LIMIT,
+            ) or []
+        except Exception as exc2:
+            _asc_log(logging.WARNING, "Failed to fetch lifetime metrics (fallback): %s", exc2)
+            lifetime_rows = []
+    
+    # Use generator for processing large lifetime metrics datasets
+    lifetime_metrics_items = (
+        (str(row.get("ad_id")), _build_ad_metrics(
+            row, "asc_plus", account_today,
+            creation_time=creation_times.get(str(row.get("ad_id"))) if creation_times else None,
+            now_ts=now_utc,
+        ))
+        for row in lifetime_rows
+        if row.get("ad_id")
     )
-    if forced_kills:
-        killed_ads.extend(forced_kills)
-    planning_active_count = min(active_count, max_active)
+    lifetime_metrics_map = {
+        ad_id: metrics for ad_id, metrics in lifetime_metrics_items if ad_id
+    }
+    
+    killed_ads, killed_ids = _evaluate_and_kill_ads(
+        client, active_ads, metrics_map, lifetime_metrics_map, rules, rule_engine,
+        creation_times, account_today, now_utc
+    )
+    
+    active_count = get_active_count()
+    if killed_ids:
+        hydrated_active_ads = [ad for ad in hydrated_active_ads if str(ad.get("id")) not in killed_ids]
+        hydrated_active_count = len(hydrated_active_ads)
+    
+    active_count, hydrated_active_ads, hydrated_active_count, trimmed = _enforce_caps(
+        client, campaign_id, adset_id, active_ads, hydrated_active_ads,
+        metrics_map, killed_ids, max_active, creation_times
+    )
+    
+    if trimmed:
+        killed_ads.extend(trimmed)
+        killed_ids.update(ad_id for ad_id, _ in trimmed)
+    
+    current_active_count = min(active_count, max_active)
 
     effective_target = min(target_count, max_active)
     available_slots = max(0, max_active - min(active_count, max_active))
-    desired_slots = max(0, effective_target - planning_active_count)
+    desired_slots = max(0, effective_target - current_active_count)
     deficit = min(desired_slots, available_slots)
-    created_records = _generate_creatives_for_deficit(deficit, client, settings, campaign_id, adset_id, None, active_count)
+    created_records = _generate_creatives_for_deficit(deficit, client, settings, campaign_id, adset_id, active_count)
     if created_records:
-        try:
-            active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
-        except Exception:
-            active_count += len(created_records)
+        active_count = get_active_count()
         for record in created_records:
             new_ad_id = record.get("ad_id")
             if not new_ad_id:

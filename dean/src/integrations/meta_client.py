@@ -2174,20 +2174,47 @@ class MetaClient:
         self._cooldown()
 
         try:
-            with open(image_path, "rb") as f:
-                image_data = f.read()
-
             def _upload():
-                return AdAccount(self.ad_account_id_act).create_ad_image(
-                    files={"file": image_data},
-                    params={"name": _s(name)}
-                )
+                # Use direct HTTP upload (same approach as create_image_creative)
+                # The SDK's create_ad_image() doesn't accept files parameter
+                api_version = getattr(self.account, 'api_version', 'v23.0') if hasattr(self, 'account') else 'v23.0'
+                api_version = api_version.replace('v', '') if api_version.startswith('v') else api_version
+                upload_url = f"https://graph.facebook.com/v{api_version}/act_{self.ad_account_id_act.replace('act_', '')}/adimages"
+                
+                access_token = getattr(self.account, 'access_token', None) if hasattr(self, 'account') else None
+                if not access_token:
+                    access_token = os.getenv("FB_ACCESS_TOKEN") or os.getenv("FACEBOOK_ACCESS_TOKEN")
+                if not access_token:
+                    raise RuntimeError("No access token available for image upload")
+                
+                upload_data = {"access_token": access_token}
+                if name:
+                    upload_data["name"] = _s(name)
+                
+                with open(image_path, "rb") as f:
+                    files = {"source": f}
+                    upload_response = requests.post(upload_url, files=files, data=upload_data, timeout=30)
+                
+                if upload_response.status_code != 200:
+                    error_data = upload_response.json() if upload_response.text else {}
+                    error_msg = error_data.get("error", {}).get("message", "Unknown error")
+                    raise RuntimeError(f"Meta image upload failed: {error_msg}")
+                
+                result = upload_response.json()
+                images = result.get("images", {})
+                if images:
+                    image_hash = list(images.keys())[0]
+                    hash_data = images[image_hash]
+                    actual_hash = hash_data.get("hash", image_hash)
+                    return {"hash": actual_hash, "id": actual_hash}
+                else:
+                    raise ValueError(f"No image hash in upload response: {result}")
             
             result = self._retry("upload_image", _upload)
-            return dict(result) if hasattr(result, "__dict__") else result
+            return result if isinstance(result, dict) else dict(result) if hasattr(result, "__dict__") else result
             
         except Exception as e:
-            notify(f"❌ Failed to upload image: {e}")
+            logger.warning(f"Failed to upload image: {e}")
             raise
 
     def create_ad(
