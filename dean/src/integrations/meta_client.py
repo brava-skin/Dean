@@ -2085,7 +2085,14 @@ class MetaClient:
         if image_hashes:
             image_data["image_hash"] = image_hashes[0]
             if len(image_hashes) > 1:
-                image_data["child_attachments"] = [{"image_hash": h} for h in image_hashes[1:]]
+                # Meta requires each child_attachment to have its own CTA link
+                final_link_for_cta = _s(final_link) if final_link else os.getenv("SHOPIFY_STORE_URL", "https://brava-skin.com")
+                image_data["child_attachments"] = [
+                    {
+                        "image_hash": h,
+                        "call_to_action": {"type": _s(call_to_action or "SHOP_NOW"), "value": {"link": final_link_for_cta}}
+                    } for h in image_hashes[1:]
+                ]
         elif final_image_url.startswith("http"):
             try:
                 import requests
