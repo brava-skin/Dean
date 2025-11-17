@@ -1710,6 +1710,51 @@ def _sync_creative_performance_records(
         _CREATIVE_PERFORMANCE_STAGE_DISABLED = False
 
 
+def _is_within_time_window(rules: Optional[Dict[str, Any]] = None) -> Tuple[bool, Optional[str]]:
+    """Check if current time is within the configured time window.
+    
+    Args:
+        rules: Rules dictionary containing kill_window configuration.
+    
+    Returns:
+        Tuple of (is_within_window, reason). If outside window, reason explains why.
+    """
+    if not rules:
+        return True, None  # No rules = allow (fail open)
+    
+    asc_rules = rules.get("asc_plus_atc", {})
+    engine_rules = asc_rules.get("engine", {})
+    kill_window = engine_rules.get("kill_window", {})
+    
+    if not kill_window.get("enabled", False):
+        return True, None  # Window not enabled = allow
+    
+    try:
+        now_amsterdam = datetime.now(LOCAL_TZ)
+        current_hour = now_amsterdam.hour
+        start_hour = int(kill_window.get("start_hour", 6))
+        end_hour = int(kill_window.get("end_hour", 12))
+        
+        # Check if current hour is within the kill window
+        is_within_window = False
+        if start_hour <= end_hour:
+            # Normal window (e.g., 6:00-12:00)
+            is_within_window = (start_hour <= current_hour < end_hour)
+        else:
+            # Wrapping window (e.g., 22:00-06:00, crosses midnight)
+            is_within_window = (current_hour >= start_hour or current_hour < end_hour)
+        
+        if not is_within_window:
+            reason = f"outside time window (current: {current_hour:02d}:00, window: {start_hour:02d}:00-{end_hour:02d}:00 Amsterdam)"
+            return False, reason
+        
+        return True, None
+    except Exception as exc:
+        _asc_log(logging.WARNING, "Failed to check time window: %s", exc)
+        # If time check fails, allow (fail open for safety)
+        return True, None
+
+
 def _guardrail_kill(metrics: Dict[str, Any], rules: Optional[Dict[str, Any]] = None, rule_engine: Optional[Any] = None) -> Tuple[bool, str]:
     """Evaluate kill rules with strong protections for good-performing creatives.
     
@@ -1751,30 +1796,10 @@ def _guardrail_kill(metrics: Dict[str, Any], rules: Optional[Dict[str, Any]] = N
     derived_runtime_hours = max(derived_age_days * 24.0, hours_live)
     
     # TIME WINDOW PROTECTION: Only allow kills during specified time window
-    if kill_window.get("enabled", False):
-        try:
-            now_amsterdam = datetime.now(LOCAL_TZ)
-            current_hour = now_amsterdam.hour
-            start_hour = int(kill_window.get("start_hour", 6))
-            end_hour = int(kill_window.get("end_hour", 12))
-            
-            # Check if current hour is within the kill window
-            is_within_window = False
-            if start_hour <= end_hour:
-                # Normal window (e.g., 6:00-12:00)
-                is_within_window = (start_hour <= current_hour < end_hour)
-            else:
-                # Wrapping window (e.g., 22:00-06:00, crosses midnight)
-                is_within_window = (current_hour >= start_hour or current_hour < end_hour)
-            
-            if not is_within_window:
-                _asc_log(logging.DEBUG, 
-                    "Kill blocked: outside time window (current: %02d:00, window: %02d:00-%02d:00 Amsterdam)", 
-                    current_hour, start_hour, end_hour)
-                return False, ""  # Outside kill window
-        except Exception as exc:
-            _asc_log(logging.WARNING, "Failed to check kill window: %s", exc)
-            # If time check fails, allow kill (fail open for safety)
+    is_within_window, window_reason = _is_within_time_window(rules)
+    if not is_within_window:
+        _asc_log(logging.DEBUG, "Kill blocked: %s", window_reason)
+        return False, ""  # Outside kill window
     
     # STRICT PROTECTION: All minimums must be met before ANY kill evaluation
     if spend < min_spend_before_kill:
@@ -2290,9 +2315,30 @@ def _generate_creatives_for_deficit(
     campaign_id: str,
     adset_id: str,
     base_active_count: int,
+    rules: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
+    """Generate new creatives and ads to fill deficit.
+    
+    Args:
+        deficit: Number of ads needed to reach target.
+        client: MetaClient instance.
+        settings: Settings dictionary.
+        campaign_id: Campaign ID.
+        adset_id: Adset ID.
+        base_active_count: Current active ad count.
+        rules: Rules dictionary for time window checking.
+    
+    Returns:
+        List of created ad records.
+    """
     if deficit <= 0:
         return []
+    
+    # TIME WINDOW PROTECTION: Only allow ad creation during specified time window
+    is_within_window, window_reason = _is_within_time_window(rules)
+    if not is_within_window:
+        _asc_log(logging.INFO, "Ad creation blocked: %s", window_reason)
+        return []  # Outside time window, don't create ads
 
     created_ads: List[Dict[str, Any]] = []
     supabase_client = None
@@ -3346,7 +3392,7 @@ def run_asc_plus_tick(
     available_slots = max(0, max_active - min(active_count, max_active))
     desired_slots = max(0, effective_target - current_active_count)
     deficit = min(desired_slots, available_slots)
-    created_records = _generate_creatives_for_deficit(deficit, client, settings, campaign_id, adset_id, active_count)
+    created_records = _generate_creatives_for_deficit(deficit, client, settings, campaign_id, adset_id, active_count, rules)
     if created_records:
         active_count = get_active_count()
         for record in created_records:
