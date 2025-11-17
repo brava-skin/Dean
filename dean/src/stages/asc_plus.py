@@ -1872,6 +1872,20 @@ def _select_ads_for_cap(
     excluded_ids: List[str],
     limit: int,
 ) -> List[Tuple[float, str, Dict[str, Any]]]:
+    """Select ads for capping when there are too many active ads.
+    
+    Selection strategy: Choose ads with the LEAST impressions first.
+    This preserves well-performing ads that have received more visibility.
+    
+    Args:
+        active_ads: List of active ad dictionaries.
+        metrics_map: Dictionary mapping ad_id to metrics.
+        excluded_ids: List of ad IDs to exclude from selection.
+        limit: Maximum number of candidates to return.
+    
+    Returns:
+        List of tuples (impressions, ad_id, metrics) sorted by impressions ascending.
+    """
     excluded = set(excluded_ids)
     candidates: List[Tuple[float, str, Dict[str, Any]]] = []
     for ad in active_ads:
@@ -1879,8 +1893,10 @@ def _select_ads_for_cap(
         if not ad_id or ad_id in excluded:
             continue
         metrics = metrics_map.get(ad_id, {})
-        score = _ad_health_score(metrics)
-        candidates.append((score, ad_id, metrics))
+        # Use impressions as the selection criteria (least impressions = first to kill)
+        impressions = safe_f(metrics.get("impressions", 0))
+        candidates.append((impressions, ad_id, metrics))
+    # Sort by impressions ascending (least impressions first)
     candidates.sort(key=lambda x: x[0])
     return candidates[:limit]
 
@@ -1943,9 +1959,10 @@ def _enforce_hard_cap(
                     now_ts=datetime.now(timezone.utc),
                 )
                 metrics_map[candidate_ad_id] = candidate_metrics
+            impressions = safe_f(candidate_metrics.get("impressions", 0))
             reason = (
                 f"Hard cap enforced to limit active ads to {max_active} "
-                f"(score {_ad_health_score(candidate_metrics):.2f})"
+                f"(impressions: {fmt_int(impressions)})"
             )
             if _pause_ad(client, candidate_ad_id, reason):
                 killed_ids.add(candidate_ad_id)
@@ -3137,7 +3154,8 @@ def _enforce_caps(
                 break
             if candidate_ad_id in killed_ids:
                 continue
-            reason = f"Capped to maintain {max_active} live ads (score {_ad_health_score(candidate_metrics):.2f})"
+            impressions = safe_f(candidate_metrics.get("impressions", 0))
+            reason = f"Capped to maintain {max_active} live ads (impressions: {fmt_int(impressions)})"
             if _pause_ad(client, candidate_ad_id, reason):
                 trimmed.append((candidate_ad_id, reason))
                 killed_ids.add(candidate_ad_id)
