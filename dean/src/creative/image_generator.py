@@ -1110,33 +1110,27 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
         
         import re
         
-        # Fix specific common spacing errors (case-insensitive)
+        # Fix specific known spacing errors (case-insensitive)
+        # These are the exact patterns we've seen in generated text
         fixes = [
-            (r'\bwithnskin\b', 'with skin'),
-            (r'\binnskin\b', 'in skin'),
-            (r'\bwithn\s+skin\b', 'with skin'),
-            (r'\bin\s+nskin\b', 'in skin'),
-            # Fix "wordskin" patterns where "word" is a common preposition/article
-            (r'\b(with)(skin)\b', r'\1 \2'),
-            (r'\b(in)(skin)\b', r'\1 \2'),
-            (r'\b(on)(skin)\b', r'\1 \2'),
-            (r'\b(for)(skin)\b', r'\1 \2'),
+            (r'withnskin', 'with skin'),
+            (r'innskin', 'in skin'),
+            (r'withn\s+skin', 'with skin'),
+            (r'in\s+nskin', 'in skin'),
+            # Fix common prepositions/articles that got merged with "skin"
+            (r'\b(with)(skin)(\s|$|\.|,|!)', r'\1 \2\3'),
+            (r'\b(in)(skin)(\s|$|\.|,|!)', r'\1 \2\3'),
+            (r'\b(on)(skin)(\s|$|\.|,|!)', r'\1 \2\3'),
+            (r'\b(for)(skin)(\s|$|\.|,|!)', r'\1 \2\3'),
         ]
         
         fixed_text = text
         for pattern, replacement in fixes:
             fixed_text = re.sub(pattern, replacement, fixed_text, flags=re.IGNORECASE)
         
-        # Preserve compound words that should stay together
-        compound_words = ['skincare', 'skin care', 'skin-care']
-        for compound in compound_words:
-            # If we accidentally split a compound word, restore it
-            fixed_text = re.sub(
-                rf'\b(\w+)\s+({compound.replace(" ", r"\s+")})\b',
-                rf'\1{compound}',
-                fixed_text,
-                flags=re.IGNORECASE
-            )
+        # Preserve compound words that should stay together (like "skincare")
+        # Restore if accidentally split
+        fixed_text = re.sub(r'\b(\w+)\s+(skincare)\b', r'\1\2', fixed_text, flags=re.IGNORECASE)
         
         # Clean up multiple spaces
         fixed_text = re.sub(r'\s+', ' ', fixed_text).strip()
