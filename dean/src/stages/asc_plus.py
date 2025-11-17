@@ -1746,7 +1746,7 @@ def _summarize_today_metrics(
             level="ad",
             date_preset="today",
             filtering=filters,
-            fields=["ad_id", "spend", "impressions", "clicks", "inline_link_clicks", "link_clicks", "actions"],
+            fields=["ad_id", "spend", "impressions", "clicks", "inline_link_clicks", "actions"],
             limit=500,
         ) or []
         
@@ -2097,10 +2097,10 @@ def _create_creative_and_ad(
         if len(headline_key) > 15:
             headline_key = headline_key[:15]
         
-        creative_name = f"ASC+_{date_str}_{headline_key}_{creative_id_short}"
+        creative_name = f"[ASC+] ASC+_{date_str}_{headline_key}_{creative_id_short}"
         
         if len(creative_name) > 80:
-            creative_name = f"ASC+_{date_str}_{headline_key[:10]}_{creative_id_short}"
+            creative_name = f"[ASC+] ASC+_{date_str}_{headline_key[:10]}_{creative_id_short}"
         
         supabase_storage_url = creative_data.get("supabase_storage_url")
         image_path = creative_data.get("image_path")
@@ -2235,10 +2235,10 @@ def _create_creative_and_ad(
         from datetime import datetime
         date_str = datetime.now().strftime("%d%m%y")
         
-        ad_name = f"ASC+_{date_str}_{headline_key}_{seq_num:02d}"
+        ad_name = f"[ASC+] ASC+_{date_str}_{headline_key}_{seq_num:02d}"
         
         if len(ad_name) > 100:
-            ad_name = f"ASC+_{date_str}_{headline_key[:8]}_{seq_num:02d}"
+            ad_name = f"[ASC+] ASC+_{date_str}_{headline_key[:8]}_{seq_num:02d}"
         
         logger.info(
             "Creating ad with name='%s', adset_id='%s', creative_id='%s', instagram_actor_id=%s",
