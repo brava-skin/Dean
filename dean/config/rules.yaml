@@ -13,7 +13,14 @@ asc_plus_atc:
     - {type: "performance_lock", ctr_gte: 0.014, cpm_lte: 50, atc_gte: 3, evaluation_hours: 72, lock_hours: 96}
 
   kill:
-    - {type: "ctr_spend_floor", spend_gte: 45, ctr_lt: 0.01}  # Only kill if CTR < 1%
+    # Only kill if ALL conditions met:
+    # - Spend >= €55 (after learning phase)
+    # - Impressions >= 2500 (enough data)
+    # - Runtime >= 48 hours (enough time)
+    # - CTR < 1% (poor engagement)
+    # - No ATC signals (no buyer intent)
+    # - No purchases (no conversions)
+    - {type: "ctr_spend_floor", spend_gte: 55, ctr_lt: 0.01}  # Only kill if CTR < 1% after full learning phase
 
   engine:
     consecutive_ticks_required: 2

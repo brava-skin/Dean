@@ -1711,26 +1711,87 @@ def _sync_creative_performance_records(
 
 
 def _guardrail_kill(metrics: Dict[str, Any], rules: Optional[Dict[str, Any]] = None, rule_engine: Optional[Any] = None) -> Tuple[bool, str]:
+    """Evaluate kill rules with strong protections for good-performing creatives.
+    
+    Protections:
+    - All minimums must be met (spend, impressions, runtime)
+    - Creatives with ATC signals are protected
+    - Creatives with good CTR are protected
+    - Learning phase grace period extended
+    """
     rules = rules or {}
     asc_rules = rules.get("asc_plus_atc", {})
     engine_rules = asc_rules.get("engine", {})
     fairness_rules = engine_rules.get("fairness", {})
+    learning_rules = engine_rules.get("learning", {})
     kill_rules = asc_rules.get("kill", [])
     minimums = asc_rules.get("minimums", {})
+    queue_rules = engine_rules.get("queue", {})
     
     min_spend_before_kill = safe_f(fairness_rules.get("min_spend_before_kill_eur", 55))
     min_runtime_hours = safe_f(fairness_rules.get("min_runtime_hours", 48))
     min_impressions = safe_f(minimums.get("min_impressions", 2500))
+    min_spend = safe_f(minimums.get("min_spend_eur", 55))
+    new_creative_grace_hours = safe_f(queue_rules.get("new_creative_grace_hours", 36))
+    max_learning_budget = safe_f(learning_rules.get("max_learning_budget_eur", 150))
     
     spend = safe_f(metrics.get("spend"))
+    impressions = safe_f(metrics.get("impressions"))
+    clicks = safe_f(metrics.get("clicks"))
+    add_to_cart = safe_f(metrics.get("add_to_cart"))
+    purchases = safe_f(metrics.get("purchases"))
+    ctr = safe_f(metrics.get("ctr"))
     stage_hours = safe_f(metrics.get("stage_duration_hours"))
     ad_age_days = safe_f(metrics.get("ad_age_days"))
+    hours_live = safe_f(metrics.get("hours_live"))
+    
     derived_age_days = max(ad_age_days, (stage_hours / 24.0) if stage_hours else 0.0)
-    derived_runtime_hours = derived_age_days * 24.0
-
-    if spend < min_spend_before_kill or derived_runtime_hours < min_runtime_hours:
+    derived_runtime_hours = max(derived_age_days * 24.0, hours_live)
+    
+    # STRICT PROTECTION: All minimums must be met before ANY kill evaluation
+    if spend < min_spend_before_kill:
         return False, ""
-
+    if impressions < min_impressions:
+        return False, ""
+    if derived_runtime_hours < min_runtime_hours:
+        return False, ""
+    
+    # LEARNING PHASE PROTECTION: Extended grace period for new creatives
+    if derived_runtime_hours < new_creative_grace_hours:
+        return False, ""
+    
+    # LEARNING BUDGET PROTECTION: Don't kill during learning phase
+    if spend < max_learning_budget:
+        # During learning phase, only kill if multiple severe negative signals
+        # AND no positive signals at all
+        has_positive_signals = (
+            (ctr > 0.01) or  # CTR > 1%
+            (add_to_cart > 0) or  # Has ATC signals
+            (purchases > 0)  # Has purchases
+        )
+        if has_positive_signals:
+            return False, ""  # Protect during learning if any positive signal
+    
+    # POSITIVE SIGNAL PROTECTION: Never kill creatives with strong positive signals
+    # Protection 1: Good CTR (above 1%)
+    if ctr >= 0.01:
+        return False, ""
+    
+    # Protection 2: Has ATC signals (buyer intent detected)
+    if add_to_cart >= 1:
+        return False, ""
+    
+    # Protection 3: Has purchases (obviously performing)
+    if purchases > 0:
+        return False, ""
+    
+    # Protection 4: Good click volume relative to spend (efficient)
+    if clicks > 0 and spend > 0:
+        cpc = spend / clicks
+        if cpc <= 1.50:  # Efficient CPC
+            return False, ""
+    
+    # Only evaluate kill rules if all protections pass
     if rule_engine and kill_rules:
         try:
             from analytics.metrics import metrics_from_row, MetricsConfig
