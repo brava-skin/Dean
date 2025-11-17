@@ -2707,15 +2707,39 @@ def run_asc_plus_tick(
 
     killed_ads: List[Tuple[str, str]] = []
     killed_ids = set()
+    
+    lifetime_metrics_map: Dict[str, Dict[str, Any]] = {}
+    try:
+        lifetime_rows = client.get_ad_insights(
+            level="ad",
+            date_preset="maximum",
+            filtering=[{"field": "adset.id", "operator": "EQUAL", "value": adset_id}],
+            fields=["ad_id", "spend", "impressions", "clicks", "inline_link_clicks", "actions"],
+            limit=500,
+        ) or []
+        for row in lifetime_rows:
+            ad_id = row.get("ad_id")
+            if ad_id:
+                lifetime_metrics_map[str(ad_id)] = _build_ad_metrics(
+                    row,
+                    "asc_plus",
+                    account_today,
+                    creation_time=creation_times.get(str(ad_id)) if creation_times else None,
+                    now_ts=now_utc,
+                )
+    except Exception as exc:
+        _asc_log(logging.WARNING, "Failed to fetch lifetime metrics for kill evaluation: %s", exc)
+    
     for ad in active_ads:
         ad_id = ad.get("id")
         if not ad_id:
             continue
-        metrics = metrics_map.get(ad_id) or _build_ad_metrics(
-            {"ad_id": ad_id, "spend": 0, "impressions": 0, "clicks": 0},
+        ad_id_str = str(ad_id)
+        metrics = lifetime_metrics_map.get(ad_id_str) or metrics_map.get(ad_id_str) or _build_ad_metrics(
+            {"ad_id": ad_id_str, "spend": 0, "impressions": 0, "clicks": 0},
             "asc_plus",
             account_today,
-            creation_time=creation_times.get(str(ad_id)) if creation_times else None,
+            creation_time=creation_times.get(ad_id_str) if creation_times else None,
             now_ts=now_utc,
         )
         kill, kill_reason = _guardrail_kill(metrics, rules, rule_engine)
