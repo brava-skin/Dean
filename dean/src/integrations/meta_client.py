@@ -2079,14 +2079,14 @@ class MetaClient:
 
         image_data: Dict[str, Any] = {
             "message": _s(primary_text),
-            "link": _s(final_link) if final_link else os.getenv("SHOPIFY_STORE_URL", "https://brava-skin.com"),
+            "link": _s(final_link) if final_link else os.getenv("SHOPIFY_STORE_URL", "https://bravaskin.com/products/elixir-to-milk-cleanse"),
         }
         
         if image_hashes:
             image_data["image_hash"] = image_hashes[0]
             if len(image_hashes) > 1:
                 # Meta requires each child_attachment to have its own CTA link
-                final_link_for_cta = _s(final_link) if final_link else os.getenv("SHOPIFY_STORE_URL", "https://brava-skin.com")
+                final_link_for_cta = _s(final_link) if final_link else os.getenv("SHOPIFY_STORE_URL", "https://bravaskin.com/products/elixir-to-milk-cleanse")
                 image_data["child_attachments"] = [
                     {
                         "image_hash": h,
