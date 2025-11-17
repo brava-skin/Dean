@@ -38,7 +38,6 @@ def configure_logging_filters() -> None:
         "urllib3": logging.WARNING,
         "matplotlib": logging.ERROR,
         "matplotlib.font_manager": logging.ERROR,
-        "sentence_transformers": logging.WARNING,
         "integrations.meta_client": logging.WARNING,
         "supabase": logging.WARNING,
         "infrastructure.supabase_storage": logging.WARNING,

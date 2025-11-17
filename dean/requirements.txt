@@ -18,13 +18,8 @@ numpy>=1.24.0
 # Creative Intelligence System (Required)
 openai>=1.0.0  # GPT integration for creative prompts
 
-# Creative Intelligence System (Optional - for semantic similarity)
-sentence-transformers>=2.2.0  # Optional: Semantic similarity analysis
-
 # Infrastructure (Optional - graceful degradation if missing)
 redis>=5.0.0  # Optional: Redis caching (falls back to in-memory)
-psutil>=5.9.0  # Optional: Resource monitoring (falls back gracefully)
-Pillow>=10.0.0  # Optional: Image optimization (falls back gracefully)
 
 # Note: ffmpeg is required as a system binary (not a Python package)
 # Install with: brew install ffmpeg (macOS) or apt-get install ffmpeg (Linux)

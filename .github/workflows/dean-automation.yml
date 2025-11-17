@@ -75,7 +75,7 @@ jobs:
           
     - name: Install Python dependencies
       if: ${{ env.AUTOMATION_PAUSED != 'true' }}
-      timeout-minutes: 8  # Faster timeout since we removed ML dependencies
+      timeout-minutes: 8  # Faster timeout since we removed unused optional dependencies (sentence-transformers, psutil, Pillow)
       run: |
         echo "📦 Installing Python dependencies..."
         # Use faster pip upgrade with timeout
