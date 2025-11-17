@@ -1764,6 +1764,7 @@ def _guardrail_kill(metrics: Dict[str, Any], rules: Optional[Dict[str, Any]] = N
     - Creatives with good CTR are protected
     - Learning phase grace period extended
     - Time window restriction (only kill during specified hours)
+    - New creative cooldown (no kill rules for ads created today before 20:00 Amsterdam)
     """
     rules = rules or {}
     asc_rules = rules.get("asc_plus_atc", {})
@@ -1771,6 +1772,7 @@ def _guardrail_kill(metrics: Dict[str, Any], rules: Optional[Dict[str, Any]] = N
     fairness_rules = engine_rules.get("fairness", {})
     learning_rules = engine_rules.get("learning", {})
     kill_window = engine_rules.get("kill_window", {})
+    cooldown = engine_rules.get("new_creative_cooldown", {})
     kill_rules = asc_rules.get("kill", [])
     minimums = asc_rules.get("minimums", {})
     queue_rules = engine_rules.get("queue", {})
@@ -1800,6 +1802,36 @@ def _guardrail_kill(metrics: Dict[str, Any], rules: Optional[Dict[str, Any]] = N
     if not is_within_window:
         _asc_log(logging.DEBUG, "Kill blocked: %s", window_reason)
         return False, ""  # Outside kill window
+    
+    # NEW CREATIVE COOLDOWN: Never evaluate kill rules for ads created today before 20:00 Amsterdam
+    if cooldown.get("enabled", False):
+        try:
+            creation_time_str = metrics.get("creation_time")
+            if creation_time_str:
+                # Parse creation time (assume UTC if no timezone info)
+                ad_creation = _parse_created_time(creation_time_str)
+                if ad_creation:
+                    # Convert to Amsterdam timezone
+                    if ad_creation.tzinfo is None:
+                        ad_creation = ad_creation.replace(tzinfo=UTC)
+                    ad_creation_amsterdam = ad_creation.astimezone(LOCAL_TZ)
+                    
+                    # Get current Amsterdam time
+                    now_amsterdam = datetime.now(LOCAL_TZ)
+                    
+                    # Check if ad was created today
+                    if ad_creation_amsterdam.date() == now_amsterdam.date():
+                        # Ad was created today - check if before cooldown hour
+                        cooldown_hour = int(cooldown.get("cooldown_hour", 20))
+                        if ad_creation_amsterdam.hour < cooldown_hour:
+                            # Ad created today before cooldown hour - skip kill evaluation
+                            _asc_log(logging.DEBUG, 
+                                "Kill blocked: new creative cooldown (created today at %02d:00, cooldown until %02d:00 Amsterdam)", 
+                                ad_creation_amsterdam.hour, cooldown_hour)
+                            return False, ""  # Protected by cooldown
+        except Exception as exc:
+            _asc_log(logging.WARNING, "Failed to check new creative cooldown: %s", exc)
+            # If cooldown check fails, allow kill evaluation (fail open for safety)
     
     # STRICT PROTECTION: All minimums must be met before ANY kill evaluation
     if spend < min_spend_before_kill:
@@ -2145,6 +2177,7 @@ def _build_ad_metrics(
         "hydrated": hydrated,
         "ad_age_days": age_days,
         "age_seconds": age_seconds,
+        "creation_time": ad_creation.isoformat() if ad_creation else None,
     }
 
     return metrics

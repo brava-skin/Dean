@@ -37,6 +37,9 @@ asc_plus_atc:
       enabled: true
       start_hour: 6  # Amsterdam time (6:00)
       end_hour: 12   # Amsterdam time (12:00)
+    new_creative_cooldown:
+      enabled: true
+      cooldown_hour: 20  # Amsterdam time (20:00) - no kill rules before this time for ads created today
 
   attribution_windows: ["7d_click", "1d_view"]
 
