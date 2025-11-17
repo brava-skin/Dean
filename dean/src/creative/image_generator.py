@@ -1102,8 +1102,8 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
         Common issues:
         - "withnskin" -> "with skin"
         - "innskin" -> "in skin"
-        - "starts withnskin" -> "starts with skin"
-        - "seen innskin" -> "seen in skin"
+        - "quietnauthority" -> "quiet authority"
+        - General word merging issues
         """
         if not text:
             return text
@@ -1112,21 +1112,55 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
         
         # Fix specific known spacing errors (case-insensitive)
         # These are the exact patterns we've seen in generated text
-        fixes = [
+        specific_fixes = [
             (r'withnskin', 'with skin'),
             (r'innskin', 'in skin'),
             (r'withn\s+skin', 'with skin'),
             (r'in\s+nskin', 'in skin'),
-            # Fix common prepositions/articles that got merged with "skin"
-            (r'\b(with)(skin)(\s|$|\.|,|!)', r'\1 \2\3'),
-            (r'\b(in)(skin)(\s|$|\.|,|!)', r'\1 \2\3'),
-            (r'\b(on)(skin)(\s|$|\.|,|!)', r'\1 \2\3'),
-            (r'\b(for)(skin)(\s|$|\.|,|!)', r'\1 \2\3'),
+            (r'quietnauthority', 'quiet authority'),
+            (r'quietn\s+authority', 'quiet authority'),
         ]
         
         fixed_text = text
-        for pattern, replacement in fixes:
+        for pattern, replacement in specific_fixes:
             fixed_text = re.sub(pattern, replacement, fixed_text, flags=re.IGNORECASE)
+        
+        # General fix 1: Detect merged words (lowercase letter followed by uppercase letter)
+        # This catches patterns like "word1Word2" -> "word1 Word2"
+        fixed_text = re.sub(r'\b([a-z]+)([A-Z][a-z]+)\b', r'\1 \2', fixed_text)
+        
+        # General fix 2: Detect merged lowercase words using common word patterns
+        # Common words that might be merged with others
+        common_first_words = [
+            'quiet', 'clear', 'refined', 'calm', 'premium', 'consistent', 'discipline',
+            'presence', 'quality', 'purpose', 'strength', 'confidence', 'excellence',
+            'with', 'in', 'on', 'for', 'to', 'at', 'by', 'of', 'the', 'a', 'an',
+            'seen', 'starts', 'builds', 'elevate', 'refined', 'consistent'
+        ]
+        common_second_words = [
+            'authority', 'skin', 'confidence', 'presence', 'discipline', 'excellence',
+            'quality', 'strength', 'care', 'routine', 'detail', 'living', 'baseline'
+        ]
+        
+        # Build patterns for common word merges
+        for first_word in common_first_words:
+            for second_word in common_second_words:
+                # Pattern: firstword + secondword (no space, case-insensitive)
+                pattern = rf'\b({first_word})({second_word})\b'
+                replacement = rf'\1 \2'
+                fixed_text = re.sub(pattern, replacement, fixed_text, flags=re.IGNORECASE)
+        
+        # Fix common prepositions/articles that got merged with following words
+        # Only fix if the second word is a known common word (to avoid false positives)
+        common_prepositions = ['with', 'in', 'on', 'for', 'to', 'at', 'by', 'of']
+        common_articles = ['the', 'a', 'an']
+        known_following_words = common_second_words + ['skin', 'care', 'routine', 'detail']
+        
+        for prep in common_prepositions + common_articles:
+            for following in known_following_words:
+                # Pattern: preposition/article + known word (no space)
+                pattern = rf'\b({prep})({following})\b'
+                fixed_text = re.sub(pattern, rf'\1 \2', fixed_text, flags=re.IGNORECASE)
         
         # Preserve compound words that should stay together (like "skincare")
         # Restore if accidentally split
