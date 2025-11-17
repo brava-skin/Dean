@@ -975,6 +975,7 @@ CRITICAL REQUIREMENTS:
 - No hype, no urgency, no sales language
 - Speak to self-respect and presence
 - Simple, powerful, memorable
+- CRITICAL: Always use proper spacing. "with skin" NOT "withnskin", "in skin" NOT "innskin"
 
 {ml_guidance}
 
@@ -1053,6 +1054,9 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
                     if ":" in text and len(text.split(":")[0]) < 20:
                         text = text.split(":", 1)[1].strip()
                     
+                    # Fix common spacing errors in generated text
+                    text = self._fix_text_spacing_errors(text)
+                    
                     word_count = len(text.split())
                     if 1 <= word_count <= 4:
                         if not hasattr(self, '_recent_text_overlays'):
@@ -1091,6 +1095,53 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
             self._recent_text_overlays.pop(0)
         
         return selected
+    
+    def _fix_text_spacing_errors(self, text: str) -> str:
+        """Fix common spacing errors in generated text overlays.
+        
+        Common issues:
+        - "withnskin" -> "with skin"
+        - "innskin" -> "in skin"
+        - "starts withnskin" -> "starts with skin"
+        - "seen innskin" -> "seen in skin"
+        """
+        if not text:
+            return text
+        
+        import re
+        
+        # Fix specific common spacing errors (case-insensitive)
+        fixes = [
+            (r'\bwithnskin\b', 'with skin'),
+            (r'\binnskin\b', 'in skin'),
+            (r'\bwithn\s+skin\b', 'with skin'),
+            (r'\bin\s+nskin\b', 'in skin'),
+            # Fix "wordskin" patterns where "word" is a common preposition/article
+            (r'\b(with)(skin)\b', r'\1 \2'),
+            (r'\b(in)(skin)\b', r'\1 \2'),
+            (r'\b(on)(skin)\b', r'\1 \2'),
+            (r'\b(for)(skin)\b', r'\1 \2'),
+        ]
+        
+        fixed_text = text
+        for pattern, replacement in fixes:
+            fixed_text = re.sub(pattern, replacement, fixed_text, flags=re.IGNORECASE)
+        
+        # Preserve compound words that should stay together
+        compound_words = ['skincare', 'skin care', 'skin-care']
+        for compound in compound_words:
+            # If we accidentally split a compound word, restore it
+            fixed_text = re.sub(
+                rf'\b(\w+)\s+({compound.replace(" ", r"\s+")})\b',
+                rf'\1{compound}',
+                fixed_text,
+                flags=re.IGNORECASE
+            )
+        
+        # Clean up multiple spaces
+        fixed_text = re.sub(r'\s+', ' ', fixed_text).strip()
+        
+        return fixed_text
     
     def _generate_ad_copy(
         self,
