@@ -1874,8 +1874,8 @@ def _select_ads_for_cap(
 ) -> List[Tuple[float, str, Dict[str, Any]]]:
     """Select ads for capping when there are too many active ads.
     
-    Selection strategy: Choose ads with the LEAST impressions first.
-    This preserves well-performing ads that have received more visibility.
+    Selection strategy: Choose ads with the LOWEST CTR first.
+    This preserves well-performing ads with better engagement rates.
     
     Args:
         active_ads: List of active ad dictionaries.
@@ -1884,7 +1884,7 @@ def _select_ads_for_cap(
         limit: Maximum number of candidates to return.
     
     Returns:
-        List of tuples (impressions, ad_id, metrics) sorted by impressions ascending.
+        List of tuples (ctr, ad_id, metrics) sorted by CTR ascending.
     """
     excluded = set(excluded_ids)
     candidates: List[Tuple[float, str, Dict[str, Any]]] = []
@@ -1893,10 +1893,15 @@ def _select_ads_for_cap(
         if not ad_id or ad_id in excluded:
             continue
         metrics = metrics_map.get(ad_id, {})
-        # Use impressions as the selection criteria (least impressions = first to kill)
-        impressions = safe_f(metrics.get("impressions", 0))
-        candidates.append((impressions, ad_id, metrics))
-    # Sort by impressions ascending (least impressions first)
+        # Use CTR as the selection criteria (lowest CTR = first to kill)
+        # Calculate CTR from clicks/impressions if not directly available
+        ctr = safe_f(metrics.get("ctr"))
+        if ctr is None:
+            impressions = safe_f(metrics.get("impressions", 0))
+            clicks = safe_f(metrics.get("clicks", 0))
+            ctr = (clicks / impressions) if impressions > 0 else 0.0
+        candidates.append((ctr, ad_id, metrics))
+    # Sort by CTR ascending (lowest CTR first)
     candidates.sort(key=lambda x: x[0])
     return candidates[:limit]
 
@@ -1959,10 +1964,14 @@ def _enforce_hard_cap(
                     now_ts=datetime.now(timezone.utc),
                 )
                 metrics_map[candidate_ad_id] = candidate_metrics
-            impressions = safe_f(candidate_metrics.get("impressions", 0))
+            ctr = safe_f(candidate_metrics.get("ctr"))
+            if ctr is None:
+                impressions = safe_f(candidate_metrics.get("impressions", 0))
+                clicks = safe_f(candidate_metrics.get("clicks", 0))
+                ctr = (clicks / impressions) if impressions > 0 else 0.0
             reason = (
                 f"Hard cap enforced to limit active ads to {max_active} "
-                f"(impressions: {fmt_int(impressions)})"
+                f"(CTR: {fmt_pct(ctr)})"
             )
             if _pause_ad(client, candidate_ad_id, reason):
                 killed_ids.add(candidate_ad_id)
@@ -3154,8 +3163,12 @@ def _enforce_caps(
                 break
             if candidate_ad_id in killed_ids:
                 continue
-            impressions = safe_f(candidate_metrics.get("impressions", 0))
-            reason = f"Capped to maintain {max_active} live ads (impressions: {fmt_int(impressions)})"
+            ctr = safe_f(candidate_metrics.get("ctr"))
+            if ctr is None:
+                impressions = safe_f(candidate_metrics.get("impressions", 0))
+                clicks = safe_f(candidate_metrics.get("clicks", 0))
+                ctr = (clicks / impressions) if impressions > 0 else 0.0
+            reason = f"Capped to maintain {max_active} live ads (CTR: {fmt_pct(ctr)})"
             if _pause_ad(client, candidate_ad_id, reason):
                 trimmed.append((candidate_ad_id, reason))
                 killed_ids.add(candidate_ad_id)
