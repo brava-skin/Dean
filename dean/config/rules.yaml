@@ -33,6 +33,10 @@ asc_plus_atc:
       maintain_creative_count: 10
       max_creative_turnover_per_24h: 0.15
       new_creative_grace_hours: 36
+    kill_window:
+      enabled: true
+      start_hour: 6  # Amsterdam time (6:00)
+      end_hour: 12   # Amsterdam time (12:00)
 
   attribution_windows: ["7d_click", "1d_view"]
 

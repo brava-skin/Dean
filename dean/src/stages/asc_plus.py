@@ -1718,12 +1718,14 @@ def _guardrail_kill(metrics: Dict[str, Any], rules: Optional[Dict[str, Any]] = N
     - Creatives with ATC signals are protected
     - Creatives with good CTR are protected
     - Learning phase grace period extended
+    - Time window restriction (only kill during specified hours)
     """
     rules = rules or {}
     asc_rules = rules.get("asc_plus_atc", {})
     engine_rules = asc_rules.get("engine", {})
     fairness_rules = engine_rules.get("fairness", {})
     learning_rules = engine_rules.get("learning", {})
+    kill_window = engine_rules.get("kill_window", {})
     kill_rules = asc_rules.get("kill", [])
     minimums = asc_rules.get("minimums", {})
     queue_rules = engine_rules.get("queue", {})
@@ -1747,6 +1749,32 @@ def _guardrail_kill(metrics: Dict[str, Any], rules: Optional[Dict[str, Any]] = N
     
     derived_age_days = max(ad_age_days, (stage_hours / 24.0) if stage_hours else 0.0)
     derived_runtime_hours = max(derived_age_days * 24.0, hours_live)
+    
+    # TIME WINDOW PROTECTION: Only allow kills during specified time window
+    if kill_window.get("enabled", False):
+        try:
+            now_amsterdam = datetime.now(LOCAL_TZ)
+            current_hour = now_amsterdam.hour
+            start_hour = int(kill_window.get("start_hour", 6))
+            end_hour = int(kill_window.get("end_hour", 12))
+            
+            # Check if current hour is within the kill window
+            is_within_window = False
+            if start_hour <= end_hour:
+                # Normal window (e.g., 6:00-12:00)
+                is_within_window = (start_hour <= current_hour < end_hour)
+            else:
+                # Wrapping window (e.g., 22:00-06:00, crosses midnight)
+                is_within_window = (current_hour >= start_hour or current_hour < end_hour)
+            
+            if not is_within_window:
+                _asc_log(logging.DEBUG, 
+                    "Kill blocked: outside time window (current: %02d:00, window: %02d:00-%02d:00 Amsterdam)", 
+                    current_hour, start_hour, end_hour)
+                return False, ""  # Outside kill window
+        except Exception as exc:
+            _asc_log(logging.WARNING, "Failed to check kill window: %s", exc)
+            # If time check fails, allow kill (fail open for safety)
     
     # STRICT PROTECTION: All minimums must be met before ANY kill evaluation
     if spend < min_spend_before_kill:
