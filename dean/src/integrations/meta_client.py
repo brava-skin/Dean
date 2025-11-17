@@ -1970,6 +1970,8 @@ class MetaClient:
         image_url: Optional[str] = None,
         image_path: Optional[str] = None,
         supabase_storage_url: Optional[str] = None,
+        images_by_aspect: Optional[Dict[str, str]] = None,
+        supabase_storage_urls: Optional[Dict[str, str]] = None,
         primary_text: str,
         headline: str,
         description: str = "",
@@ -1989,9 +1991,25 @@ class MetaClient:
         if not pid:
             raise ValueError("Page ID is required (set FB_PAGE_ID or pass page_id).")
 
+        image_hashes = []
+        
+        if images_by_aspect and supabase_storage_urls:
+            for aspect_ratio in ["1:1", "9:16", "16:9"]:
+                if aspect_ratio in supabase_storage_urls:
+                    storage_url = supabase_storage_urls[aspect_ratio]
+                    image_path_for_aspect = images_by_aspect.get(aspect_ratio)
+                    if storage_url and image_path_for_aspect and os.path.exists(image_path_for_aspect):
+                        try:
+                            uploaded_image = self._upload_ad_image(image_path_for_aspect, f"{name}_{aspect_ratio}")
+                            if uploaded_image and uploaded_image.get("hash"):
+                                image_hashes.append(uploaded_image.get("hash"))
+                                logger.info(f"✅ Uploaded {aspect_ratio} image to Meta: {uploaded_image.get('hash')}")
+                        except Exception as e:
+                            logger.warning(f"Failed to upload {aspect_ratio} image: {e}")
+        
         final_image_url = _s(supabase_storage_url or image_url).strip()
         
-        if not final_image_url and image_path:
+        if not final_image_url and not image_hashes and image_path:
             if creative_id:
                 try:
                     from infrastructure.supabase_storage import get_validated_supabase_client, create_creative_storage_manager
@@ -2024,8 +2042,8 @@ class MetaClient:
                     notify(f"⚠️ Failed to upload image, using path as URL: {e}")
                     final_image_url = f"file://{image_path}"
 
-        if not final_image_url:
-            raise ValueError("Either supabase_storage_url, image_url, or image_path must be provided.")
+        if not final_image_url and not image_hashes:
+            raise ValueError("Either supabase_storage_url, image_url, image_path, or images_by_aspect with supabase_storage_urls must be provided.")
 
         final_link = _clean_story_link(link_url, utm_params)
         if instagram_actor_id is not None:
@@ -2064,7 +2082,11 @@ class MetaClient:
             "link": _s(final_link) if final_link else os.getenv("SHOPIFY_STORE_URL", "https://brava-skin.com"),
         }
         
-        if final_image_url.startswith("http"):
+        if image_hashes:
+            image_data["image_hash"] = image_hashes[0]
+            if len(image_hashes) > 1:
+                image_data["child_attachments"] = [{"image_hash": h} for h in image_hashes[1:]]
+        elif final_image_url.startswith("http"):
             try:
                 import requests
                 import tempfile

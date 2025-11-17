@@ -348,20 +348,39 @@ class ImageCreativeGenerator:
                 notify("❌ Failed to generate image prompt")
                 return None
             
-            image_url, request_id = self.flux_client.create_image(
-                prompt=image_prompt,
-                aspect_ratio="1:1",
-                output_format="png",
-            )
+            aspect_ratios = ["1:1", "9:16", "16:9"]
+            generated_images = {}
             
-            if not image_url:
-                notify(f"❌ Failed to generate FLUX image (request_id: {request_id})")
+            for aspect_ratio in aspect_ratios:
+                image_url, request_id = self.flux_client.create_image(
+                    prompt=image_prompt,
+                    aspect_ratio=aspect_ratio,
+                    output_format="png",
+                )
+                
+                if not image_url:
+                    notify(f"❌ Failed to generate FLUX image for {aspect_ratio} (request_id: {request_id})")
+                    continue
+                
+                image_path = self.flux_client.download_image(image_url)
+                if not image_path:
+                    notify(f"❌ Failed to download generated image for {aspect_ratio}")
+                    continue
+                
+                generated_images[aspect_ratio] = {
+                    "image_path": image_path,
+                    "request_id": request_id,
+                }
+            
+            if not generated_images:
+                notify("❌ Failed to generate any FLUX images")
                 return None
             
-            image_path = self.flux_client.download_image(image_url)
-            if not image_path:
-                notify("❌ Failed to download generated image")
-                return None
+            primary_aspect = "1:1"
+            if primary_aspect not in generated_images:
+                primary_aspect = list(generated_images.keys())[0]
+            
+            image_path = generated_images[primary_aspect]["image_path"]
             
             scenario_description = None
             if hasattr(self, '_last_scenario_description'):
@@ -385,56 +404,70 @@ class ImageCreativeGenerator:
                 ad_copy=ad_copy,
             )
             
-            final_image_path = None
-            if overlay_text:
-                final_image_path = self._add_text_overlay(image_path, overlay_text)
-                if not final_image_path:
-                    notify("⚠️ Failed to add text overlay, using original image")
-                    final_image_path = image_path
-            else:
-                final_image_path = image_path
+            final_images = {}
+            for aspect_ratio, img_data in generated_images.items():
+                img_path = img_data["image_path"]
+                if overlay_text:
+                    final_path = self._add_text_overlay(img_path, overlay_text)
+                    if not final_path:
+                        notify(f"⚠️ Failed to add text overlay for {aspect_ratio}, using original image")
+                        final_path = img_path
+                else:
+                    final_path = img_path
+                final_images[aspect_ratio] = final_path
             
-            supabase_storage_url = None
-            storage_creative_id = None
-            if final_image_path:
-                try:
-                    from infrastructure.supabase_storage import get_validated_supabase_client, create_creative_storage_manager
-                    
-                    supabase_client = get_validated_supabase_client()
-                    if supabase_client:
-                        storage_manager = create_creative_storage_manager(supabase_client)
-                        if storage_manager:
-                            with open(final_image_path, "rb") as f:
-                                image_hash = hashlib.md5(f.read()).hexdigest()
-                            storage_creative_id = f"creative_{image_hash[:12]}"
-                            
-                            supabase_storage_url = storage_manager.upload_creative(
-                                creative_id=storage_creative_id,
-                                image_path=final_image_path,
-                                metadata={
-                                    "image_prompt": image_prompt,
-                                    "text_overlay": overlay_text,
-                                    "ad_copy": ad_copy,
-                                    "scenario_description": scenario_description,
-                                    "flux_request_id": request_id,
-                                }
-                            )
-                            if supabase_storage_url:
-                                logger.info(f"✅ Uploaded creative to Supabase Storage: {supabase_storage_url}")
-                except Exception as e:
-                    logger.warning(f"Failed to upload creative to Supabase Storage: {e}")
+            primary_final_path = final_images.get(primary_aspect) or list(final_images.values())[0]
             
+            supabase_storage_urls = {}
+            storage_creative_ids = {}
+            for aspect_ratio, final_image_path in final_images.items():
+                if final_image_path:
+                    try:
+                        from infrastructure.supabase_storage import get_validated_supabase_client, create_creative_storage_manager
+                        
+                        supabase_client = get_validated_supabase_client()
+                        if supabase_client:
+                            storage_manager = create_creative_storage_manager(supabase_client)
+                            if storage_manager:
+                                with open(final_image_path, "rb") as f:
+                                    image_hash = hashlib.md5(f.read()).hexdigest()
+                                storage_creative_id = f"creative_{image_hash[:12]}_{aspect_ratio.replace(':', '_')}"
+                                
+                                supabase_storage_url = storage_manager.upload_creative(
+                                    creative_id=storage_creative_id,
+                                    image_path=final_image_path,
+                                    metadata={
+                                        "image_prompt": image_prompt,
+                                        "text_overlay": overlay_text,
+                                        "ad_copy": ad_copy,
+                                        "scenario_description": scenario_description,
+                                        "flux_request_id": generated_images[aspect_ratio]["request_id"],
+                                        "aspect_ratio": aspect_ratio,
+                                    }
+                                )
+                                if supabase_storage_url:
+                                    logger.info(f"✅ Uploaded {aspect_ratio} creative to Supabase Storage: {supabase_storage_url}")
+                                    supabase_storage_urls[aspect_ratio] = supabase_storage_url
+                                    storage_creative_ids[aspect_ratio] = storage_creative_id
+                    except Exception as e:
+                        logger.warning(f"Failed to upload {aspect_ratio} creative to Supabase Storage: {e}")
+            
+            primary_request_id = generated_images[primary_aspect]["request_id"]
             result = {
-                "image_path": final_image_path,
-                "original_image_path": image_path,
+                "image_path": primary_final_path,
+                "original_image_path": generated_images[primary_aspect]["image_path"],
+                "images_by_aspect": final_images,
+                "original_images_by_aspect": {ar: data["image_path"] for ar, data in generated_images.items()},
                 "text_overlay": overlay_text,
                 "ad_copy": ad_copy,
                 "image_prompt": image_prompt,
                 "scenario_description": scenario_description,
-                "flux_request_id": request_id,
+                "flux_request_id": primary_request_id,
                 "ml_insights_used": ml_insights,
-                "supabase_storage_url": supabase_storage_url,
-                "storage_creative_id": storage_creative_id,
+                "supabase_storage_url": supabase_storage_urls.get(primary_aspect),
+                "storage_creative_id": storage_creative_ids.get(primary_aspect),
+                "supabase_storage_urls": supabase_storage_urls,
+                "storage_creative_ids": storage_creative_ids,
             }
             
             if advanced_ml and advanced_ml.prompt_library:
@@ -1495,12 +1528,19 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                     dimensions = probe_result.stdout.strip().split("x")
                     if len(dimensions) == 2:
                         img_width = int(dimensions[0])
+                        img_height = int(dimensions[1])
                         base_fontsize = max(36, min(56, int(img_width * 0.04)))
                     else:
+                        img_width = 1080
+                        img_height = 1080
                         base_fontsize = 42
                 else:
+                    img_width = 1080
+                    img_height = 1080
                     base_fontsize = 42
             except Exception:
+                img_width = 1080
+                img_height = 1080
                 base_fontsize = 42
             
             text_length = len(text)
@@ -1511,51 +1551,50 @@ Ensure all text meets character limits and maintains calm confidence tone."""
             else:
                 fontsize = base_fontsize - 4
             
-            max_chars_per_line = max(30, int(base_fontsize * 1.2))
+            max_text_width = img_width - 120
+            max_chars_per_line = max(20, int((max_text_width / fontsize) * 0.6))
             
-            if len(text) > max_chars_per_line:
-                words = text.split()
-                wrapped_lines = []
-                current_line = ""
-                for word in words:
-                    if len(current_line) + len(word) + 1 <= max_chars_per_line:
-                        current_line += (" " + word if current_line else word)
-                    else:
-                        if current_line:
-                            wrapped_lines.append(current_line)
-                        current_line = word
-                if current_line:
-                    wrapped_lines.append(current_line)
-                wrapped_text = "\\n".join(wrapped_lines)
-            else:
-                wrapped_text = text
+            words = text.split()
+            wrapped_lines = []
+            current_line = ""
+            for word in words:
+                test_line = current_line + (" " + word if current_line else word)
+                test_width = len(test_line) * (fontsize * 0.6)
+                if test_width <= max_text_width and len(test_line) <= max_chars_per_line:
+                    current_line = test_line
+                else:
+                    if current_line:
+                        wrapped_lines.append(current_line)
+                    current_line = word
+            if current_line:
+                wrapped_lines.append(current_line)
             
-            escaped_wrapped = wrapped_text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:")
+            if not wrapped_lines:
+                wrapped_lines = [text]
             
-            bottom_margin = 80
-            side_margin = 60
+            wrapped_text = "\\n".join(wrapped_lines)
+            escaped_wrapped = wrapped_text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("[", "\\[").replace("]", "\\]")
+            
+            bottom_margin = max(60, int(img_height * 0.08))
+            side_margin = max(40, int(img_width * 0.05))
             
             drawtext_filter = (
                 f"drawtext=text='{escaped_wrapped}'"
                 f":fontsize={fontsize}"
                 f":fontcolor=white"
-                f":borderw=1"
-                f":bordercolor=black@0.3"
+                f":borderw=2"
+                f":bordercolor=black@0.5"
                 f":x=(w-text_w)/2"
                 f":y=h-th-{bottom_margin}"
-                f":shadowcolor=black@0.8"
-                f":shadowx=2"
-                f":shadowy=2"
+                f":shadowcolor=black@0.9"
+                f":shadowx=3"
+                f":shadowy=3"
             )
             
             if font_path:
                 drawtext_filter += f":fontfile={font_path}"
             
-            vf_filter = (
-                f"scale=iw:iw:force_original_aspect_ratio=decrease,"
-                f"pad=iw:iw:0:0:color=black@0,"
-                f"{drawtext_filter}"
-            )
+            vf_filter = f"{drawtext_filter}"
             
             cmd = [
                 ffmpeg_cmd,
@@ -1590,11 +1629,7 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                     f":shadowy=2"
                 )
                 
-                vf_fallback = (
-                    f"scale=iw:iw:force_original_aspect_ratio=decrease,"
-                    f"pad=iw:iw:0:0:color=black@0,"
-                    f"{drawtext_fallback}"
-                )
+                vf_fallback = f"{drawtext_fallback}"
                 
                 cmd_fallback = [
                     ffmpeg_cmd,

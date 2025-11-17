@@ -1040,6 +1040,7 @@ def _sync_performance_metrics_records(
         initiate_checkout = int(safe_f(metrics.get("initiate_checkout") or metrics.get("ic")))
         revenue = safe_f(metrics.get("revenue"))
         
+        clicks_were_capped = False
         if impressions > 0 and clicks > impressions:
             _asc_log(
                 logging.WARNING,
@@ -1049,9 +1050,15 @@ def _sync_performance_metrics_records(
                 impressions,
             )
             clicks = impressions
+            clicks_were_capped = True
 
-        ctr = _fraction_or_none(metrics.get("ctr"))
-        cpc = _float_or_none(metrics.get("cpc"))
+        if clicks_were_capped:
+            ctr = _fraction_or_none(clicks / impressions) if impressions > 0 else None
+            cpc = _float_or_none(spend / clicks) if clicks > 0 else None
+        else:
+            ctr = _fraction_or_none(metrics.get("ctr"))
+            cpc = _float_or_none(metrics.get("cpc"))
+        
         cpm = _float_or_none(metrics.get("cpm"))
         roas = _float_or_none(metrics.get("roas"))
         cpa = _float_or_none(metrics.get("cpa"))
@@ -1739,7 +1746,7 @@ def _summarize_today_metrics(
             level="ad",
             date_preset="today",
             filtering=filters,
-            fields=["ad_id", "spend", "impressions", "clicks", "actions"],
+            fields=["ad_id", "spend", "impressions", "clicks", "inline_link_clicks", "link_clicks", "actions"],
             limit=500,
         ) or []
         
@@ -1750,7 +1757,12 @@ def _summarize_today_metrics(
             
             spend_val = safe_f(row.get("spend"))
             impressions_val = safe_f(row.get("impressions"))
-            clicks_val = safe_f(row.get("clicks"))
+            link_clicks_val = safe_f(row.get("inline_link_clicks")) or safe_f(row.get("link_clicks"))
+            all_clicks_val = safe_f(row.get("clicks"))
+            clicks_val = link_clicks_val if link_clicks_val > 0 else all_clicks_val
+            
+            if impressions_val > 0 and clicks_val > impressions_val:
+                clicks_val = impressions_val
             
             actions = row.get("actions") or []
             add_to_cart = 0
@@ -2063,22 +2075,32 @@ def _create_creative_and_ad(
         if not isinstance(ad_copy_dict, dict):
             ad_copy_dict = {}
         
+        from datetime import datetime
+        now = datetime.now()
+        date_str = now.strftime("%d%m%y")
+        time_str = now.strftime("%H%M")
+        
         headline = ad_copy_dict.get("headline", "")
+        primary_text = ad_copy_dict.get("primary_text", "")
+        
+        creative_id_short = storage_creative_id.replace("creative_", "")[:8] if storage_creative_id else "new"
+        
         if headline:
-            headline_words = headline.split()[:3]
-            headline_snippet = " ".join(headline_words)
-            if len(headline_snippet) > 25:
-                headline_snippet = headline_snippet[:22] + "..."
-            headline_snippet = headline_snippet.replace(":", "").replace("/", "").replace("\\", "").strip()
+            headline_clean = headline.replace(":", "").replace("/", "").replace("\\", "").replace(",", "").strip()
+            headline_words = headline_clean.split()[:2]
+            headline_key = "_".join(word.lower()[:6] for word in headline_words if word)
+            if not headline_key:
+                headline_key = "creative"
         else:
-            headline_snippet = "Creative"
+            headline_key = "creative"
         
-        seq_num = active_count + created_count + 1
+        if len(headline_key) > 15:
+            headline_key = headline_key[:15]
         
-        creative_name = f"[ASC+] {headline_snippet} - #{seq_num}"
+        creative_name = f"ASC+_{date_str}_{headline_key}_{creative_id_short}"
         
         if len(creative_name) > 80:
-            creative_name = f"[ASC+] {headline_snippet[:15]} - #{seq_num}"
+            creative_name = f"ASC+_{date_str}_{headline_key[:10]}_{creative_id_short}"
         
         supabase_storage_url = creative_data.get("supabase_storage_url")
         image_path = creative_data.get("image_path")
@@ -2129,11 +2151,16 @@ def _create_creative_and_ad(
                 if len(primary_text) > 150:
                     primary_text = primary_text[:147] + "..."
             
+            images_by_aspect = creative_data.get("images_by_aspect")
+            supabase_storage_urls = creative_data.get("supabase_storage_urls")
+            
             creative = client.create_image_creative(
                 page_id=page_id,
                 name=creative_name,
                 supabase_storage_url=supabase_storage_url,
                 image_path=image_path if not supabase_storage_url else None,
+                images_by_aspect=images_by_aspect,
+                supabase_storage_urls=supabase_storage_urls,
                 primary_text=primary_text,
                 headline=ad_copy_dict.get("headline", ""),
                 description=ad_copy_dict.get("description", ""),
@@ -2156,6 +2183,8 @@ def _create_creative_and_ad(
                         name=creative_name,
                         supabase_storage_url=supabase_storage_url,
                         image_path=image_path if not supabase_storage_url else None,
+                        images_by_aspect=images_by_aspect,
+                        supabase_storage_urls=supabase_storage_urls,
                         primary_text=primary_text,
                         headline=ad_copy_dict.get("headline", ""),
                         description=ad_copy_dict.get("description", ""),
@@ -2188,24 +2217,28 @@ def _create_creative_and_ad(
             return str(meta_creative_id), None, False
         
         headline = ad_copy_dict.get("headline", "")
-        if headline:
-            headline_words = headline.split()[:4]
-            headline_snippet = " ".join(headline_words)
-            if len(headline_snippet) > 30:
-                headline_snippet = headline_snippet[:27] + "..."
-            headline_snippet = headline_snippet.replace(":", "").replace("/", "").replace("\\", "").strip()
-        else:
-            headline_snippet = "Creative"
+        primary_text = ad_copy_dict.get("primary_text", "")
         
-        from datetime import datetime
-        date_str = datetime.now().strftime("%y%m%d")
+        if headline:
+            headline_clean = headline.replace(":", "").replace("/", "").replace("\\", "").replace(",", "").strip()
+            headline_words = headline_clean.split()[:2]
+            headline_key = "_".join(word.lower()[:6] for word in headline_words if word)
+            if not headline_key:
+                headline_key = "ad"
+        else:
+            headline_key = "ad"
+        
+        if len(headline_key) > 12:
+            headline_key = headline_key[:12]
         
         seq_num = active_count + created_count + 1
+        from datetime import datetime
+        date_str = datetime.now().strftime("%d%m%y")
         
-        ad_name = f"[ASC+] {headline_snippet} - {date_str} - #{seq_num}"
+        ad_name = f"ASC+_{date_str}_{headline_key}_{seq_num:02d}"
         
         if len(ad_name) > 100:
-            ad_name = f"[ASC+] {headline_snippet[:20]} - {date_str} - #{seq_num}"
+            ad_name = f"ASC+_{date_str}_{headline_key[:8]}_{seq_num:02d}"
         
         logger.info(
             "Creating ad with name='%s', adset_id='%s', creative_id='%s', instagram_actor_id=%s",
