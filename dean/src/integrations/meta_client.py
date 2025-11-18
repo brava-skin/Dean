@@ -2077,22 +2077,26 @@ class MetaClient:
         self._init_sdk_if_needed()
         self._cooldown()
 
+        # Get the final link URL for CTA
+        final_link_url = _s(final_link) if final_link else os.getenv("SHOPIFY_STORE_URL", "https://bravaskin.com/products/elixir-to-milk-cleanse")
+        
         image_data: Dict[str, Any] = {
             "message": _s(primary_text),
-            "link": _s(final_link) if final_link else os.getenv("SHOPIFY_STORE_URL", "https://bravaskin.com/products/elixir-to-milk-cleanse"),
+            "link": final_link_url,
         }
         
         if image_hashes:
             image_data["image_hash"] = image_hashes[0]
             if len(image_hashes) > 1:
                 # Meta requires each child_attachment to have its own CTA link
-                final_link_for_cta = _s(final_link) if final_link else os.getenv("SHOPIFY_STORE_URL", "https://bravaskin.com/products/elixir-to-milk-cleanse")
                 image_data["child_attachments"] = [
                     {
                         "image_hash": h,
-                        "call_to_action": {"type": _s(call_to_action or "SHOP_NOW"), "value": {"link": final_link_for_cta}}
+                        "call_to_action": {"type": _s(call_to_action or "SHOP_NOW"), "value": {"link": final_link_url}}
                     } for h in image_hashes[1:]
                 ]
+                # When using child_attachments, the main link_data MUST also have a CTA
+                image_data["call_to_action"] = {"type": _s(call_to_action or "SHOP_NOW"), "value": {"link": final_link_url}}
         elif final_image_url.startswith("http"):
             try:
                 import requests
@@ -2152,12 +2156,35 @@ class MetaClient:
         if description:
             image_data["description"] = _s(description)[:150]
         
-        if final_link:
-            image_data["call_to_action"] = {"type": _s(call_to_action or "SHOP_NOW"), "value": {"link": _s(final_link)}}
+        # Always add CTA if not already present (required for child_attachments, good practice otherwise)
+        if "call_to_action" not in image_data:
+            if final_link:
+                image_data["call_to_action"] = {"type": _s(call_to_action or "SHOP_NOW"), "value": {"link": _s(final_link)}}
+            else:
+                image_data["call_to_action"] = {"type": _s(call_to_action or "SHOP_NOW"), "value": {"link": final_link_url}}
 
         story_spec: Dict[str, Any] = {"page_id": pid, "link_data": image_data}
+        # Use instagram_user_id instead of deprecated instagram_actor_id
+        # Meta can also auto-derive IG account from page_id, but if explicitly provided, use instagram_user_id
         if ig_id:
-            story_spec["instagram_actor_id"] = ig_id
+            # Try to get the Instagram Business Account ID from the page
+            try:
+                page_info = self._graph_get_object(f"{pid}", params={"fields": "instagram_business_account"})
+                ig_business_account = page_info.get("instagram_business_account")
+                if ig_business_account:
+                    ig_business_id = ig_business_account.get("id") if isinstance(ig_business_account, dict) else str(ig_business_account)
+                    if ig_business_id:
+                        story_spec["instagram_user_id"] = ig_business_id
+                        logger.debug(f"Using Instagram Business Account ID from page: {ig_business_id}")
+                    else:
+                        # Fallback: use provided ig_id as instagram_user_id
+                        story_spec["instagram_user_id"] = ig_id
+                else:
+                    # No IG account linked to page, but user provided ig_id - use it
+                    story_spec["instagram_user_id"] = ig_id
+            except Exception as e:
+                logger.warning(f"Failed to get Instagram Business Account from page {pid}: {e}. Using provided ig_id as instagram_user_id.")
+                story_spec["instagram_user_id"] = ig_id
 
         params = {
             "name": _s(name),
