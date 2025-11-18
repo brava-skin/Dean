@@ -1135,7 +1135,8 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
             'quiet', 'clear', 'refined', 'calm', 'premium', 'consistent', 'discipline',
             'presence', 'quality', 'purpose', 'strength', 'confidence', 'excellence',
             'with', 'in', 'on', 'for', 'to', 'at', 'by', 'of', 'the', 'a', 'an',
-            'seen', 'starts', 'builds', 'elevate', 'refined', 'consistent'
+            'seen', 'starts', 'builds', 'elevate', 'refined', 'consistent',
+            'withn',  # Common typo: "withn" instead of "with"
         ]
         common_second_words = [
             'authority', 'skin', 'confidence', 'presence', 'discipline', 'excellence',
@@ -1529,6 +1530,9 @@ Ensure all text meets character limits and maintains calm confidence tone."""
         text: str,
         output_path: Optional[str] = None,
     ) -> Optional[str]:
+        # Fix spacing errors before adding overlay
+        text = self._fix_text_spacing_errors(text)
+        
         try:
             ffmpeg_paths = [
                 "/opt/homebrew/bin/ffmpeg",  # macOS Homebrew (Apple Silicon)
