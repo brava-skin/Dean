@@ -104,7 +104,7 @@ jobs:
         FB_AD_ACCOUNT_ID: ${{ secrets.FB_AD_ACCOUNT_ID }}
         FB_PIXEL_ID: ${{ secrets.FB_PIXEL_ID }}
         FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
-        IG_ACTOR_ID: ${{ secrets.IG_ACTOR_ID }}
+        IG_ACTOR_ID: ${{ secrets.IG_ACTOR_ID }}  # Instagram User ID (variable name kept for backward compatibility)
         
         # Supabase Configuration
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
