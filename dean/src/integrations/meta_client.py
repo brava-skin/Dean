@@ -2086,19 +2086,13 @@ class MetaClient:
         }
         
         if image_hashes:
+            # ASC+ campaigns require single image creatives (no carousel/child_attachments)
+            # Use only the first image (1:1 aspect ratio) for ASC+ compatibility
+            # Multiple images are not supported for ASC+ campaign objective
             if len(image_hashes) > 1:
-                # When using multiple images, ALL images must be in child_attachments
-                # The main link_data should NOT have image_hash when using child_attachments
-                # Each child_attachment MUST have: image_hash, link, and call_to_action
-                image_data["child_attachments"] = [
-                    {
-                        "image_hash": h,
-                        "link": final_link_url,  # REQUIRED: Each child attachment needs its own link
-                        "call_to_action": {"type": _s(call_to_action or "SHOP_NOW"), "value": {"link": final_link_url}}
-                    } for h in image_hashes
-                ]
-                # Main link_data still needs CTA and link for the overall creative
-                image_data["call_to_action"] = {"type": _s(call_to_action or "SHOP_NOW"), "value": {"link": final_link_url}}
+                logger.warning(f"Multiple images provided ({len(image_hashes)}), but ASC+ campaigns require single image. Using first image only.")
+                # Use only the first image (typically 1:1) for ASC+ compatibility
+                image_data["image_hash"] = image_hashes[0]
             else:
                 # Single image - use image_hash in main link_data
                 image_data["image_hash"] = image_hashes[0]
@@ -2155,30 +2149,15 @@ class MetaClient:
         else:
             image_data["image_hash"] = _s(final_image_url)
         
-        # When using child_attachments, text fields should be in each child, not main link_data
-        # When using single image, text fields go in main link_data
-        has_child_attachments = "child_attachments" in image_data and image_data["child_attachments"]
+        # ASC+ campaigns use single image creatives only
+        # Add all text fields to main link_data
+        if primary_text:
+            image_data["message"] = _s(primary_text)
+        if headline:
+            image_data["name"] = _s(headline)[:100]
         
-        if has_child_attachments:
-            # For carousel/multi-image creatives: add text to each child attachment
-            # Main link_data should only have link and call_to_action (no message, name, description)
-            for child in image_data["child_attachments"]:
-                if primary_text:
-                    child["message"] = _s(primary_text)  # Each child gets the message
-                if headline:
-                    child["name"] = _s(headline)[:100]
-                if description:
-                    child["description"] = _s(description)[:150]
-                # Each child already has link and call_to_action from above
-        else:
-            # Single image: add all text fields to main link_data
-            if primary_text:
-                image_data["message"] = _s(primary_text)
-            if headline:
-                image_data["name"] = _s(headline)[:100]
-            
-            if description:
-                image_data["description"] = _s(description)[:150]
+        if description:
+            image_data["description"] = _s(description)[:150]
         
         # Always add CTA if not already present (required for child_attachments, good practice otherwise)
         if "call_to_action" not in image_data:
