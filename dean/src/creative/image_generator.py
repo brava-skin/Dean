@@ -975,7 +975,45 @@ CRITICAL REQUIREMENTS:
 - No hype, no urgency, no sales language
 - Speak to self-respect and presence
 - Simple, powerful, memorable
-- CRITICAL: Always use proper spacing. "with skin" NOT "withnskin", "in skin" NOT "innskin"
+
+MANDATORY SPELLING AND SPACING RULES (ZERO TOLERANCE):
+⚠️ ABSOLUTELY FORBIDDEN - These patterns are NEVER acceptable:
+❌ "withnskin" → MUST be "with skin" (space between "with" and "skin")
+❌ "innskin" → MUST be "in skin" (space between "in" and "skin")
+❌ "yournskin" → MUST be "your skin" (space between "your" and "skin")
+❌ "withn skin" → MUST be "with skin" (no extra 'n')
+❌ "in nskin" → MUST be "in skin" (no extra 'n')
+❌ "yourn skin" → MUST be "your skin" (no extra 'n')
+❌ "quietnauthority" → MUST be "quiet authority" (space between words)
+❌ ANY merged words without spaces
+
+✅ REQUIRED FORMAT:
+- EVERY word must be separated by exactly ONE space
+- Prepositions (with, in, on, for, to, at, by, of, your) MUST have a space before the next word
+- Articles (the, a, an) MUST have a space before the next word
+- NO exceptions, NO merged words, NO missing spaces
+
+VALIDATION CHECKLIST (verify before returning):
+1. Read your output word by word
+2. Check that "with" is followed by a space, then the next word
+3. Check that "in" is followed by a space, then the next word
+4. Check that "your" is followed by a space, then the next word
+5. Check that NO words are merged together
+6. If you see ANY merged words, FIX THEM IMMEDIATELY
+
+CORRECT EXAMPLES:
+✅ "Presence starts with skin."
+✅ "Discipline shows in skin."
+✅ "Routine refines your skin."
+✅ "Quiet authority, daily practice."
+
+WRONG EXAMPLES (DO NOT GENERATE THESE):
+❌ "Presence starts withnskin."
+❌ "Discipline shows innskin."
+❌ "Routine refines yournskin."
+❌ "Quiet authority, daily practice." (if "quiet" and "authority" were merged)
+
+If you generate text with merged words or missing spaces, it will be REJECTED. Be extremely careful with spacing.
 
 {ml_guidance}
 
