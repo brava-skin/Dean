@@ -1295,9 +1295,10 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
             word_clean = re.sub(r'[^\w]', '', word)
             word_lower = word_clean.lower()
             
-            # Check if this looks like a merged word (long, all lowercase, no obvious word boundary)
-            # For long words (8+ chars), use strict validation
-            if (len(word_lower) >= 8 and 
+            # Check if this looks like a merged word
+            # Lower threshold to 7 chars to catch words like "innskin", "showsin"
+            # For long words (7+ chars), use strict validation
+            if (len(word_lower) >= 7 and 
                 word_lower.isalpha() and 
                 word_lower.islower() and
                 not is_likely_word(word_lower, strict=True)):  # Not a valid single word (strict check)
