@@ -1045,14 +1045,7 @@ GENERATION PROCESS:
 3. Generate a text that complements the visual
 4. Ensure it's unique (not repeating recent texts)
 5. Verify it matches calm confidence tone
-
-CRITICAL SPELLING REQUIREMENTS:
-- ALWAYS use proper spacing between words
-- "with skin" NOT "withnskin" or "withn skin"
-- "in skin" NOT "innskin" or "in nskin"
-- "your skin" NOT "yournskin" or "yourn skin"
-- "quiet authority" NOT "quietnauthority"
-- Double-check all prepositions (with, in, on, for, to, your) have proper spacing before "skin"
+6. VALIDATE spacing using the checklist above - this is MANDATORY
 
 Return ONLY the text overlay (no explanations, no quotes, just the text).
 The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined skincare, not complicated. | Elevate your skin. | Clear skin, quiet confidence."""
