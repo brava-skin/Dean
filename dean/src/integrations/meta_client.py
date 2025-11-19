@@ -2086,17 +2086,20 @@ class MetaClient:
         }
         
         if image_hashes:
-            image_data["image_hash"] = image_hashes[0]
             if len(image_hashes) > 1:
-                # Meta requires each child_attachment to have its own CTA link
+                # When using multiple images, ALL images must be in child_attachments
+                # The main link_data should NOT have image_hash when using child_attachments
                 image_data["child_attachments"] = [
                     {
                         "image_hash": h,
                         "call_to_action": {"type": _s(call_to_action or "SHOP_NOW"), "value": {"link": final_link_url}}
-                    } for h in image_hashes[1:]
+                    } for h in image_hashes
                 ]
-                # When using child_attachments, the main link_data MUST also have a CTA
+                # Main link_data still needs CTA for the overall creative
                 image_data["call_to_action"] = {"type": _s(call_to_action or "SHOP_NOW"), "value": {"link": final_link_url}}
+            else:
+                # Single image - use image_hash in main link_data
+                image_data["image_hash"] = image_hashes[0]
         elif final_image_url.startswith("http"):
             try:
                 import requests
