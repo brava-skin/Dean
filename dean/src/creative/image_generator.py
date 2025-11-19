@@ -1176,8 +1176,8 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
             # Check against common words
             if word_lower in common_words:
                 return True
-            # For long words (8+ chars), be strict - only accept if in common_words
-            if len(word_lower) >= 8:
+            # For long words (7+ chars), be strict - only accept if in common_words
+            if len(word_lower) >= 7:
                 if strict:
                     return False  # Not in common_words, reject
                 # For non-strict mode, still check if it's a valid word structure
@@ -1233,75 +1233,50 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
                 
                 # Also try removing extra letters between words
                 # Check if there's an extra letter at or near the split point
-                if split_pos < len(merged_lower) - 1:
-                    for extra in extra_letters:
-                        # Try: word1 ends with extra, word2 starts after extra (e.g., "innskin" -> "in" + "skin")
-                        if (split_pos > 2 and
-                            merged_lower[split_pos-1:split_pos] == extra):
-                            word1_no_extra = merged_lower[:split_pos-1]
-                            word2_after_extra = merged_lower[split_pos:]
-                            
-                            if is_likely_word(word1_no_extra) and is_likely_word(word2_after_extra):
-                                score = 0
-                                if word1_no_extra in common_words:
-                                    score += 2
-                                if word2_after_extra in common_words:
-                                    score += 2
-                                score += 3  # Bonus for removing extra letter
-                                
-                                if score > best_score:
-                                    best_score = score
-                                    if merged[0].isupper():
-                                        word1_capitalized = word1_no_extra.capitalize()
-                                    else:
-                                        word1_capitalized = word1_no_extra
-                                    best_split = f"{word1_capitalized} {word2_after_extra}"
+                for extra in extra_letters:
+                    # Try: word2 starts with extra letter (remove it) - e.g., "innskin" at pos 2 -> "in" + "nskin" -> "in" + "skin"
+                    if (split_pos < len(merged_lower) - 1 and
+                        merged_lower[split_pos:split_pos+1] == extra):
+                        word1_normal = merged_lower[:split_pos]
+                        word2_no_extra = merged_lower[split_pos+1:]
                         
-                        # Try: word1 ends normally, word2 starts with extra (remove it)
-                        if (split_pos < len(merged_lower) - 2 and
-                            merged_lower[split_pos:split_pos+1] == extra):
-                            word1_normal = merged_lower[:split_pos]
-                            word2_no_extra = merged_lower[split_pos+1:]
+                        if is_likely_word(word1_normal) and is_likely_word(word2_no_extra):
+                            score = 0
+                            if word1_normal in common_words:
+                                score += 2
+                            if word2_no_extra in common_words:
+                                score += 2
+                            score += 3  # Bonus for removing extra letter
                             
-                            if is_likely_word(word1_normal) and is_likely_word(word2_no_extra):
-                                score = 0
-                                if word1_normal in common_words:
-                                    score += 2
-                                if word2_no_extra in common_words:
-                                    score += 2
-                                score += 3  # Bonus for removing extra letter
-                                
-                                if score > best_score:
-                                    best_score = score
-                                    if merged[0].isupper():
-                                        word1_capitalized = word1_normal.capitalize()
-                                    else:
-                                        word1_capitalized = word1_normal
-                                    best_split = f"{word1_capitalized} {word2_no_extra}"
+                            if score > best_score:
+                                best_score = score
+                                if merged[0].isupper():
+                                    word1_capitalized = word1_normal.capitalize()
+                                else:
+                                    word1_capitalized = word1_normal
+                                best_split = f"{word1_capitalized} {word2_no_extra}"
+                    
+                    # Try: word1 ends with extra letter (remove it) - e.g., "quietnpresence" -> "quiet" + "presence"
+                    if (split_pos > 1 and
+                        merged_lower[split_pos-1:split_pos] == extra):
+                        word1_no_extra = merged_lower[:split_pos-1]
+                        word2_after = merged_lower[split_pos:]
                         
-                        # Try: extra letter is between words (e.g., "innskin" -> "in" + "n" + "skin")
-                        # Split before and after the extra letter
-                        if (split_pos > 1 and split_pos < len(merged_lower) - 1 and
-                            merged_lower[split_pos:split_pos+1] == extra):
-                            # Try splitting before the extra letter
-                            word1_before = merged_lower[:split_pos]
-                            word2_after = merged_lower[split_pos+1:]
+                        if is_likely_word(word1_no_extra) and is_likely_word(word2_after):
+                            score = 0
+                            if word1_no_extra in common_words:
+                                score += 2
+                            if word2_after in common_words:
+                                score += 2
+                            score += 3  # Bonus for removing extra letter
                             
-                            if is_likely_word(word1_before) and is_likely_word(word2_after):
-                                score = 0
-                                if word1_before in common_words:
-                                    score += 2
-                                if word2_after in common_words:
-                                    score += 2
-                                score += 3  # Bonus for removing extra letter
-                                
-                                if score > best_score:
-                                    best_score = score
-                                    if merged[0].isupper():
-                                        word1_capitalized = word1_before.capitalize()
-                                    else:
-                                        word1_capitalized = word1_before
-                                    best_split = f"{word1_capitalized} {word2_after}"
+                            if score > best_score:
+                                best_score = score
+                                if merged[0].isupper():
+                                    word1_capitalized = word1_no_extra.capitalize()
+                                else:
+                                    word1_capitalized = word1_no_extra
+                                best_split = f"{word1_capitalized} {word2_after}"
             
             # Return best split found, or original if none found
             return best_split if best_split else merged
