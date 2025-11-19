@@ -2089,13 +2089,15 @@ class MetaClient:
             if len(image_hashes) > 1:
                 # When using multiple images, ALL images must be in child_attachments
                 # The main link_data should NOT have image_hash when using child_attachments
+                # Each child_attachment MUST have: image_hash, link, and call_to_action
                 image_data["child_attachments"] = [
                     {
                         "image_hash": h,
+                        "link": final_link_url,  # REQUIRED: Each child attachment needs its own link
                         "call_to_action": {"type": _s(call_to_action or "SHOP_NOW"), "value": {"link": final_link_url}}
                     } for h in image_hashes
                 ]
-                # Main link_data still needs CTA for the overall creative
+                # Main link_data still needs CTA and link for the overall creative
                 image_data["call_to_action"] = {"type": _s(call_to_action or "SHOP_NOW"), "value": {"link": final_link_url}}
             else:
                 # Single image - use image_hash in main link_data
