@@ -2080,8 +2080,8 @@ class MetaClient:
         # Get the final link URL for CTA
         final_link_url = _s(final_link) if final_link else os.getenv("SHOPIFY_STORE_URL", "https://bravaskin.com/products/elixir-to-milk-cleanse")
         
+        # Initialize link_data - structure depends on whether we use child_attachments
         image_data: Dict[str, Any] = {
-            "message": _s(primary_text),
             "link": final_link_url,
         }
         
@@ -2161,15 +2161,19 @@ class MetaClient:
         
         if has_child_attachments:
             # For carousel/multi-image creatives: add text to each child attachment
-            # Main link_data should only have link and call_to_action
+            # Main link_data should only have link and call_to_action (no message, name, description)
             for child in image_data["child_attachments"]:
+                if primary_text:
+                    child["message"] = _s(primary_text)  # Each child gets the message
                 if headline:
                     child["name"] = _s(headline)[:100]
                 if description:
                     child["description"] = _s(description)[:150]
                 # Each child already has link and call_to_action from above
         else:
-            # Single image: add text fields to main link_data
+            # Single image: add all text fields to main link_data
+            if primary_text:
+                image_data["message"] = _s(primary_text)
             if headline:
                 image_data["name"] = _s(headline)[:100]
             
