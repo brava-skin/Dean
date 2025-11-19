@@ -1161,6 +1161,8 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
             (r'yourn\s+skin', 'your skin'),
             (r'quietnauthority', 'quiet authority'),
             (r'quietn\s+authority', 'quiet authority'),
+            (r'quietnpresence', 'quiet presence'),  # Added: fixes "quietnpresence"
+            (r'quietn\s+presence', 'quiet presence'),  # Added: fixes "quietn presence"
             (r'beginswith', 'begins with'),
             (r'begins\s+with', 'begins with'),
             (r'showsin', 'shows in'),
@@ -1187,6 +1189,7 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
             (r'\b(in)(skin)\b', r'\1 \2'),
             (r'\b(your)(skin)\b', r'\1 \2'),
             (r'\b(quiet)(authority)\b', r'\1 \2'),
+            (r'\b(quiet)(presence)\b', r'\1 \2'),  # Added: fixes "quietpresence"
             (r'\b(begins)(with)\b', r'\1 \2'),
             (r'\b(shows)(in)\b', r'\1 \2'),
             (r'\b(refines)(your)\b', r'\1 \2'),

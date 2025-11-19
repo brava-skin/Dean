@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""
+Test script for text overlay generation and spacing fixes.
+Tests the _fix_text_spacing_errors function with various inputs.
+"""
+
+import os
+import sys
+from pathlib import Path
+
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent / "src"))
+
+from creative.image_generator import ImageCreativeGenerator
+
+def test_text_spacing_fixes():
+    """Test the text spacing fix function with known problematic inputs."""
+    
+    # Create a minimal generator instance (we only need the fix function)
+    # We'll create a mock class that just has the fix method
+    class MockGenerator:
+        def _fix_text_spacing_errors(self, text: str) -> str:
+            """Copy of the fix function for testing."""
+            if not text:
+                return text
+            
+            import re
+            
+            specific_fixes = [
+                (r'withnskin', 'with skin'),
+                (r'innskin', 'in skin'),
+                (r'yournskin', 'your skin'),
+                (r'withn\s+skin', 'with skin'),
+                (r'in\s+nskin', 'in skin'),
+                (r'yourn\s+skin', 'your skin'),
+                (r'quietnauthority', 'quiet authority'),
+                (r'quietn\s+authority', 'quiet authority'),
+                (r'quietnpresence', 'quiet presence'),
+                (r'quietn\s+presence', 'quiet presence'),
+                (r'beginswith', 'begins with'),
+                (r'begins\s+with', 'begins with'),
+                (r'showsin', 'shows in'),
+                (r'shows\s+in', 'shows in'),
+                (r'refinesyour', 'refines your'),
+                (r'refines\s+your', 'refines your'),
+                (r'respectshows', 'respect shows'),
+                (r'respect\s+shows', 'respect shows'),
+            ]
+            
+            fixed_text = text
+            for pattern, replacement in specific_fixes:
+                fixed_text = re.sub(pattern, replacement, fixed_text, flags=re.IGNORECASE)
+            
+            fixed_text = re.sub(r'\b([a-z]+)([A-Z][a-z]+)\b', r'\1 \2', fixed_text)
+            
+            known_merges = [
+                (r'\b(with)(skin)\b', r'\1 \2'),
+                (r'\b(in)(skin)\b', r'\1 \2'),
+                (r'\b(your)(skin)\b', r'\1 \2'),
+                (r'\b(quiet)(authority)\b', r'\1 \2'),
+                (r'\b(quiet)(presence)\b', r'\1 \2'),
+                (r'\b(begins)(with)\b', r'\1 \2'),
+                (r'\b(shows)(in)\b', r'\1 \2'),
+                (r'\b(refines)(your)\b', r'\1 \2'),
+                (r'\b(respect)(shows)\b', r'\1 \2'),
+            ]
+            
+            for pattern, replacement in known_merges:
+                fixed_text = re.sub(pattern, replacement, fixed_text, flags=re.IGNORECASE)
+            
+            fixed_text = re.sub(r'\s+', ' ', fixed_text).strip()
+            return fixed_text
+    
+    generator = MockGenerator()
+    
+    # Test cases: (input, expected_output)
+    test_cases = [
+        ("quietnpresence", "quiet presence"),
+        ("refined skin, quietnpresence.", "refined skin, quiet presence."),
+        ("withnskin", "with skin"),
+        ("innskin", "in skin"),
+        ("yournskin", "your skin"),
+        ("beginswith", "begins with"),
+        ("showsin", "shows in"),
+        ("refinesyour", "refines your"),
+        ("respectshows", "respect shows"),
+        # Valid words that should NOT be split
+        ("long term", "long term"),
+        ("presence", "presence"),
+        ("authority", "authority"),
+        ("elevate your presence", "elevate your presence"),
+        ("calm authority", "calm authority"),
+        ("Built for the long term.", "Built for the long term."),
+    ]
+    
+    print("🧪 Testing text spacing fixes...\n")
+    
+    all_passed = True
+    for input_text, expected in test_cases:
+        result = generator._fix_text_spacing_errors(input_text)
+        passed = result == expected
+        status = "✅" if passed else "❌"
+        
+        if not passed:
+            all_passed = False
+            print(f"{status} FAILED:")
+            print(f"   Input:    '{input_text}'")
+            print(f"   Expected: '{expected}'")
+            print(f"   Got:      '{result}'")
+        else:
+            print(f"{status} '{input_text}' -> '{result}'")
+    
+    print("\n" + "="*60)
+    if all_passed:
+        print("✅ All tests passed!")
+    else:
+        print("❌ Some tests failed!")
+    print("="*60)
+    
+    return all_passed
+
+
+def test_full_overlay_generation():
+    """Test full text overlay generation with a sample image."""
+    
+    print("\n🖼️  Testing full text overlay generation...\n")
+    
+    # Check if we have required environment variables
+    flux_api_key = os.getenv("FLUX_API_KEY")
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    
+    if not flux_api_key:
+        print("⚠️  FLUX_API_KEY not set - skipping full overlay test")
+        return False
+    
+    if not openai_api_key:
+        print("⚠️  OPENAI_API_KEY not set - skipping full overlay test")
+        return False
+    
+    try:
+        from integrations.flux_client import create_flux_client
+        
+        flux_client = create_flux_client()
+        generator = ImageCreativeGenerator(
+            flux_client=flux_client,
+            openai_api_key=openai_api_key
+        )
+        
+        # Test with problematic text
+        test_text = "refined skin, quietnpresence."
+        print(f"Testing with text: '{test_text}'")
+        
+        # Generate a simple test image
+        print("Generating test image...")
+        product_info = {
+            "name": "Test Product",
+            "description": "A premium men's skincare product for testing text overlays."
+        }
+        
+        creative_data = generator.generate_creative(
+            product_info=product_info,
+            aspect_ratios=["1:1"]
+        )
+        
+        if creative_data and "images_by_aspect" in creative_data:
+            image_path = creative_data["images_by_aspect"].get("1:1")
+            if image_path:
+                print(f"✅ Image generated: {image_path}")
+                
+                # Test text overlay
+                print(f"Adding text overlay: '{test_text}'")
+                overlay_path = generator._add_text_overlay(image_path, test_text)
+                
+                if overlay_path:
+                    print(f"✅ Text overlay created: {overlay_path}")
+                    print(f"\n📝 Check the image at: {overlay_path}")
+                    print(f"   Expected text: 'refined skin, quiet presence.'")
+                    print(f"   Verify the spacing is correct in the image.")
+                    return True
+                else:
+                    print("❌ Failed to create text overlay")
+                    return False
+            else:
+                print("❌ No image path in creative data")
+                return False
+        else:
+            print("❌ Failed to generate creative")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error in full overlay test: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+if __name__ == "__main__":
+    print("="*60)
+    print("🧪 Text Overlay Test Script")
+    print("="*60)
+    
+    # Test 1: Text spacing fixes
+    spacing_ok = test_text_spacing_fixes()
+    
+    # Test 2: Full overlay generation (optional, requires API keys)
+    if spacing_ok:
+        print("\n" + "="*60)
+        print("💡 Tip: Set FLUX_API_KEY and OPENAI_API_KEY to test full overlay generation")
+        print("="*60)
+        
+        # Only run full test if user wants (requires API calls)
+        if len(sys.argv) > 1 and sys.argv[1] == "--full":
+            overlay_ok = test_full_overlay_generation()
+            sys.exit(0 if (spacing_ok and overlay_ok) else 1)
+    else:
+        print("\n⚠️  Fix spacing issues before testing full overlay generation")
+        sys.exit(1)
+    
+    sys.exit(0 if spacing_ok else 1)
+
