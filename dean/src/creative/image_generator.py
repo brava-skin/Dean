@@ -1008,6 +1008,14 @@ GENERATION PROCESS:
 4. Ensure it's unique (not repeating recent texts)
 5. Verify it matches calm confidence tone
 
+CRITICAL SPELLING REQUIREMENTS:
+- ALWAYS use proper spacing between words
+- "with skin" NOT "withnskin" or "withn skin"
+- "in skin" NOT "innskin" or "in nskin"
+- "your skin" NOT "yournskin" or "yourn skin"
+- "quiet authority" NOT "quietnauthority"
+- Double-check all prepositions (with, in, on, for, to, your) have proper spacing before "skin"
+
 Return ONLY the text overlay (no explanations, no quotes, just the text).
 The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined skincare, not complicated. | Elevate your skin. | Clear skin, quiet confidence."""
 
@@ -1115,8 +1123,10 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
         specific_fixes = [
             (r'withnskin', 'with skin'),
             (r'innskin', 'in skin'),
+            (r'yournskin', 'your skin'),
             (r'withn\s+skin', 'with skin'),
             (r'in\s+nskin', 'in skin'),
+            (r'yourn\s+skin', 'your skin'),
             (r'quietnauthority', 'quiet authority'),
             (r'quietn\s+authority', 'quiet authority'),
         ]
@@ -1136,7 +1146,8 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
             'presence', 'quality', 'purpose', 'strength', 'confidence', 'excellence',
             'with', 'in', 'on', 'for', 'to', 'at', 'by', 'of', 'the', 'a', 'an',
             'seen', 'starts', 'builds', 'elevate', 'refined', 'consistent',
-            'withn',  # Common typo: "withn" instead of "with"
+            'shows', 'refines', 'your',  # Common words that might merge with "skin"
+            'withn', 'yourn',  # Common typos: "withn" instead of "with", "yourn" instead of "your"
         ]
         common_second_words = [
             'authority', 'skin', 'confidence', 'presence', 'discipline', 'excellence',
