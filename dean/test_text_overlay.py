@@ -16,62 +16,22 @@ from creative.image_generator import ImageCreativeGenerator
 def test_text_spacing_fixes():
     """Test the text spacing fix function with known problematic inputs."""
     
-    # Create a minimal generator instance (we only need the fix function)
-    # We'll create a mock class that just has the fix method
-    class MockGenerator:
-        def _fix_text_spacing_errors(self, text: str) -> str:
-            """Copy of the fix function for testing."""
-            if not text:
-                return text
-            
-            import re
-            
-            specific_fixes = [
-                (r'withnskin', 'with skin'),
-                (r'innskin', 'in skin'),
-                (r'yournskin', 'your skin'),
-                (r'withn\s+skin', 'with skin'),
-                (r'in\s+nskin', 'in skin'),
-                (r'yourn\s+skin', 'your skin'),
-                (r'quietnauthority', 'quiet authority'),
-                (r'quietn\s+authority', 'quiet authority'),
-                (r'quietnpresence', 'quiet presence'),
-                (r'quietn\s+presence', 'quiet presence'),
-                (r'beginswith', 'begins with'),
-                (r'begins\s+with', 'begins with'),
-                (r'showsin', 'shows in'),
-                (r'shows\s+in', 'shows in'),
-                (r'refinesyour', 'refines your'),
-                (r'refines\s+your', 'refines your'),
-                (r'respectshows', 'respect shows'),
-                (r'respect\s+shows', 'respect shows'),
-            ]
-            
-            fixed_text = text
-            for pattern, replacement in specific_fixes:
-                fixed_text = re.sub(pattern, replacement, fixed_text, flags=re.IGNORECASE)
-            
-            fixed_text = re.sub(r'\b([a-z]+)([A-Z][a-z]+)\b', r'\1 \2', fixed_text)
-            
-            known_merges = [
-                (r'\b(with)(skin)\b', r'\1 \2'),
-                (r'\b(in)(skin)\b', r'\1 \2'),
-                (r'\b(your)(skin)\b', r'\1 \2'),
-                (r'\b(quiet)(authority)\b', r'\1 \2'),
-                (r'\b(quiet)(presence)\b', r'\1 \2'),
-                (r'\b(begins)(with)\b', r'\1 \2'),
-                (r'\b(shows)(in)\b', r'\1 \2'),
-                (r'\b(refines)(your)\b', r'\1 \2'),
-                (r'\b(respect)(shows)\b', r'\1 \2'),
-            ]
-            
-            for pattern, replacement in known_merges:
-                fixed_text = re.sub(pattern, replacement, fixed_text, flags=re.IGNORECASE)
-            
-            fixed_text = re.sub(r'\s+', ' ', fixed_text).strip()
-            return fixed_text
-    
-    generator = MockGenerator()
+    # Use the actual implementation instead of a mock
+    # Create a minimal generator instance
+    try:
+        # Try to create with None clients (will fail, but we can work around it)
+        generator = ImageCreativeGenerator.__new__(ImageCreativeGenerator)
+        # Set minimal attributes needed
+        generator.flux_client = None
+    except Exception as e:
+        print(f"Warning: Could not create generator: {e}")
+        # Fallback: import and call the function directly
+        from creative.image_generator import ImageCreativeGenerator
+        # Create a dummy instance
+        class DummyFlux:
+            pass
+        generator = ImageCreativeGenerator.__new__(ImageCreativeGenerator)
+        generator.flux_client = None
     
     # Test cases: (input, expected_output)
     # Testing both known issues and NEW merged words (not in patterns)

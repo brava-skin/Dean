@@ -1159,20 +1159,31 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
             'excellence', 'quality', 'strength', 'care', 'routine', 'detail',
             'living', 'baseline', 'clear', 'premium', 'consistent', 'purpose',
             'shows', 'begins', 'refines', 'respect', 'practice', 'daily',
-            'elevate', 'your', 'presence', 'authority', 'quiet', 'calm'
+            'elevate', 'your', 'presence', 'authority', 'quiet', 'calm',
+            'confidence', 'routine', 'quality', 'strength', 'premium'
         }
         
-        def is_likely_word(word: str) -> bool:
-            """Check if a string is likely a valid English word."""
+        def is_likely_word(word: str, strict: bool = False) -> bool:
+            """Check if a string is likely a valid English word.
+            
+            Args:
+                word: The word to check
+                strict: If True, only accept words in common_words (for long words)
+            """
             word_lower = word.lower().strip()
             if not word_lower or len(word_lower) < 2:
                 return False
             # Check against common words
             if word_lower in common_words:
                 return True
-            # Check if it looks like a word (has vowels, reasonable length)
-            if len(word_lower) > 15:  # Too long to be a single word
-                return False
+            # For long words (8+ chars), be strict - only accept if in common_words
+            if len(word_lower) >= 8:
+                if strict:
+                    return False  # Not in common_words, reject
+                # For non-strict mode, still check if it's a valid word structure
+                # But be more conservative
+                if len(word_lower) > 12:  # Very long words are likely merged
+                    return False
             # Simple heuristic: has vowels and consonants
             has_vowel = any(c in 'aeiou' for c in word_lower)
             has_consonant = any(c in 'bcdfghjklmnpqrstvwxyz' for c in word_lower)
@@ -1183,25 +1194,41 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
             merged_lower = merged.lower()
             
             # Try splitting at different positions
-            # Start from the middle and work outward
-            mid = len(merged_lower) // 2
+            # Minimum 2 chars per word, try all possible splits
+            best_split = None
+            best_score = 0
             
-            # Try splits from position 3 to len-3 (minimum 3 chars per word)
-            for split_pos in range(3, len(merged_lower) - 2):
+            for split_pos in range(2, len(merged_lower) - 1):
                 word1 = merged_lower[:split_pos]
                 word2 = merged_lower[split_pos:]
                 
                 # Check if both parts look like words
-                if is_likely_word(word1) and is_likely_word(word2):
-                    # Preserve original capitalization for first word
-                    if merged[0].isupper():
-                        word1_capitalized = word1.capitalize()
-                    else:
-                        word1_capitalized = word1
-                    return f"{word1_capitalized} {word2}"
+                word1_valid = is_likely_word(word1)
+                word2_valid = is_likely_word(word2)
+                
+                if word1_valid and word2_valid:
+                    # Score this split (prefer splits where both words are in common_words)
+                    score = 0
+                    if word1 in common_words:
+                        score += 2
+                    if word2 in common_words:
+                        score += 2
+                    if word1_valid:
+                        score += 1
+                    if word2_valid:
+                        score += 1
+                    
+                    if score > best_score:
+                        best_score = score
+                        # Preserve original capitalization for first word
+                        if merged[0].isupper():
+                            word1_capitalized = word1.capitalize()
+                        else:
+                            word1_capitalized = word1
+                        best_split = f"{word1_capitalized} {word2}"
             
-            # If no good split found, return original
-            return merged
+            # Return best split found, or original if none found
+            return best_split if best_split else merged
         
         # First, fix clear capitalization boundaries (word1Word2 -> word1 Word2)
         fixed_text = re.sub(r'\b([a-z]+)([A-Z][a-z]+)\b', r'\1 \2', text)
@@ -1217,10 +1244,11 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
             word_lower = word_clean.lower()
             
             # Check if this looks like a merged word (long, all lowercase, no obvious word boundary)
+            # For long words (8+ chars), use strict validation
             if (len(word_lower) >= 8 and 
                 word_lower.isalpha() and 
                 word_lower.islower() and
-                not is_likely_word(word_lower)):  # Not a valid single word
+                not is_likely_word(word_lower, strict=True)):  # Not a valid single word (strict check)
                 
                 # Try to split it
                 split_result = split_merged_word(word_clean)
