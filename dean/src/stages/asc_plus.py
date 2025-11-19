@@ -2554,7 +2554,7 @@ def _create_meta_creative(
     """Create a Meta image creative via API.
     
     Returns:
-        Tuple of (meta_creative_id, instagram_actor_id) or (None, None) on failure.
+        Tuple of (meta_creative_id, instagram_user_id) or (None, None) on failure.
     """
     if not page_id or not page_id.strip():
         logger.error("Invalid page_id for creative creation: page_id=%s", page_id)
@@ -2562,18 +2562,18 @@ def _create_meta_creative(
     supabase_storage_url = creative_data.get("supabase_storage_url")
     image_path = creative_data.get("image_path")
     
-    env_instagram_actor_id = os.getenv("IG_ACTOR_ID")
-    instagram_actor_id = env_instagram_actor_id or client.get_instagram_actor_id(page_id)
+    env_instagram_user_id = os.getenv("IG_ACTOR_ID")  # Environment variable name kept for backward compatibility
+    instagram_user_id = env_instagram_user_id or client.get_instagram_actor_id(page_id)  # Method name kept for backward compatibility
     
-    if instagram_actor_id:
+    if instagram_user_id:
         try:
-            int(instagram_actor_id)
+            int(instagram_user_id)
         except (ValueError, TypeError):
-            logger.warning(f"Invalid Instagram actor ID format: {instagram_actor_id}. Will skip Instagram placements.")
-            instagram_actor_id = None
+            logger.warning(f"Invalid Instagram user ID format: {instagram_user_id}. Will skip Instagram placements.")
+            instagram_user_id = None
     
-    if not instagram_actor_id:
-        logger.debug("Instagram actor ID unavailable; creative will not run on Instagram placements unless the page is linked.")
+    if not instagram_user_id:
+        logger.debug("Instagram user ID unavailable; creative will not run on Instagram placements unless the page is linked.")
     
     primary_text = _sanitize_primary_text(ad_copy_dict.get("primary_text", ""))
     images_by_aspect = creative_data.get("images_by_aspect")
@@ -2591,15 +2591,15 @@ def _create_meta_creative(
             headline=ad_copy_dict.get("headline", ""),
             description=ad_copy_dict.get("description", ""),
             call_to_action=CALL_TO_ACTION_SHOP_NOW,
-            instagram_actor_id=instagram_actor_id,
+            instagram_user_id=instagram_user_id,
             creative_id=storage_creative_id,
         )
         logger.info(f"Meta API create_image_creative response: {creative}")
-        return creative.get("id"), instagram_actor_id
+        return creative.get("id"), instagram_user_id
     except Exception as e:
         error_str = str(e)
-        if instagram_actor_id and "instagram_actor_id" in error_str.lower():
-            logger.warning("Meta creative creation failed due to instagram_actor_id (%s). Retrying without Instagram placements.", error_str)
+        if instagram_user_id and ("instagram_actor_id" in error_str.lower() or "instagram_user_id" in error_str.lower()):
+            logger.warning("Meta creative creation failed due to Instagram user ID (%s). Retrying without Instagram placements.", error_str)
             try:
                 creative = client.create_image_creative(
                     page_id=page_id,
@@ -2612,14 +2612,14 @@ def _create_meta_creative(
                     headline=ad_copy_dict.get("headline", ""),
                     description=ad_copy_dict.get("description", ""),
                     call_to_action=CALL_TO_ACTION_SHOP_NOW,
-                    instagram_actor_id=None,
+                    instagram_user_id=None,
                     use_env_instagram_actor=False,
                     creative_id=storage_creative_id,
                 )
-                logger.info("Meta API create_image_creative succeeded without instagram_actor_id. Creative will run on Facebook placements only.")
+                logger.info("Meta API create_image_creative succeeded without Instagram user ID. Creative will run on Facebook placements only.")
                 return creative.get("id"), None
             except Exception as retry_exc:
-                logger.error("Meta API create_image_creative retry without instagram_actor_id failed: %s", retry_exc, exc_info=True)
+                logger.error("Meta API create_image_creative retry without Instagram user ID failed: %s", retry_exc, exc_info=True)
                 return None, None
         else:
             logger.error(f"Meta API create_image_creative failed: {e}", exc_info=True)
@@ -2631,12 +2631,19 @@ def _create_meta_ad(
     adset_id: str,
     meta_creative_id: str,
     ad_name: str,
-    instagram_actor_id: Optional[str],
+    instagram_user_id: Optional[str],
 ) -> Optional[str]:
     """Create a Meta ad via API.
     
+    Args:
+        client: MetaClient instance.
+        adset_id: Adset ID.
+        meta_creative_id: Creative ID from Meta.
+        ad_name: Name for the ad.
+        instagram_user_id: Instagram user ID (optional).
+    
     Returns:
-        Ad ID string on success, None on failure.
+        Ad ID if successful, None otherwise.
     """
     if not adset_id or not adset_id.strip():
         logger.error("Invalid adset_id for ad creation: adset_id=%s", adset_id)
@@ -2645,7 +2652,7 @@ def _create_meta_ad(
         logger.error("Invalid meta_creative_id for ad creation: meta_creative_id=%s", meta_creative_id)
         return None
     
-    logger.info("Creating ad with name='%s', adset_id='%s', creative_id='%s', instagram_actor_id=%s", ad_name, adset_id, meta_creative_id, bool(instagram_actor_id))
+    logger.info("Creating ad with name='%s', adset_id='%s', creative_id='%s', instagram_user_id=%s", ad_name, adset_id, meta_creative_id, bool(instagram_user_id))
     
     creative_id_str = str(meta_creative_id).strip()
     if not creative_id_str or not creative_id_str.isdigit():
@@ -2662,8 +2669,8 @@ def _create_meta_ad(
                 name=ad_name,
                 creative_id=creative_id_str,
                 status=STATUS_ACTIVE,
-                instagram_actor_id=instagram_actor_id,
-                use_env_instagram_actor=bool(instagram_actor_id),
+                instagram_user_id=instagram_user_id,
+                use_env_instagram_actor=bool(instagram_user_id),
                 tracking_specs=None,
             )
         
@@ -2678,8 +2685,8 @@ def _create_meta_ad(
                 name=ad_name,
                 creative_id=creative_id_str,
                 status=STATUS_ACTIVE,
-                instagram_actor_id=instagram_actor_id,
-                use_env_instagram_actor=bool(instagram_actor_id),
+                instagram_user_id=instagram_user_id,
+                use_env_instagram_actor=bool(instagram_user_id),
                 tracking_specs=None,
             )
             logger.info(f"Meta API create_ad response: {ad}")
@@ -2906,7 +2913,7 @@ def _create_creative_and_ad(
             logger.error("FB_PAGE_ID environment variable is required")
             return None, None, False
         
-        meta_creative_id, resolved_instagram_actor_id = _create_meta_creative(
+        meta_creative_id, resolved_instagram_user_id = _create_meta_creative(
             client, creative_data, storage_creative_id, creative_name, ad_copy_dict, page_id
         )
         
@@ -2920,7 +2927,7 @@ def _create_creative_and_ad(
         seq_num = active_count + created_count + 1
         ad_name = _generate_ad_name(date_str, headline, seq_num)
         
-        ad_id = _create_meta_ad(client, adset_id, str(meta_creative_id), ad_name, resolved_instagram_actor_id)
+        ad_id = _create_meta_ad(client, adset_id, str(meta_creative_id), ad_name, resolved_instagram_user_id)
         
         if not ad_id:
             return str(meta_creative_id), None, False

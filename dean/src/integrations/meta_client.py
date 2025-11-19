@@ -1978,7 +1978,7 @@ class MetaClient:
         call_to_action: str = "SHOP_NOW",
         link_url: Optional[str] = None,
         utm_params: Optional[str] = None,
-        instagram_actor_id: Optional[str] = None,
+        instagram_user_id: Optional[str] = None,
         use_env_instagram_actor: bool = True,
         creative_id: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -2046,8 +2046,8 @@ class MetaClient:
             raise ValueError("Either supabase_storage_url, image_url, image_path, or images_by_aspect with supabase_storage_urls must be provided.")
 
         final_link = _clean_story_link(link_url, utm_params)
-        if instagram_actor_id is not None:
-            ig_id = instagram_actor_id
+        if instagram_user_id is not None:
+            ig_id = instagram_user_id
         elif use_env_instagram_actor:
             ig_id = os.getenv("IG_ACTOR_ID") or None
         else:
@@ -2057,7 +2057,7 @@ class MetaClient:
             if not ig_id:
                 ig_id = None
             elif not ig_id.isdigit():
-                logger.warning(f"Invalid Instagram actor ID format (not numeric): {ig_id} - skipping")
+                logger.warning(f"Invalid Instagram user ID format (not numeric): {ig_id} - skipping")
                 ig_id = None
 
         if self.dry_run or not USE_SDK or not self.cfg.enable_creative_uploads:
@@ -2066,7 +2066,7 @@ class MetaClient:
                 "image_url": final_image_url,
             }
             if ig_id:
-                payload_preview["instagram_actor_id"] = ig_id
+                payload_preview["instagram_user_id"] = ig_id
             return {
                 "id": f"CR_{abs(hash(_s(name))) % 10_000_000}",
                 "name": _s(name),
@@ -2262,7 +2262,7 @@ class MetaClient:
         status: str = "PAUSED", 
         *, 
         original_ad_id: Optional[str] = None,
-        instagram_actor_id: Optional[str] = None,
+        instagram_user_id: Optional[str] = None,
         tracking_specs: Optional[List[Dict[str, Any]]] = None,
         use_env_instagram_actor: bool = True,
     ) -> Dict[str, Any]:
@@ -2281,8 +2281,8 @@ class MetaClient:
             "status": _s(status),
         }
         
-        if instagram_actor_id is not None:
-            ig_id = instagram_actor_id
+        if instagram_user_id is not None:
+            ig_id = instagram_user_id
         elif use_env_instagram_actor:
             ig_id = os.getenv("IG_ACTOR_ID") or None
         else:
@@ -2290,8 +2290,8 @@ class MetaClient:
         if ig_id:
             ig_id = str(ig_id).strip()
             if ig_id and ig_id.isdigit() and ig_id != "17841477094913251":
-                payload["instagram_actor_id"] = ig_id
-                logger.info(f"Adding Instagram actor ID at ad level: {ig_id}")
+                payload["instagram_actor_id"] = ig_id  # Note: Ad level still uses instagram_actor_id (not deprecated at ad level)
+                logger.info(f"Adding Instagram user ID at ad level: {ig_id}")
             else:
                 logger.warning(f"Invalid Instagram actor ID format: {ig_id} - skipping")
         
