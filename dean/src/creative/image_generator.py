@@ -1139,65 +1139,105 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
         return selected
     
     def _fix_text_spacing_errors(self, text: str) -> str:
-        """Fix common spacing errors in generated text overlays.
+        """Fix spacing errors in generated text overlays by intelligently detecting merged words.
         
-        Uses conservative pattern matching - only fixes known issues.
-        Does NOT split valid words.
+        Uses a general approach that detects merged words without requiring patterns.
+        Works by identifying likely word boundaries in merged text.
         """
         if not text:
             return text
         
         import re
         
-        # Fix ONLY specific known spacing errors (case-insensitive)
-        # These are the exact patterns we've seen in generated text
-        # DO NOT add general patterns that might split valid words
-        specific_fixes = [
-            (r'withnskin', 'with skin'),
-            (r'innskin', 'in skin'),
-            (r'yournskin', 'your skin'),
-            (r'withn\s+skin', 'with skin'),
-            (r'in\s+nskin', 'in skin'),
-            (r'yourn\s+skin', 'your skin'),
-            (r'quietnauthority', 'quiet authority'),
-            (r'quietn\s+authority', 'quiet authority'),
-            (r'quietnpresence', 'quiet presence'),  # Added: fixes "quietnpresence"
-            (r'quietn\s+presence', 'quiet presence'),  # Added: fixes "quietn presence"
-            (r'beginswith', 'begins with'),
-            (r'begins\s+with', 'begins with'),
-            (r'showsin', 'shows in'),
-            (r'shows\s+in', 'shows in'),
-            (r'refinesyour', 'refines your'),
-            (r'refines\s+your', 'refines your'),
-            (r'respectshows', 'respect shows'),
-            (r'respect\s+shows', 'respect shows'),
-        ]
+        # Common English words that appear frequently in our text overlays
+        # This helps us identify valid word boundaries
+        common_words = {
+            'with', 'in', 'on', 'for', 'to', 'at', 'by', 'of', 'the', 'a', 'an',
+            'your', 'skin', 'presence', 'authority', 'quiet', 'calm', 'refined',
+            'shows', 'begins', 'refines', 'respect', 'practice', 'daily',
+            'long', 'term', 'built', 'elevate', 'confidence', 'discipline',
+            'excellence', 'quality', 'strength', 'care', 'routine', 'detail',
+            'living', 'baseline', 'clear', 'premium', 'consistent', 'purpose',
+            'shows', 'begins', 'refines', 'respect', 'practice', 'daily',
+            'elevate', 'your', 'presence', 'authority', 'quiet', 'calm'
+        }
         
-        fixed_text = text
-        for pattern, replacement in specific_fixes:
-            fixed_text = re.sub(pattern, replacement, fixed_text, flags=re.IGNORECASE)
+        def is_likely_word(word: str) -> bool:
+            """Check if a string is likely a valid English word."""
+            word_lower = word.lower().strip()
+            if not word_lower or len(word_lower) < 2:
+                return False
+            # Check against common words
+            if word_lower in common_words:
+                return True
+            # Check if it looks like a word (has vowels, reasonable length)
+            if len(word_lower) > 15:  # Too long to be a single word
+                return False
+            # Simple heuristic: has vowels and consonants
+            has_vowel = any(c in 'aeiou' for c in word_lower)
+            has_consonant = any(c in 'bcdfghjklmnpqrstvwxyz' for c in word_lower)
+            return has_vowel and has_consonant
         
-        # CONSERVATIVE FIX: Only detect merged words with clear capitalization pattern
-        # This catches patterns like "word1Word2" -> "word1 Word2"
-        # This is safe because it only splits when there's a clear capital letter boundary
-        fixed_text = re.sub(r'\b([a-z]+)([A-Z][a-z]+)\b', r'\1 \2', fixed_text)
+        def split_merged_word(merged: str) -> str:
+            """Try to split a merged word into two words."""
+            merged_lower = merged.lower()
+            
+            # Try splitting at different positions
+            # Start from the middle and work outward
+            mid = len(merged_lower) // 2
+            
+            # Try splits from position 3 to len-3 (minimum 3 chars per word)
+            for split_pos in range(3, len(merged_lower) - 2):
+                word1 = merged_lower[:split_pos]
+                word2 = merged_lower[split_pos:]
+                
+                # Check if both parts look like words
+                if is_likely_word(word1) and is_likely_word(word2):
+                    # Preserve original capitalization for first word
+                    if merged[0].isupper():
+                        word1_capitalized = word1.capitalize()
+                    else:
+                        word1_capitalized = word1
+                    return f"{word1_capitalized} {word2}"
+            
+            # If no good split found, return original
+            return merged
         
-        # CONSERVATIVE FIX: Only fix known word combinations that are commonly merged
-        # Use a whitelist approach - only fix if we know it's a merge
-        known_merges = [
-            (r'\b(with)(skin)\b', r'\1 \2'),
-            (r'\b(in)(skin)\b', r'\1 \2'),
-            (r'\b(your)(skin)\b', r'\1 \2'),
-            (r'\b(quiet)(authority)\b', r'\1 \2'),
-            (r'\b(quiet)(presence)\b', r'\1 \2'),  # Added: fixes "quietpresence"
-            (r'\b(begins)(with)\b', r'\1 \2'),
-            (r'\b(shows)(in)\b', r'\1 \2'),
-            (r'\b(refines)(your)\b', r'\1 \2'),
-            (r'\b(respect)(shows)\b', r'\1 \2'),
-        ]
+        # First, fix clear capitalization boundaries (word1Word2 -> word1 Word2)
+        fixed_text = re.sub(r'\b([a-z]+)([A-Z][a-z]+)\b', r'\1 \2', text)
         
-        for pattern, replacement in known_merges:
-            fixed_text = re.sub(pattern, replacement, fixed_text, flags=re.IGNORECASE)
+        # Find potential merged words (sequences of lowercase letters, 8+ chars, no spaces)
+        # These are likely to be merged words
+        words = fixed_text.split()
+        result_words = []
+        
+        for word in words:
+            # Remove punctuation for analysis
+            word_clean = re.sub(r'[^\w]', '', word)
+            word_lower = word_clean.lower()
+            
+            # Check if this looks like a merged word (long, all lowercase, no obvious word boundary)
+            if (len(word_lower) >= 8 and 
+                word_lower.isalpha() and 
+                word_lower.islower() and
+                not is_likely_word(word_lower)):  # Not a valid single word
+                
+                # Try to split it
+                split_result = split_merged_word(word_clean)
+                if split_result != word_clean:
+                    # Restore punctuation
+                    punctuation = re.sub(r'[\w]', '', word)
+                    if word.endswith(punctuation):
+                        result_words.append(split_result + punctuation)
+                    elif word.startswith(punctuation):
+                        result_words.append(punctuation + split_result)
+                    else:
+                        result_words.append(split_result)
+                    continue
+            
+            result_words.append(word)
+        
+        fixed_text = ' '.join(result_words)
         
         # Clean up multiple spaces
         fixed_text = re.sub(r'\s+', ' ', fixed_text).strip()
