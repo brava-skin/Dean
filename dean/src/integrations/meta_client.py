@@ -2155,11 +2155,26 @@ class MetaClient:
         else:
             image_data["image_hash"] = _s(final_image_url)
         
-        if headline:
-            image_data["name"] = _s(headline)[:100]
+        # When using child_attachments, text fields should be in each child, not main link_data
+        # When using single image, text fields go in main link_data
+        has_child_attachments = "child_attachments" in image_data and image_data["child_attachments"]
         
-        if description:
-            image_data["description"] = _s(description)[:150]
+        if has_child_attachments:
+            # For carousel/multi-image creatives: add text to each child attachment
+            # Main link_data should only have link and call_to_action
+            for child in image_data["child_attachments"]:
+                if headline:
+                    child["name"] = _s(headline)[:100]
+                if description:
+                    child["description"] = _s(description)[:150]
+                # Each child already has link and call_to_action from above
+        else:
+            # Single image: add text fields to main link_data
+            if headline:
+                image_data["name"] = _s(headline)[:100]
+            
+            if description:
+                image_data["description"] = _s(description)[:150]
         
         # Always add CTA if not already present (required for child_attachments, good practice otherwise)
         if "call_to_action" not in image_data:
