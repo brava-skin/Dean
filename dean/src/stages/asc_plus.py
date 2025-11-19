@@ -3062,9 +3062,11 @@ def generate_new_creative(
     creative_index: int,
 ) -> Optional[Dict[str, Any]]:
     try:
+        # ASC+ campaigns require single image (1:1) only - don't waste credits on unused aspect ratios
         creative_data = image_generator.generate_creative(
             product_info=product_info,
             creative_style="Luxury, premium, sophisticated",
+            aspect_ratios=["1:1"],  # Only generate 1:1 for ASC+ campaigns
         )
         
         if not creative_data:

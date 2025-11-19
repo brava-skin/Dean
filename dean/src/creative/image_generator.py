@@ -318,6 +318,7 @@ class ImageCreativeGenerator:
         product_info: Dict[str, Any],
         creative_style: Optional[str] = None,
         advanced_ml: Optional[Any] = None,
+        aspect_ratios: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         if not product_info or not isinstance(product_info, dict):
             logger.error("Invalid product_info: must be a non-empty dictionary")
@@ -348,7 +349,9 @@ class ImageCreativeGenerator:
                 notify("❌ Failed to generate image prompt")
                 return None
             
-            aspect_ratios = ["1:1", "9:16", "16:9"]
+            # Default to all aspect ratios, but allow override (e.g., ["1:1"] for ASC+ campaigns)
+            if aspect_ratios is None:
+                aspect_ratios = ["1:1", "9:16", "16:9"]
             generated_images = {}
             
             for aspect_ratio in aspect_ratios:
@@ -1138,15 +1141,17 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
     def _fix_text_spacing_errors(self, text: str) -> str:
         """Fix common spacing errors in generated text overlays.
         
-        Uses aggressive pattern matching to catch all word merging issues.
+        Uses conservative pattern matching - only fixes known issues.
+        Does NOT split valid words.
         """
         if not text:
             return text
         
         import re
         
-        # Fix specific known spacing errors (case-insensitive)
+        # Fix ONLY specific known spacing errors (case-insensitive)
         # These are the exact patterns we've seen in generated text
+        # DO NOT add general patterns that might split valid words
         specific_fixes = [
             (r'withnskin', 'with skin'),
             (r'innskin', 'in skin'),
@@ -1170,71 +1175,26 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
         for pattern, replacement in specific_fixes:
             fixed_text = re.sub(pattern, replacement, fixed_text, flags=re.IGNORECASE)
         
-        # AGGRESSIVE FIX 1: Detect merged words (lowercase letter followed by uppercase letter)
+        # CONSERVATIVE FIX: Only detect merged words with clear capitalization pattern
         # This catches patterns like "word1Word2" -> "word1 Word2"
+        # This is safe because it only splits when there's a clear capital letter boundary
         fixed_text = re.sub(r'\b([a-z]+)([A-Z][a-z]+)\b', r'\1 \2', fixed_text)
         
-        # AGGRESSIVE FIX 2: Detect ANY lowercase word followed by another lowercase word without space
-        # Pattern: word ending in lowercase letter, followed immediately by lowercase letter (new word)
-        # This is more aggressive and catches patterns like "word1word2" -> "word1 word2"
-        # But we need to be careful not to split valid compound words
-        # We'll split if: word1 ends with common word endings AND word2 starts with common word beginnings
-        common_word_endings = ['s', 'n', 'd', 'e', 'y', 'r', 't', 'l', 'g', 'h', 'm', 'p', 'k']
-        common_word_beginnings = ['s', 'w', 'i', 'y', 't', 'b', 'r', 'c', 'p', 'd', 'f', 'g', 'h', 'l', 'm', 'n', 'v']
-        
-        # Pattern: word ending in common ending + word starting with common beginning (no space)
-        # This catches: "beginswith" -> "begins with", "showsin" -> "shows in", etc.
-        for ending in common_word_endings:
-            for beginning in common_word_beginnings:
-                # Match word boundary, word chars ending with 'ending', then word starting with 'beginning'
-                pattern = rf'\b([a-z]+{ending})({beginning}[a-z]+)\b'
-                fixed_text = re.sub(pattern, r'\1 \2', fixed_text, flags=re.IGNORECASE)
-        
-        # AGGRESSIVE FIX 3: Detect merged lowercase words using common word patterns
-        common_first_words = [
-            'quiet', 'clear', 'refined', 'calm', 'premium', 'consistent', 'discipline',
-            'presence', 'quality', 'purpose', 'strength', 'confidence', 'excellence',
-            'with', 'in', 'on', 'for', 'to', 'at', 'by', 'of', 'the', 'a', 'an',
-            'seen', 'starts', 'builds', 'elevate', 'refined', 'consistent',
-            'shows', 'refines', 'your', 'begins', 'respect', 'practice',
-            'withn', 'yourn',  # Common typos
-        ]
-        common_second_words = [
-            'authority', 'skin', 'confidence', 'presence', 'discipline', 'excellence',
-            'quality', 'strength', 'care', 'routine', 'detail', 'living', 'baseline',
-            'shows', 'begins', 'refines', 'your', 'in', 'with',
+        # CONSERVATIVE FIX: Only fix known word combinations that are commonly merged
+        # Use a whitelist approach - only fix if we know it's a merge
+        known_merges = [
+            (r'\b(with)(skin)\b', r'\1 \2'),
+            (r'\b(in)(skin)\b', r'\1 \2'),
+            (r'\b(your)(skin)\b', r'\1 \2'),
+            (r'\b(quiet)(authority)\b', r'\1 \2'),
+            (r'\b(begins)(with)\b', r'\1 \2'),
+            (r'\b(shows)(in)\b', r'\1 \2'),
+            (r'\b(refines)(your)\b', r'\1 \2'),
+            (r'\b(respect)(shows)\b', r'\1 \2'),
         ]
         
-        # Build patterns for common word merges
-        for first_word in common_first_words:
-            for second_word in common_second_words:
-                # Pattern: firstword + secondword (no space, case-insensitive)
-                pattern = rf'\b({first_word})({second_word})\b'
-                replacement = rf'\1 \2'
-                fixed_text = re.sub(pattern, replacement, fixed_text, flags=re.IGNORECASE)
-        
-        # AGGRESSIVE FIX 4: Fix common prepositions/articles that got merged with following words
-        common_prepositions = ['with', 'in', 'on', 'for', 'to', 'at', 'by', 'of']
-        common_articles = ['the', 'a', 'an']
-        known_following_words = common_second_words + ['skin', 'care', 'routine', 'detail', 'authority']
-        
-        for prep in common_prepositions + common_articles:
-            for following in known_following_words:
-                # Pattern: preposition/article + known word (no space)
-                pattern = rf'\b({prep})({following})\b'
-                fixed_text = re.sub(pattern, rf'\1 \2', fixed_text, flags=re.IGNORECASE)
-        
-        # AGGRESSIVE FIX 5: Split ANY two consecutive lowercase words that are merged
-        # This is a catch-all for any remaining merged words
-        # Pattern: word ending in lowercase letter, immediately followed by word starting with lowercase letter
-        # We'll be more conservative and only split if both words are at least 2 characters
-        fixed_text = re.sub(r'\b([a-z]{2,})([a-z]{2,})\b', lambda m: f"{m.group(1)} {m.group(2)}" if not any(compound in m.group(0).lower() for compound in ['skincare', 'lifestyle', 'baseline']) else m.group(0), fixed_text)
-        
-        # Preserve compound words that should stay together (like "skincare")
-        # Restore if accidentally split
-        fixed_text = re.sub(r'\b(\w+)\s+(skincare)\b', r'\1\2', fixed_text, flags=re.IGNORECASE)
-        fixed_text = re.sub(r'\b(lifestyle)\s+(\w+)\b', r'\1\2', fixed_text, flags=re.IGNORECASE)
-        fixed_text = re.sub(r'\b(baseline)\s+(\w+)\b', r'\1\2', fixed_text, flags=re.IGNORECASE)
+        for pattern, replacement in known_merges:
+            fixed_text = re.sub(pattern, replacement, fixed_text, flags=re.IGNORECASE)
         
         # Clean up multiple spaces
         fixed_text = re.sub(r'\s+', ' ', fixed_text).strip()
