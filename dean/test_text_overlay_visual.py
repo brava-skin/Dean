@@ -129,6 +129,17 @@ def calculate_font_size_and_wrap(
         mid = len(words) // 2
         wrapped_lines = [' '.join(words[:mid]), ' '.join(words[mid:])]
     
+    # CRITICAL FIX: Ensure space after punctuation in wrapped lines
+    # This prevents "living," from appearing without space before next line
+    import re
+    fixed_wrapped_lines = []
+    for line in wrapped_lines:
+        # Add space after comma/period if it's followed by a letter (shouldn't happen but safety)
+        # More importantly: ensure trailing punctuation has proper spacing
+        fixed_line = re.sub(r'([,\.!?;:])([a-zA-Z])', r'\1 \2', line)
+        fixed_wrapped_lines.append(fixed_line)
+    wrapped_lines = fixed_wrapped_lines
+    
     # TEST MODE: Use very small fixed font size to test if font size is causing issues
     if test_small_font:
         fontsize = 28  # Very small font to test
@@ -210,7 +221,9 @@ def add_text_overlay(
     print(f"  Longest line: {max(len(line) for line in wrapped_lines)} chars")
     
     # Escape text for FFmpeg
-    wrapped_text = "\\n".join(wrapped_lines)
+    # Use actual newline character, not "\\n" string, to avoid escaping issues
+    wrapped_text = "\n".join(wrapped_lines)  # Actual newline character
+    print(f"  🔍 DEBUG - After join with \\\\n: {repr(wrapped_text)}")
     
     # TEST DIFFERENT ESCAPING METHODS
     escape_method = os.getenv("FFMPEG_ESCAPE_METHOD", "1")

@@ -1805,6 +1805,17 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                 mid = len(words) // 2
                 wrapped_lines = [' '.join(words[:mid]), ' '.join(words[mid:])]
             
+            # CRITICAL FIX: Ensure space after punctuation in wrapped lines
+            # When words like "living," are joined, there's no space after the comma
+            # This can cause "living,daily" to appear in the rendered text
+            import re
+            fixed_wrapped_lines = []
+            for line in wrapped_lines:
+                # Add space after punctuation if followed by a letter (safety check)
+                fixed_line = re.sub(r'([,\.!?;:])([a-zA-Z])', r'\1 \2', line)
+                fixed_wrapped_lines.append(fixed_line)
+            wrapped_lines = fixed_wrapped_lines
+            
             # Calculate font size based on image width and longest line
             # Use 70% of image width as max text width (15% margin on each side)
             max_text_width = int(img_width * 0.70)
@@ -1819,7 +1830,8 @@ Ensure all text meets character limits and maintains calm confidence tone."""
             fontsize = max(36, min(56, estimated_fontsize))
             
             # Escape text for FFmpeg
-            wrapped_text = "\\n".join(wrapped_lines)
+            # Use actual newline character, not "\\n" string, to avoid escaping issues
+            wrapped_text = "\n".join(wrapped_lines)  # Actual newline character
             escaped_wrapped = wrapped_text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("[", "\\[").replace("]", "\\]")
             
             # Calculate positioning (centered, bottom with margin)
