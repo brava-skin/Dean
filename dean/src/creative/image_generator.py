@@ -1843,9 +1843,9 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                 escaped_line = line.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("[", "\\[").replace("]", "\\]")
                 
                 # Calculate y position: last line at bottom, previous lines above
-                # Lines are rendered bottom-up
-                line_offset = (len(wrapped_lines) - 1 - i) * (line_height - fontsize)
-                y_pos = f"h-th-{bottom_margin + line_offset}"
+                # Use full line_height to prevent overlap
+                y_offset = (len(wrapped_lines) - 1 - i) * line_height
+                y_pos = f"h-th-{bottom_margin + y_offset}"
                 
                 # Build drawtext filter for this line
                 line_filter = (
@@ -1893,8 +1893,9 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                 fallback_filters = []
                 for i, line in enumerate(wrapped_lines):
                     escaped_line = line.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("[", "\\[").replace("]", "\\]")
-                    line_offset = (len(wrapped_lines) - 1 - i) * (line_height - fontsize)
-                    y_pos = f"h-th-{bottom_margin + line_offset}"
+                    # Use full line_height to prevent overlap
+                    y_offset = (len(wrapped_lines) - 1 - i) * line_height
+                    y_pos = f"h-th-{bottom_margin + y_offset}"
                     
                     line_filter = (
                         f"drawtext=text='{escaped_line}'"
