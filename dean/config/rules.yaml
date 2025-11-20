@@ -30,7 +30,7 @@ asc_plus_atc:
     learning:
       max_learning_budget_eur: 150
     queue:
-      maintain_creative_count: 10
+      maintain_creative_count: 15
       max_creative_turnover_per_24h: 0.15
       new_creative_grace_hours: 36
     kill_window:

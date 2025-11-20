@@ -723,7 +723,7 @@ class CreativeStorageManager:
     def get_queued_creative_count(self) -> int:
         return 0
     
-    def should_pre_generate_creatives(self, target_count: int = 10, buffer_size: int = 3) -> bool:
+    def should_pre_generate_creatives(self, target_count: int = 15, buffer_size: int = 3) -> bool:
         queued_count = self.get_queued_creative_count()
         return queued_count < buffer_size
     

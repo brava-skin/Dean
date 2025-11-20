@@ -14,7 +14,7 @@ placements:
 
 asc_plus:
   daily_budget_eur: 100
-  target_active_ads: 10
+  target_active_ads: 15
   optimization_goal: "ADD_TO_CART"
   naming_prefix: "[ASC+]"
 

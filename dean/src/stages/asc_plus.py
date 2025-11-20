@@ -2994,7 +2994,7 @@ def ensure_asc_plus_campaign(
             notify(f"⚠️ ASC+ budget too high: €{daily_budget:.2f}. Capping at €{ASC_PLUS_BUDGET_MAX:.2f}")
             daily_budget = ASC_PLUS_BUDGET_MAX
         
-        target_ads = cfg(settings, "asc_plus.target_active_ads") or 10
+        target_ads = cfg(settings, "asc_plus.target_active_ads") or 15
         budget_per_creative = daily_budget / target_ads if target_ads > 0 else daily_budget
         min_budget_per_creative = cfg_or_env_f(asc_config, "min_budget_per_creative_eur", None, ASC_PLUS_MIN_BUDGET_PER_CREATIVE)
         
@@ -3277,7 +3277,7 @@ def run_asc_plus_tick(
     from rules.rules import AdvancedRuleEngine as RuleEngine
     rule_engine = RuleEngine(rules, store)
     timekit = Timekit()
-    target_count = cfg(settings, "asc_plus.target_active_ads") or 10
+    target_count = cfg(settings, "asc_plus.target_active_ads") or 15
     max_active = cfg(settings, "asc_plus.max_active_ads") or target_count
 
     result: ASCPlusResultDict = {
