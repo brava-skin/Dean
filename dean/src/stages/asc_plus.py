@@ -3021,6 +3021,7 @@ def ensure_asc_plus_campaign(
             targeting=targeting,
             placements=list(adset_placements) if adset_placements else None,
             status="PAUSED",
+            multi_optimization_goal="SHOP_PERSONALIZATION",  # Enable "Use shop to personalize buyer journey"
         )
         
         adset_id = adset.get("id")

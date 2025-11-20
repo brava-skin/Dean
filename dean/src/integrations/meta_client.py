@@ -1901,6 +1901,7 @@ class MetaClient:
         attribution_spec: Optional[List[Dict[str, Any]]] = None,
         placements: Optional[List[str]] = None,
         status: str = "PAUSED",
+        multi_optimization_goal: Optional[str] = None,
     ) -> Dict[str, Any]:
         self._check_names(adset=name)
         if self.dry_run or not USE_SDK:
@@ -1953,6 +1954,11 @@ class MetaClient:
             "status": _s(status),
             "attribution_spec": _sanitize(attribution_spec),
         }
+        
+        # Enable "Use shop to personalize buyer journey" feature
+        if multi_optimization_goal:
+            params["multi_optimization_goal"] = _s(multi_optimization_goal)
+            logger.info(f"Enabling shop personalization with multi_optimization_goal: {multi_optimization_goal}")
 
         def _create_sdk():
             return AdAccount(self.ad_account_id_act).create_ad_set(fields=[], params=params)
