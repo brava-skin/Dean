@@ -966,62 +966,15 @@ Now generate the scenario following ALL requirements above."""
                     if recent:
                         recently_used = "\n\nRECENTLY USED (avoid repetition):\n" + "\n".join(f"- {t}" for t in recent[-5:])
                 
-                user_prompt = f"""You are a copywriter for a premium men's skincare brand. Generate a SINGLE LINE of text overlay for an image creative.
+                user_prompt = f"""You are a copywriter for a premium men's skincare brand. Generate a short text overlay for an image creative.
 
-CRITICAL REQUIREMENTS - ZERO TOLERANCE:
-- EXACTLY 1-4 WORDS MAXIMUM (count them before returning - 5+ words will be REJECTED)
+REQUIREMENTS:
+- 4-5 words total (can span 2 lines if needed)
 - MUST hint at skincare (use words like: skin, skincare, routine, care, face, clear, refined)
-- Examples: "Refined skincare, not complicated." (4 words) | "Elevate your skin." (3 words) | "Clear skin, quiet confidence." (4 words) | "Skincare, not vanity." (3 words)
+- Examples: "Refined skincare, not complicated." | "Elevate your skin." | "Clear skin, quiet confidence." | "Purposeful living, daily care."
 - Calm confidence tone: self-respect, not convenience; discipline, not vanity
 - Must complement the scenario and ad copy theme
-- White text on image (premium, luxury feel)
-- No hype, no urgency, no sales language
-- Speak to self-respect and presence
 - Simple, powerful, memorable
-
-WORD COUNT VALIDATION:
-- Before returning your text, COUNT THE WORDS
-- If it's 5 or more words, SHORTEN IT IMMEDIATELY
-- Return ONLY 1-4 words - this is MANDATORY
-
-MANDATORY SPELLING AND SPACING RULES (ZERO TOLERANCE):
-⚠️ ABSOLUTELY FORBIDDEN - These patterns are NEVER acceptable:
-❌ "withnskin" → MUST be "with skin" (space between "with" and "skin")
-❌ "innskin" → MUST be "in skin" (space between "in" and "skin")
-❌ "yournskin" → MUST be "your skin" (space between "your" and "skin")
-❌ "withn skin" → MUST be "with skin" (no extra 'n')
-❌ "in nskin" → MUST be "in skin" (no extra 'n')
-❌ "yourn skin" → MUST be "your skin" (no extra 'n')
-❌ "quietnauthority" → MUST be "quiet authority" (space between words)
-❌ ANY merged words without spaces
-
-✅ REQUIRED FORMAT:
-- EVERY word must be separated by exactly ONE space
-- Prepositions (with, in, on, for, to, at, by, of, your) MUST have a space before the next word
-- Articles (the, a, an) MUST have a space before the next word
-- NO exceptions, NO merged words, NO missing spaces
-
-VALIDATION CHECKLIST (verify before returning):
-1. Read your output word by word
-2. Check that "with" is followed by a space, then the next word
-3. Check that "in" is followed by a space, then the next word
-4. Check that "your" is followed by a space, then the next word
-5. Check that NO words are merged together
-6. If you see ANY merged words, FIX THEM IMMEDIATELY
-
-CORRECT EXAMPLES:
-✅ "Presence starts with skin."
-✅ "Discipline shows in skin."
-✅ "Routine refines your skin."
-✅ "Quiet authority, daily practice."
-
-WRONG EXAMPLES (DO NOT GENERATE THESE):
-❌ "Presence starts withnskin."
-❌ "Discipline shows innskin."
-❌ "Routine refines yournskin."
-❌ "Quiet authority, daily practice." (if "quiet" and "authority" were merged)
-
-If you generate text with merged words or missing spaces, it will be REJECTED. Be extremely careful with spacing.
 
 {ml_guidance}
 
@@ -1030,16 +983,6 @@ If you generate text with merged words or missing spaces, it will be REJECTED. B
 CONTEXT:
 {chr(10).join(context_parts) if context_parts else "No specific context provided"}
 
-EXAMPLES OF EXCELLENT TONE (use as inspiration):
-- "This is maintenance, not vanity."
-- "The man who cares stands out."
-- "Elevate your baseline."
-- "Look like you live with intention."
-- "Take care. Not for others. For yourself."
-- "Consistency builds presence."
-- "The face you show the world matters."
-- "Refined, not complicated."
-
 TONE GUIDELINES:
 - Calm, confident, sophisticated
 - Self-respecting, not seeking validation
@@ -1047,17 +990,8 @@ TONE GUIDELINES:
 - No hype, no FOMO, no urgency
 - Premium without pretense
 
-GENERATION PROCESS:
-1. Analyze the scenario and ad copy theme
-2. Extract the core message (discipline, presence, self-respect)
-3. Generate a text that complements the visual
-4. Ensure it's unique (not repeating recent texts)
-5. Verify it matches calm confidence tone
-6. VALIDATE spacing using the checklist above - this is MANDATORY
-
 Return ONLY the text overlay (no explanations, no quotes, just the text).
-The text MUST be 1-4 words MAXIMUM (count them - 5+ words will be REJECTED).
-MUST hint at skincare. Examples: Refined skincare, not complicated. (4 words) | Elevate your skin. (3 words) | Clear skin, quiet confidence. (4 words)"""
+4-5 words that hint at skincare."""
 
                 response = client.responses.create(
                     model=CHATGPT5_MODEL,
@@ -1095,6 +1029,7 @@ MUST hint at skincare. Examples: Refined skincare, not complicated. (4 words) | 
                 
                 if output_text:
                     text = output_text.strip()
+                    # Simple cleanup - remove quotes if present
                     if text.startswith('"') and text.endswith('"'):
                         text = text[1:-1]
                     if text.startswith("'") and text.endswith("'"):
@@ -1102,20 +1037,11 @@ MUST hint at skincare. Examples: Refined skincare, not complicated. (4 words) | 
                     if ":" in text and len(text.split(":")[0]) < 20:
                         text = text.split(":", 1)[1].strip()
                     
-                    # Fix common spacing errors in generated text
-                    text = self._fix_text_spacing_errors(text)
-                    
-                    # Enforce word count limit - truncate if too long
+                    # Basic validation - ensure 4-5 words
                     words = text.split()
                     word_count = len(words)
                     
-                    if word_count > 4:
-                        # Truncate to first 4 words
-                        text = ' '.join(words[:4])
-                        word_count = 4
-                        logger.warning(f"ChatGPT generated {word_count} words, truncated to 4: '{text}'")
-                    
-                    if 1 <= word_count <= 4:
+                    if 4 <= word_count <= 5:
                         if not hasattr(self, '_recent_text_overlays'):
                             self._recent_text_overlays = []
                         self._recent_text_overlays.append(text)
@@ -1123,8 +1049,13 @@ MUST hint at skincare. Examples: Refined skincare, not complicated. (4 words) | 
                             self._recent_text_overlays.pop(0)
                         
                         return text
+                    elif word_count > 5:
+                        # Truncate to first 5 words
+                        text = ' '.join(words[:5])
+                        logger.warning(f"ChatGPT generated {word_count} words, truncated to 5: '{text}'")
+                        return text
                     else:
-                        logger.warning(f"Generated text overlay length invalid ({word_count} words), using ML-weighted selection")
+                        logger.warning(f"Generated text overlay too short ({word_count} words), using ML-weighted selection")
             
             except Exception as e:
                 logger.warning(f"Failed to generate text overlay with ChatGPT: {e}")
@@ -1779,6 +1710,7 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                         logger.info(f"Using Poppins font: {font_path}")
                         break
             
+            # Get image dimensions
             try:
                 probe_cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", image_path]
                 probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=5)
@@ -1787,55 +1719,62 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                     if len(dimensions) == 2:
                         img_width = int(dimensions[0])
                         img_height = int(dimensions[1])
-                        base_fontsize = max(36, min(56, int(img_width * 0.04)))
                     else:
                         img_width = 1080
                         img_height = 1080
-                        base_fontsize = 42
                 else:
                     img_width = 1080
                     img_height = 1080
-                    base_fontsize = 42
             except Exception:
                 img_width = 1080
                 img_height = 1080
-                base_fontsize = 42
             
-            text_length = len(text)
-            if text_length < 30:
-                fontsize = base_fontsize + 4
-            elif text_length < 50:
-                fontsize = base_fontsize
-            else:
-                fontsize = base_fontsize - 4
-            
-            max_text_width = img_width - 120
-            max_chars_per_line = max(20, int((max_text_width / fontsize) * 0.6))
-            
+            # Split text into words (4-5 words expected)
             words = text.split()
-            wrapped_lines = []
-            current_line = ""
-            for word in words:
-                test_line = current_line + (" " + word if current_line else word)
-                test_width = len(test_line) * (fontsize * 0.6)
-                if test_width <= max_text_width and len(test_line) <= max_chars_per_line:
-                    current_line = test_line
-                else:
-                    if current_line:
-                        wrapped_lines.append(current_line)
-                    current_line = word
-            if current_line:
-                wrapped_lines.append(current_line)
             
-            if not wrapped_lines:
+            # Wrap into 2 lines naturally (by words, not characters)
+            # Try to balance: if 4 words, split 2-2; if 5 words, split 3-2 or 2-3
+            if len(words) <= 2:
                 wrapped_lines = [text]
+            elif len(words) == 3:
+                wrapped_lines = [' '.join(words[:2]), words[2]]
+            elif len(words) == 4:
+                wrapped_lines = [' '.join(words[:2]), ' '.join(words[2:])]
+            elif len(words) == 5:
+                # Prefer 3-2 split for better balance
+                wrapped_lines = [' '.join(words[:3]), ' '.join(words[3:])]
+            else:
+                # Fallback: split in middle
+                mid = len(words) // 2
+                wrapped_lines = [' '.join(words[:mid]), ' '.join(words[mid:])]
             
+            # Calculate font size based on image width and longest line
+            # Use 80% of image width as max text width, with margins
+            max_text_width = int(img_width * 0.8)
+            longest_line = max(len(line) for line in wrapped_lines)
+            
+            # Estimate font size: aim for longest line to fit in max_text_width
+            # Approximate: 1 character ≈ 0.6 * fontsize pixels wide
+            # So: fontsize ≈ max_text_width / (longest_line * 0.6)
+            estimated_fontsize = int(max_text_width / (longest_line * 0.6))
+            
+            # Clamp font size to reasonable range (32-64px)
+            fontsize = max(32, min(64, estimated_fontsize))
+            
+            # If font is too small, increase it (we have 2 lines, can be larger)
+            if fontsize < 40:
+                fontsize = 40
+            
+            # Escape text for FFmpeg
             wrapped_text = "\\n".join(wrapped_lines)
             escaped_wrapped = wrapped_text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("[", "\\[").replace("]", "\\]")
             
+            # Calculate positioning (centered, bottom with margin)
             bottom_margin = max(60, int(img_height * 0.08))
-            side_margin = max(40, int(img_width * 0.05))
+            line_height = int(fontsize * 1.3)  # Line spacing
             
+            # Use multiline text with proper line spacing
+            # FFmpeg drawtext supports \\n for line breaks
             drawtext_filter = (
                 f"drawtext=text='{escaped_wrapped}'"
                 f":fontsize={fontsize}"
@@ -1847,6 +1786,7 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                 f":shadowcolor=black@0.9"
                 f":shadowx=3"
                 f":shadowy=3"
+                f":line_spacing={line_height - fontsize}"  # Space between lines
             )
             
             if font_path:
