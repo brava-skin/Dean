@@ -968,16 +968,21 @@ Now generate the scenario following ALL requirements above."""
                 
                 user_prompt = f"""You are a copywriter for a premium men's skincare brand. Generate a SINGLE LINE of text overlay for an image creative.
 
-CRITICAL REQUIREMENTS:
-- MAXIMUM 4 WORDS (must be short, simple, premium)
+CRITICAL REQUIREMENTS - ZERO TOLERANCE:
+- EXACTLY 1-4 WORDS MAXIMUM (count them before returning - 5+ words will be REJECTED)
 - MUST hint at skincare (use words like: skin, skincare, routine, care, face, clear, refined)
-- Examples: "Refined skincare, not complicated." | "Elevate your skin." | "Consistency builds clear skin." | "Skincare, not vanity."
+- Examples: "Refined skincare, not complicated." (4 words) | "Elevate your skin." (3 words) | "Clear skin, quiet confidence." (4 words) | "Skincare, not vanity." (3 words)
 - Calm confidence tone: self-respect, not convenience; discipline, not vanity
 - Must complement the scenario and ad copy theme
 - White text on image (premium, luxury feel)
 - No hype, no urgency, no sales language
 - Speak to self-respect and presence
 - Simple, powerful, memorable
+
+WORD COUNT VALIDATION:
+- Before returning your text, COUNT THE WORDS
+- If it's 5 or more words, SHORTEN IT IMMEDIATELY
+- Return ONLY 1-4 words - this is MANDATORY
 
 MANDATORY SPELLING AND SPACING RULES (ZERO TOLERANCE):
 ⚠️ ABSOLUTELY FORBIDDEN - These patterns are NEVER acceptable:
@@ -1051,7 +1056,8 @@ GENERATION PROCESS:
 6. VALIDATE spacing using the checklist above - this is MANDATORY
 
 Return ONLY the text overlay (no explanations, no quotes, just the text).
-The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined skincare, not complicated. | Elevate your skin. | Clear skin, quiet confidence."""
+The text MUST be 1-4 words MAXIMUM (count them - 5+ words will be REJECTED).
+MUST hint at skincare. Examples: Refined skincare, not complicated. (4 words) | Elevate your skin. (3 words) | Clear skin, quiet confidence. (4 words)"""
 
                 response = client.responses.create(
                     model=CHATGPT5_MODEL,
@@ -1099,7 +1105,16 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
                     # Fix common spacing errors in generated text
                     text = self._fix_text_spacing_errors(text)
                     
-                    word_count = len(text.split())
+                    # Enforce word count limit - truncate if too long
+                    words = text.split()
+                    word_count = len(words)
+                    
+                    if word_count > 4:
+                        # Truncate to first 4 words
+                        text = ' '.join(words[:4])
+                        word_count = 4
+                        logger.warning(f"ChatGPT generated {word_count} words, truncated to 4: '{text}'")
+                    
                     if 1 <= word_count <= 4:
                         if not hasattr(self, '_recent_text_overlays'):
                             self._recent_text_overlays = []
@@ -1151,6 +1166,7 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
         
         # Common English words that appear frequently in our text overlays
         # This helps us identify valid word boundaries
+        # Includes compound words that should NOT be split
         common_words = {
             'with', 'in', 'on', 'for', 'to', 'at', 'by', 'of', 'the', 'a', 'an',
             'your', 'skin', 'presence', 'authority', 'quiet', 'calm', 'refined',
@@ -1158,9 +1174,10 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
             'long', 'term', 'built', 'elevate', 'confidence', 'discipline',
             'excellence', 'quality', 'strength', 'care', 'routine', 'detail',
             'living', 'baseline', 'clear', 'premium', 'consistent', 'purpose',
-            'shows', 'begins', 'refines', 'respect', 'practice', 'daily',
+            'purposeful',  # Valid compound word - don't split
             'elevate', 'your', 'presence', 'authority', 'quiet', 'calm',
-            'confidence', 'routine', 'quality', 'strength', 'premium'
+            'confidence', 'routine', 'quality', 'strength', 'premium',
+            'skincare',  # Valid compound word - don't split
         }
         
         def is_likely_word(word: str, strict: bool = False) -> bool:
@@ -1284,7 +1301,7 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
         # First, fix clear capitalization boundaries (word1Word2 -> word1 Word2)
         fixed_text = re.sub(r'\b([a-z]+)([A-Z][a-z]+)\b', r'\1 \2', text)
         
-        # Find potential merged words (sequences of lowercase letters, 8+ chars, no spaces)
+        # Find potential merged words (sequences of lowercase letters, 7+ chars, no spaces)
         # These are likely to be merged words
         words = fixed_text.split()
         result_words = []
@@ -1294,9 +1311,15 @@ The text MUST be 4 words or less and MUST hint at skincare. Examples: Refined sk
             word_clean = re.sub(r'[^\w]', '', word)
             word_lower = word_clean.lower()
             
+            # IMPORTANT: Check if word is in common_words first (valid compound words like "purposeful", "skincare")
+            # These should NEVER be split
+            if word_lower in common_words:
+                result_words.append(word)
+                continue
+            
             # Check if this looks like a merged word
-            # Lower threshold to 7 chars to catch words like "innskin", "showsin"
             # For long words (7+ chars), use strict validation
+            # Only try to split if it's NOT a known valid word
             if (len(word_lower) >= 7 and 
                 word_lower.isalpha() and 
                 word_lower.islower() and

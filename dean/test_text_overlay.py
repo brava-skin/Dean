@@ -36,31 +36,35 @@ def test_text_spacing_fixes():
     # Test cases: (input, expected_output)
     # Testing both known issues and NEW merged words (not in patterns)
     test_cases = [
-        # Known issues
-        ("quietnpresence", "quiet presence"),
-        ("refined skin, quietnpresence.", "refined skin, quiet presence."),
-        ("withnskin", "with skin"),
-        ("innskin", "in skin"),
-        ("yournskin", "your skin"),
-        ("beginswith", "begins with"),
-        ("showsin", "shows in"),
-        ("refinesyour", "refines your"),
-        ("respectshows", "respect shows"),
-        # NEW merged words (not in patterns - testing general approach)
-        ("calmconfidence", "calm confidence"),  # New merge
-        ("dailyroutine", "daily routine"),  # New merge
-        ("premiumquality", "premium quality"),  # New merge
-        ("strengthshows", "strength shows"),  # New merge
-        # Valid words that should NOT be split
-        ("long term", "long term"),
-        ("presence", "presence"),
-        ("authority", "authority"),
-        ("elevate your presence", "elevate your presence"),
-        ("calm authority", "calm authority"),
-        ("Built for the long term.", "Built for the long term."),
-        ("confidence", "confidence"),  # Single valid word
-        ("routine", "routine"),  # Single valid word
-    ]
+                # Known issues
+                ("quietnpresence", "quiet presence"),
+                ("refined skin, quietnpresence.", "refined skin, quiet presence."),
+                ("withnskin", "with skin"),
+                ("innskin", "in skin"),
+                ("yournskin", "your skin"),
+                ("beginswith", "begins with"),
+                ("showsin", "shows in"),
+                ("refinesyour", "refines your"),
+                ("respectshows", "respect shows"),
+                # NEW merged words (not in patterns - testing general approach)
+                ("calmconfidence", "calm confidence"),  # New merge
+                ("dailyroutine", "daily routine"),  # New merge
+                ("premiumquality", "premium quality"),  # New merge
+                ("strengthshows", "strength shows"),  # New merge
+                # Valid words that should NOT be split
+                ("purposeful", "purposeful"),  # Valid compound word - should NOT be split
+                ("Purposeful living.", "Purposeful living."),  # Valid compound word - should NOT be split
+                ("Purpose ful living.", "Purpose ful living."),  # Note: This might not fix "Purpose ful" -> "Purposeful" (that's a different issue)
+                ("skincare", "skincare"),  # Valid compound word - should NOT be split
+                ("long term", "long term"),
+                ("presence", "presence"),
+                ("authority", "authority"),
+                ("elevate your presence", "elevate your presence"),
+                ("calm authority", "calm authority"),
+                ("Built for the long term.", "Built for the long term."),
+                ("confidence", "confidence"),  # Single valid word
+                ("routine", "routine"),  # Single valid word
+            ]
     
     print("🧪 Testing text spacing fixes...\n")
     
