@@ -262,7 +262,7 @@ def add_text_overlay(
         "borderw=2",
         "bordercolor=black@0.6",
         "x=(w-text_w)/2",  # Centered horizontally
-        f"y=h-th-{bottom_margin}",  # Bottom with margin
+        "y=(h-text_h)/2",  # Centered vertically
         "shadowcolor=black@0.9",
         "shadowx=3",
         "shadowy=3",

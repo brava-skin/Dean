@@ -1847,8 +1847,8 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                 f":fontcolor=white"
                 f":borderw=2"
                 f":bordercolor=black@0.5"
-                f":x=(w-text_w)/2"
-                f":y=h-th-{bottom_margin}"
+                f":x=(w-text_w)/2"  # Centered horizontally
+                f":y=(h-text_h)/2"  # Centered vertically
                 f":shadowcolor=black@0.9"
                 f":shadowx=3"
                 f":shadowy=3"
@@ -1886,8 +1886,8 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                     f":fontcolor=white"
                     f":borderw=1"
                     f":bordercolor=black@0.3"
-                    f":x=(w-text_w)/2"
-                    f":y=h-th-{bottom_margin}"
+                    f":x=(w-text_w)/2"  # Centered horizontally
+                    f":y=(h-text_h)/2"  # Centered vertically
                     f":shadowcolor=black@0.8"
                     f":shadowx=2"
                     f":shadowy=2"
