@@ -1037,11 +1037,28 @@ Return ONLY the text overlay (no explanations, no quotes, just the text).
                     if ":" in text and len(text.split(":")[0]) < 20:
                         text = text.split(":", 1)[1].strip()
                     
-                    # CRITICAL: Fix spacing after punctuation (commas, periods, etc.)
-                    # This prevents "living,ndaily" -> ensures "living, daily"
+                    # CRITICAL: Fix spacing errors in ChatGPT-generated text
+                    # Fixes common patterns like "living,ndaily", "quietnconfidence", "yournskin"
                     import re
-                    # Fix common patterns: ",n" -> ", " (remove extra 'n' after comma)
+                    # Fix ',n' pattern: "living,ndaily" -> "living, daily"
                     text = re.sub(r',n([a-z])', r', \1', text, flags=re.IGNORECASE)
+                    # Fix specific known problematic patterns with 'n' between words
+                    # Only fix common word boundaries to avoid breaking valid words
+                    # Use word boundaries to avoid partial matches
+                    common_words_with_n = [
+                        (r'\bquietn([a-z])', r'quiet \1'),
+                        (r'\byourn([a-z])', r'your \1'),
+                        (r'\bwithn([a-z])', r'with \1'),
+                        (r'\binn([a-z])', r'in \1'),
+                        (r'\bonn([a-z])', r'on \1'),
+                        (r'\bforn([a-z])', r'for \1'),
+                        (r'\blivingn([a-z])', r'living \1'),  # Fix "livingn" -> "living "
+                        (r'\bshowsin\b', 'shows in'),
+                        (r'\brefinesyour\b', 'refines your'),
+                        (r'\bbeginswith\b', 'begins with'),
+                    ]
+                    for pattern, replacement in common_words_with_n:
+                        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
                     # Add space after punctuation if missing
                     text = re.sub(r'([,\.!?;:])([a-zA-Z])', r'\1 \2', text)
                     # Clean up multiple spaces
@@ -1646,11 +1663,28 @@ Ensure all text meets character limits and maintains calm confidence tone."""
         text: str,
         output_path: Optional[str] = None,
     ) -> Optional[str]:
-        # CRITICAL: Fix spacing after punctuation before processing
-        # This prevents "living,ndaily" -> ensures "living, daily"
+        # CRITICAL: Fix spacing errors in ChatGPT-generated text
+        # Fixes common patterns like "living,ndaily", "quietnconfidence", "yournskin"
         import re
-        # Fix common patterns: ",n" -> ", " (remove extra 'n' after comma)
+        # Fix ',n' pattern: "living,ndaily" -> "living, daily"
         text = re.sub(r',n([a-z])', r', \1', text, flags=re.IGNORECASE)
+        # Fix specific known problematic patterns with 'n' between words
+        # Only fix common word boundaries to avoid breaking valid words
+        # Use word boundaries to avoid partial matches
+        common_words_with_n = [
+            (r'\bquietn([a-z])', r'quiet \1'),
+            (r'\byourn([a-z])', r'your \1'),
+            (r'\bwithn([a-z])', r'with \1'),
+            (r'\binn([a-z])', r'in \1'),
+            (r'\bonn([a-z])', r'on \1'),
+            (r'\bforn([a-z])', r'for \1'),
+            (r'\blivingn([a-z])', r'living \1'),  # Fix "livingn" -> "living "
+            (r'\bshowsin\b', 'shows in'),
+            (r'\brefinesyour\b', 'refines your'),
+            (r'\bbeginswith\b', 'begins with'),
+        ]
+        for pattern, replacement in common_words_with_n:
+            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
         # Add space after punctuation if missing
         text = re.sub(r'([,\.!?;:])([a-zA-Z])', r'\1 \2', text)
         # Clean up multiple spaces
