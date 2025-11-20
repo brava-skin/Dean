@@ -1041,12 +1041,13 @@ Return ONLY the text overlay (no explanations, no quotes, just the text).
                     # Fixes common patterns like "living,ndaily", "quietnconfidence", "yournskin"
                     import re
                     # Fix ',n' and ',not' patterns: "living,ndaily" -> "living, daily", "skincare,not" -> "skincare, not"
+                    text = re.sub(r',not\b', ', not', text, flags=re.IGNORECASE)  # Do this first to preserve "not"
                     text = re.sub(r',n([a-z])', r', \1', text, flags=re.IGNORECASE)
-                    text = re.sub(r',not\b', ', not', text, flags=re.IGNORECASE)
                     # Fix specific known problematic patterns with 'n' between words
                     # Only fix common word boundaries to avoid breaking valid words
                     # Use word boundaries to avoid partial matches
                     common_words_with_n = [
+                        (r'\bnskin\b', 'skin'),  # Fix "nskin" -> "skin" (common ChatGPT error)
                         (r'\bquietn([a-z])', r'quiet \1'),
                         (r'\byourn([a-z])', r'your \1'),
                         (r'\bwithn([a-z])', r'with \1'),
@@ -1669,12 +1670,13 @@ Ensure all text meets character limits and maintains calm confidence tone."""
         # Fixes common patterns like "living,ndaily", "quietnconfidence", "yournskin"
         import re
         # Fix ',n' and ',not' patterns: "living,ndaily" -> "living, daily", "skincare,not" -> "skincare, not"
+        text = re.sub(r',not\b', ', not', text, flags=re.IGNORECASE)  # Do this first to preserve "not"
         text = re.sub(r',n([a-z])', r', \1', text, flags=re.IGNORECASE)
-        text = re.sub(r',not\b', ', not', text, flags=re.IGNORECASE)
         # Fix specific known problematic patterns with 'n' between words
         # Only fix common word boundaries to avoid breaking valid words
         # Use word boundaries to avoid partial matches
         common_words_with_n = [
+            (r'\bnskin\b', 'skin'),  # Fix "nskin" -> "skin" (common ChatGPT error)
             (r'\bquietn([a-z])', r'quiet \1'),
             (r'\byourn([a-z])', r'your \1'),
             (r'\bwithn([a-z])', r'with \1'),
