@@ -1749,29 +1749,26 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                 wrapped_lines = [' '.join(words[:mid]), ' '.join(words[mid:])]
             
             # Calculate font size based on image width and longest line
-            # Use 80% of image width as max text width, with margins
-            max_text_width = int(img_width * 0.8)
+            # Use 70% of image width as max text width (15% margin on each side)
+            max_text_width = int(img_width * 0.70)
             longest_line = max(len(line) for line in wrapped_lines)
             
             # Estimate font size: aim for longest line to fit in max_text_width
-            # Approximate: 1 character ≈ 0.6 * fontsize pixels wide
-            # So: fontsize ≈ max_text_width / (longest_line * 0.6)
-            estimated_fontsize = int(max_text_width / (longest_line * 0.6))
+            # Approximate: 1 character ≈ 0.65 * fontsize pixels wide (for bold fonts like Poppins Bold)
+            # So: fontsize ≈ max_text_width / (longest_line * 0.65)
+            estimated_fontsize = int(max_text_width / (longest_line * 0.65))
             
-            # Clamp font size to reasonable range (32-64px)
-            fontsize = max(32, min(64, estimated_fontsize))
-            
-            # If font is too small, increase it (we have 2 lines, can be larger)
-            if fontsize < 40:
-                fontsize = 40
+            # Clamp font size to reasonable range (36-56px) - prevents overflow
+            fontsize = max(36, min(56, estimated_fontsize))
             
             # Escape text for FFmpeg
             wrapped_text = "\\n".join(wrapped_lines)
             escaped_wrapped = wrapped_text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("[", "\\[").replace("]", "\\]")
             
             # Calculate positioning (centered, bottom with margin)
-            bottom_margin = max(60, int(img_height * 0.08))
-            line_height = int(fontsize * 1.3)  # Line spacing
+            # Use 10% margin from bottom (minimum 80px for safety)
+            bottom_margin = max(80, int(img_height * 0.10))
+            line_height = int(fontsize * 1.35)  # Line spacing (slightly more for readability)
             
             # Use multiline text with proper line spacing
             # FFmpeg drawtext supports \\n for line breaks
