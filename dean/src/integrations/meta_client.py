@@ -2089,6 +2089,7 @@ class MetaClient:
         # Initialize link_data - structure depends on whether we use child_attachments
         image_data: Dict[str, Any] = {
             "link": final_link_url,
+            "destination_type": "META_SHOP",  # Allow Meta Shop as destination option
         }
         
         if image_hashes:
