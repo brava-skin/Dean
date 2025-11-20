@@ -1956,14 +1956,10 @@ class MetaClient:
         }
         
         # Enable "Use shop to personalize buyer journey" feature
+        # This automatically enables Advantage+ destination, allowing Meta to choose optimal destination (shop/website)
         if multi_optimization_goal:
             params["multi_optimization_goal"] = _s(multi_optimization_goal)
-            logger.info(f"Enabling shop personalization with multi_optimization_goal: {multi_optimization_goal}")
-        
-        # Enable Advantage+ destination - allows Meta to automatically choose destination (shop/website)
-        # This enables the "Advantage+ destination" setting in adset
-        params["destination_type"] = "ADVANTAGE_PLUS"
-        logger.info("Enabling Advantage+ destination - Meta will automatically choose optimal destination")
+            logger.info(f"Enabling shop personalization with multi_optimization_goal: {multi_optimization_goal} (enables Advantage+ destination)")
 
         def _create_sdk():
             return AdAccount(self.ad_account_id_act).create_ad_set(fields=[], params=params)
