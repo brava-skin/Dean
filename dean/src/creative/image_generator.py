@@ -1637,7 +1637,7 @@ Ensure all text meets character limits and maintains calm confidence tone."""
         output_path: Optional[str] = None,
     ) -> Optional[str]:
         # Fix spacing errors before adding overlay
-        text = self._fix_text_spacing_errors(text)
+        # Use ChatGPT text as-is (no complex fixing that causes spelling mistakes)
         
         try:
             ffmpeg_paths = [
