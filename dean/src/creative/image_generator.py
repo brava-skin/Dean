@@ -1040,8 +1040,9 @@ Return ONLY the text overlay (no explanations, no quotes, just the text).
                     # CRITICAL: Fix spacing errors in ChatGPT-generated text
                     # Fixes common patterns like "living,ndaily", "quietnconfidence", "yournskin"
                     import re
-                    # Fix ',n' pattern: "living,ndaily" -> "living, daily"
+                    # Fix ',n' and ',not' patterns: "living,ndaily" -> "living, daily", "skincare,not" -> "skincare, not"
                     text = re.sub(r',n([a-z])', r', \1', text, flags=re.IGNORECASE)
+                    text = re.sub(r',not\b', ', not', text, flags=re.IGNORECASE)
                     # Fix specific known problematic patterns with 'n' between words
                     # Only fix common word boundaries to avoid breaking valid words
                     # Use word boundaries to avoid partial matches
@@ -1053,6 +1054,7 @@ Return ONLY the text overlay (no explanations, no quotes, just the text).
                         (r'\bonn([a-z])', r'on \1'),
                         (r'\bforn([a-z])', r'for \1'),
                         (r'\blivingn([a-z])', r'living \1'),  # Fix "livingn" -> "living "
+                        (r'\bshowsin([a-z])', r'shows in \1'),  # Fix "showsinnskin" -> "shows in skin"
                         (r'\bshowsin\b', 'shows in'),
                         (r'\brefinesyour\b', 'refines your'),
                         (r'\bbeginswith\b', 'begins with'),
@@ -1666,8 +1668,9 @@ Ensure all text meets character limits and maintains calm confidence tone."""
         # CRITICAL: Fix spacing errors in ChatGPT-generated text
         # Fixes common patterns like "living,ndaily", "quietnconfidence", "yournskin"
         import re
-        # Fix ',n' pattern: "living,ndaily" -> "living, daily"
+        # Fix ',n' and ',not' patterns: "living,ndaily" -> "living, daily", "skincare,not" -> "skincare, not"
         text = re.sub(r',n([a-z])', r', \1', text, flags=re.IGNORECASE)
+        text = re.sub(r',not\b', ', not', text, flags=re.IGNORECASE)
         # Fix specific known problematic patterns with 'n' between words
         # Only fix common word boundaries to avoid breaking valid words
         # Use word boundaries to avoid partial matches
@@ -1679,6 +1682,7 @@ Ensure all text meets character limits and maintains calm confidence tone."""
             (r'\bonn([a-z])', r'on \1'),
             (r'\bforn([a-z])', r'for \1'),
             (r'\blivingn([a-z])', r'living \1'),  # Fix "livingn" -> "living "
+            (r'\bshowsin([a-z])', r'shows in \1'),  # Fix "showsinnskin" -> "shows in skin"
             (r'\bshowsin\b', 'shows in'),
             (r'\brefinesyour\b', 'refines your'),
             (r'\bbeginswith\b', 'begins with'),
