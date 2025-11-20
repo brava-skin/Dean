@@ -2393,11 +2393,11 @@ def _generate_creatives_for_deficit(
     if deficit <= 0:
         return []
     
-    # TIME WINDOW PROTECTION: Only allow ad creation during specified time window
-    is_within_window, window_reason = _is_within_time_window(rules)
-    if not is_within_window:
-        _asc_log(logging.INFO, "Ad creation blocked: %s", window_reason)
-        return []  # Outside time window, don't create ads
+    # TIME WINDOW PROTECTION: Removed - ads can now be created at any time
+    # is_within_window, window_reason = _is_within_time_window(rules)
+    # if not is_within_window:
+    #     _asc_log(logging.INFO, "Ad creation blocked: %s", window_reason)
+    #     return []  # Outside time window, don't create ads
 
     created_ads: List[Dict[str, Any]] = []
     supabase_client = None
