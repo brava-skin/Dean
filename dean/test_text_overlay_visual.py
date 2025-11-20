@@ -107,6 +107,7 @@ def calculate_font_size_and_wrap(
     max_width_ratio: float = 0.70,  # Use 70% of width (15% margin on each side) - more conservative
     min_font_size: int = 36,
     max_font_size: int = 56,  # Reduced from 72 to prevent overflow
+    test_small_font: bool = False,  # TEST MODE: Use very small font to test if size causes issues
 ) -> Tuple[int, List[str], int]:
     """Calculate optimal font size and wrap text into 2 lines.
     
@@ -127,6 +128,13 @@ def calculate_font_size_and_wrap(
     else:
         mid = len(words) // 2
         wrapped_lines = [' '.join(words[:mid]), ' '.join(words[mid:])]
+    
+    # TEST MODE: Use very small fixed font size to test if font size is causing issues
+    if test_small_font:
+        fontsize = 28  # Very small font to test
+        line_height = int(fontsize * 1.35)
+        print(f"  🧪 TEST MODE: Using fixed small font size: {fontsize}px")
+        return fontsize, wrapped_lines, line_height
     
     # Calculate max text width (with margins) - more conservative
     max_text_width = int(img_width * max_width_ratio)
@@ -154,11 +162,44 @@ def add_text_overlay(
 ) -> bool:
     """Add text overlay to image with proper sizing and margins."""
     
+    # Apply the same spacing fixes as production code
+    import re
+    original_text = text
+    # Fix ',n' and ',not' patterns
+    text = re.sub(r',not\b', ', not', text, flags=re.IGNORECASE)
+    text = re.sub(r',n([a-z])', r', \1', text, flags=re.IGNORECASE)
+    # Fix specific known problematic patterns
+    common_words_with_n = [
+        (r'\bnskin\b', 'skin'),
+        (r'\bquietn([a-z])', r'quiet \1'),
+        (r'\byourn([a-z])', r'your \1'),
+        (r'\bwithn([a-z])', r'with \1'),
+        (r'\binn([a-z])', r'in \1'),
+        (r'\bonn([a-z])', r'on \1'),
+        (r'\bforn([a-z])', r'for \1'),
+        (r'\blivingn([a-z])', r'living \1'),
+        (r'\bshowsin([a-z])', r'shows in \1'),
+        (r'\bshowsin\b', 'shows in'),
+        (r'\brefinesyour\b', 'refines your'),
+        (r'\bbeginswith\b', 'begins with'),
+    ]
+    for pattern, replacement in common_words_with_n:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    # Add space after punctuation
+    text = re.sub(r'([,\.!?;:])([a-zA-Z])', r'\1 \2', text)
+    # Clean up
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    if original_text != text:
+        print(f"  🔧 Applied spacing fixes: '{original_text}' -> '{text}'")
+    
     img_width, img_height = get_image_dimensions(image_path)
     
     # Calculate font size and wrapping
+    # TEST MODE: Use very small font to test if font size causes spelling/overflow issues
+    test_small_font = os.getenv("TEST_SMALL_FONT", "false").lower() == "true"
     fontsize, wrapped_lines, line_height = calculate_font_size_and_wrap(
-        text, img_width, img_height
+        text, img_width, img_height, test_small_font=test_small_font
     )
     
     print(f"  Image: {img_width}x{img_height}")
@@ -170,14 +211,39 @@ def add_text_overlay(
     
     # Escape text for FFmpeg
     wrapped_text = "\\n".join(wrapped_lines)
-    escaped_wrapped = wrapped_text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("[", "\\[").replace("]", "\\]")
+    
+    # TEST DIFFERENT ESCAPING METHODS
+    escape_method = os.getenv("FFMPEG_ESCAPE_METHOD", "1")
+    
+    if escape_method == "2":
+        # Method 2: Use double quotes (escape only quotes and backslashes)
+        escaped_wrapped = wrapped_text.replace('\\', '\\\\').replace('"', '\\"')
+        text_param = f'text="{escaped_wrapped}"'
+        print(f"  🔍 Using escape method 2 (double quotes)")
+    elif escape_method == "3":
+        # Method 3: Minimal escaping
+        escaped_wrapped = wrapped_text.replace('\\', '\\\\').replace("'", "\\'")
+        text_param = f"text='{escaped_wrapped}'"
+        print(f"  🔍 Using escape method 3 (minimal)")
+    else:
+        # Method 1: Current (escape many characters)
+        escaped_wrapped = wrapped_text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("[", "\\[").replace("]", "\\]")
+        text_param = f"text='{escaped_wrapped}'"
+        print(f"  🔍 Using escape method 1 (current - full escaping)")
     
     # Calculate positioning
     bottom_margin = max(80, int(img_height * 0.1))  # 10% margin from bottom, minimum 80px
     
+    # DEBUG: Print exactly what text is being sent to FFmpeg
+    print(f"  🔍 DEBUG - Text being sent to FFmpeg:")
+    print(f"     Original: '{text}'")
+    print(f"     Wrapped lines: {wrapped_lines}")
+    print(f"     Wrapped text (with \\n): '{wrapped_text}'")
+    print(f"     Escaped for FFmpeg: '{escaped_wrapped}'")
+    
     # Build FFmpeg drawtext filter
     drawtext_parts = [
-        f"text='{escaped_wrapped}'",
+        text_param,  # Use the text_param from escaping method
         f"fontsize={fontsize}",
         "fontcolor=white",
         "borderw=2",
@@ -194,6 +260,10 @@ def add_text_overlay(
     
     drawtext_filter = "drawtext=" + ":".join(drawtext_parts)
     
+    # DEBUG: Print the full FFmpeg filter
+    print(f"  🔍 DEBUG - Full drawtext filter:")
+    print(f"     {drawtext_filter[:200]}...")
+    
     # Build FFmpeg command
     cmd = [
         ffmpeg_cmd,
@@ -202,6 +272,9 @@ def add_text_overlay(
         "-y",
         output_path,
     ]
+    
+    # DEBUG: Print the full command (truncated)
+    print(f"  🔍 DEBUG - FFmpeg command (first 3 args): {cmd[:3]}...")
     
     try:
         result = subprocess.run(
@@ -245,15 +318,20 @@ def create_test_images():
     print()
     
     # Test cases: (text, description)
+    # NOTE: These are HARDCODED test cases, NOT from ChatGPT
+    # If spelling mistakes appear, it's 100% an FFmpeg issue
     test_cases = [
         ("Refined skincare, not complicated", "4 words - should split 2-2"),
         ("Elevate your skin daily", "4 words - should split 2-2"),
         ("Clear skin, quiet confidence", "4 words - should split 2-2"),
-        ("Purposeful living, daily care", "4 words - should split 2-2"),
+        ("Purposeful living, daily care", "4 words - should split 2-2 - TEST FOR COMMA ISSUE"),
         ("Routine refines your skin presence", "5 words - should split 3-2"),
         ("Discipline shows in skin care", "5 words - should split 3-2"),
         ("Consistent excellence builds confidence", "4 words - should split 2-2"),
         ("Quality skincare for men", "4 words - should split 2-2"),
+        # Add problematic test cases to see if FFmpeg corrupts them
+        ("Purposeful living,ndaily care", "TEST: Input has ',n' - should be fixed"),
+        ("Clear skin quietnconfidence", "TEST: Input has 'n' merge - should be fixed"),
     ]
     
     # Create test output directory
@@ -354,12 +432,20 @@ def create_test_images():
     print(f"✅ Generated {success_count}/{len(test_cases)} test images")
     print(f"📁 Output directory: {test_dir}")
     print()
-    print("💡 Review the images and adjust parameters in calculate_font_size_and_wrap()")
-    print("   if needed:")
-    print("   - max_width_ratio: Currently 0.70 (70% of width, 15% margin each side)")
-    print("   - min_font_size: Currently 36px")
-    print("   - max_font_size: Currently 56px")
-    print("   - Character width estimate: Currently 0.65 * fontsize (for bold fonts)")
+    
+    test_small_font = os.getenv("TEST_SMALL_FONT", "false").lower() == "true"
+    if test_small_font:
+        print("🧪 TEST MODE: Using very small font (28px) to test if font size causes issues")
+        print("   Run without TEST_SMALL_FONT=true to use normal font sizing")
+    else:
+        print("💡 Review the images and adjust parameters in calculate_font_size_and_wrap()")
+        print("   if needed:")
+        print("   - max_width_ratio: Currently 0.70 (70% of width, 15% margin each side)")
+        print("   - min_font_size: Currently 36px")
+        print("   - max_font_size: Currently 56px")
+        print("   - Character width estimate: Currently 0.65 * fontsize (for bold fonts)")
+        print()
+        print("🧪 To test with very small font, run: TEST_SMALL_FONT=true python3 dean/test_text_overlay_visual.py")
     print("=" * 70)
 
 if __name__ == "__main__":
