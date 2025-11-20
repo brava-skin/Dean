@@ -1037,6 +1037,16 @@ Return ONLY the text overlay (no explanations, no quotes, just the text).
                     if ":" in text and len(text.split(":")[0]) < 20:
                         text = text.split(":", 1)[1].strip()
                     
+                    # CRITICAL: Fix spacing after punctuation (commas, periods, etc.)
+                    # This prevents "living,ndaily" -> ensures "living, daily"
+                    import re
+                    # Fix common patterns: ",n" -> ", " (remove extra 'n' after comma)
+                    text = re.sub(r',n([a-z])', r', \1', text, flags=re.IGNORECASE)
+                    # Add space after punctuation if missing
+                    text = re.sub(r'([,\.!?;:])([a-zA-Z])', r'\1 \2', text)
+                    # Clean up multiple spaces
+                    text = re.sub(r'\s+', ' ', text).strip()
+                    
                     # Basic validation - ensure 4-5 words
                     words = text.split()
                     word_count = len(words)
