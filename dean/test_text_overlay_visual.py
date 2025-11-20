@@ -220,62 +220,54 @@ def add_text_overlay(
     print(f"  Max text width: {int(img_width * 0.70)}px (70% of image width)")
     print(f"  Longest line: {max(len(line) for line in wrapped_lines)} chars")
     
-    # Escape text for FFmpeg
-    # Use actual newline character, not "\\n" string, to avoid escaping issues
-    wrapped_text = "\n".join(wrapped_lines)  # Actual newline character
-    print(f"  🔍 DEBUG - After join with \\\\n: {repr(wrapped_text)}")
-    
-    # TEST DIFFERENT ESCAPING METHODS
-    escape_method = os.getenv("FFMPEG_ESCAPE_METHOD", "1")
-    
-    if escape_method == "2":
-        # Method 2: Use double quotes (escape only quotes and backslashes)
-        escaped_wrapped = wrapped_text.replace('\\', '\\\\').replace('"', '\\"')
-        text_param = f'text="{escaped_wrapped}"'
-        print(f"  🔍 Using escape method 2 (double quotes)")
-    elif escape_method == "3":
-        # Method 3: Minimal escaping
-        escaped_wrapped = wrapped_text.replace('\\', '\\\\').replace("'", "\\'")
-        text_param = f"text='{escaped_wrapped}'"
-        print(f"  🔍 Using escape method 3 (minimal)")
-    else:
-        # Method 1: Current (escape many characters)
-        escaped_wrapped = wrapped_text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("[", "\\[").replace("]", "\\]")
-        text_param = f"text='{escaped_wrapped}'"
-        print(f"  🔍 Using escape method 1 (current - full escaping)")
-    
     # Calculate positioning
     bottom_margin = max(80, int(img_height * 0.1))  # 10% margin from bottom, minimum 80px
+    line_height = int(fontsize * 1.35)  # Line spacing
+    
+    # Render each line separately to center each line individually
+    # This ensures each line is centered on its own, not just the whole block
+    drawtext_filters = []
+    
+    for i, line in enumerate(wrapped_lines):
+        # Escape each line separately
+        escaped_line = line.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("[", "\\[").replace("]", "\\]")
+        
+        # Calculate y position: last line at bottom, previous lines above
+        line_offset = (len(wrapped_lines) - 1 - i) * (line_height - fontsize)
+        y_pos = f"h-th-{bottom_margin + line_offset}"
+        
+        # Build drawtext filter for this line
+        line_parts = [
+            f"text='{escaped_line}'",
+            f"fontsize={fontsize}",
+            "fontcolor=white",
+            "borderw=2",
+            "bordercolor=black@0.6",
+            "x=(w-text_w)/2",  # Each line centered individually
+            f"y={y_pos}",  # Positioned from bottom
+            "shadowcolor=black@0.9",
+            "shadowx=3",
+            "shadowy=3",
+        ]
+        
+        if font_path:
+            line_parts.append(f"fontfile={font_path}")
+        
+        line_filter = "drawtext=" + ":".join(line_parts)
+        drawtext_filters.append(line_filter)
+    
+    # Chain all line filters together
+    drawtext_filter = ",".join(drawtext_filters)
     
     # DEBUG: Print exactly what text is being sent to FFmpeg
     print(f"  🔍 DEBUG - Text being sent to FFmpeg:")
     print(f"     Original: '{text}'")
     print(f"     Wrapped lines: {wrapped_lines}")
-    print(f"     Wrapped text (with \\n): '{wrapped_text}'")
-    print(f"     Escaped for FFmpeg: '{escaped_wrapped}'")
-    
-    # Build FFmpeg drawtext filter
-    drawtext_parts = [
-        text_param,  # Use the text_param from escaping method
-        f"fontsize={fontsize}",
-        "fontcolor=white",
-        "borderw=2",
-        "bordercolor=black@0.6",
-        "x=(w-text_w)/2",  # Centered horizontally
-        "y=(h-text_h)/2",  # Centered vertically
-        "shadowcolor=black@0.9",
-        "shadowx=3",
-        "shadowy=3",
-    ]
-    
-    if font_path:
-        drawtext_parts.append(f"fontfile={font_path}")
-    
-    drawtext_filter = "drawtext=" + ":".join(drawtext_parts)
+    print(f"     Rendering {len(wrapped_lines)} lines separately for individual centering")
     
     # DEBUG: Print the full FFmpeg filter
     print(f"  🔍 DEBUG - Full drawtext filter:")
-    print(f"     {drawtext_filter[:200]}...")
+    print(f"     {drawtext_filter[:300]}...")
     
     # Build FFmpeg command
     cmd = [

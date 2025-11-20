@@ -1829,36 +1829,45 @@ Ensure all text meets character limits and maintains calm confidence tone."""
             # Clamp font size to reasonable range (36-56px) - prevents overflow
             fontsize = max(36, min(56, estimated_fontsize))
             
-            # Escape text for FFmpeg
-            # Use actual newline character, not "\\n" string, to avoid escaping issues
-            wrapped_text = "\n".join(wrapped_lines)  # Actual newline character
-            escaped_wrapped = wrapped_text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("[", "\\[").replace("]", "\\]")
-            
             # Calculate positioning (centered, bottom with margin)
             # Use 10% margin from bottom (minimum 80px for safety)
             bottom_margin = max(80, int(img_height * 0.10))
             line_height = int(fontsize * 1.35)  # Line spacing (slightly more for readability)
             
-            # Use multiline text with proper line spacing
-            # FFmpeg drawtext supports \\n for line breaks
-            drawtext_filter = (
-                f"drawtext=text='{escaped_wrapped}'"
-                f":fontsize={fontsize}"
-                f":fontcolor=white"
-                f":borderw=2"
-                f":bordercolor=black@0.5"
-                f":x=(w-text_w)/2"  # Centered horizontally
-                f":y=(h-text_h)/2"  # Centered vertically
-                f":shadowcolor=black@0.9"
-                f":shadowx=3"
-                f":shadowy=3"
-                f":line_spacing={line_height - fontsize}"  # Space between lines
-            )
+            # Render each line separately to center each line individually
+            # This ensures each line is centered on its own, not just the whole block
+            drawtext_filters = []
             
-            if font_path:
-                drawtext_filter += f":fontfile={font_path}"
+            for i, line in enumerate(wrapped_lines):
+                # Escape each line separately
+                escaped_line = line.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("[", "\\[").replace("]", "\\]")
+                
+                # Calculate y position: last line at bottom, previous lines above
+                # Lines are rendered bottom-up
+                line_offset = (len(wrapped_lines) - 1 - i) * (line_height - fontsize)
+                y_pos = f"h-th-{bottom_margin + line_offset}"
+                
+                # Build drawtext filter for this line
+                line_filter = (
+                    f"drawtext=text='{escaped_line}'"
+                    f":fontsize={fontsize}"
+                    f":fontcolor=white"
+                    f":borderw=2"
+                    f":bordercolor=black@0.5"
+                    f":x=(w-text_w)/2"  # Each line centered individually
+                    f":y={y_pos}"  # Positioned from bottom
+                    f":shadowcolor=black@0.9"
+                    f":shadowx=3"
+                    f":shadowy=3"
+                )
+                
+                if font_path:
+                    line_filter += f":fontfile={font_path}"
+                
+                drawtext_filters.append(line_filter)
             
-            vf_filter = f"{drawtext_filter}"
+            # Chain all line filters together
+            vf_filter = ",".join(drawtext_filters)
             
             cmd = [
                 ffmpeg_cmd,
@@ -1880,20 +1889,30 @@ Ensure all text meets character limits and maintains calm confidence tone."""
                 return output_path
             else:
                 logger.warning(f"First attempt failed, trying fallback: {result.stderr[:200]}")
-                drawtext_fallback = (
-                    f"drawtext=text='{escaped_wrapped}'"
-                    f":fontsize={fontsize}"
-                    f":fontcolor=white"
-                    f":borderw=1"
-                    f":bordercolor=black@0.3"
-                    f":x=(w-text_w)/2"  # Centered horizontally
-                    f":y=(h-text_h)/2"  # Centered vertically
-                    f":shadowcolor=black@0.8"
-                    f":shadowx=2"
-                    f":shadowy=2"
-                )
+                # Fallback: render each line separately with lighter styling
+                fallback_filters = []
+                for i, line in enumerate(wrapped_lines):
+                    escaped_line = line.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("[", "\\[").replace("]", "\\]")
+                    line_offset = (len(wrapped_lines) - 1 - i) * (line_height - fontsize)
+                    y_pos = f"h-th-{bottom_margin + line_offset}"
+                    
+                    line_filter = (
+                        f"drawtext=text='{escaped_line}'"
+                        f":fontsize={fontsize}"
+                        f":fontcolor=white"
+                        f":borderw=1"
+                        f":bordercolor=black@0.3"
+                        f":x=(w-text_w)/2"
+                        f":y={y_pos}"
+                        f":shadowcolor=black@0.8"
+                        f":shadowx=2"
+                        f":shadowy=2"
+                    )
+                    if font_path:
+                        line_filter += f":fontfile={font_path}"
+                    fallback_filters.append(line_filter)
                 
-                vf_fallback = f"{drawtext_fallback}"
+                vf_fallback = ",".join(fallback_filters)
                 
                 cmd_fallback = [
                     ffmpeg_cmd,
