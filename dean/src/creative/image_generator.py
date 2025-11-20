@@ -1646,8 +1646,15 @@ Ensure all text meets character limits and maintains calm confidence tone."""
         text: str,
         output_path: Optional[str] = None,
     ) -> Optional[str]:
-        # Fix spacing errors before adding overlay
-        # Use ChatGPT text as-is (no complex fixing that causes spelling mistakes)
+        # CRITICAL: Fix spacing after punctuation before processing
+        # This prevents "living,ndaily" -> ensures "living, daily"
+        import re
+        # Fix common patterns: ",n" -> ", " (remove extra 'n' after comma)
+        text = re.sub(r',n([a-z])', r', \1', text, flags=re.IGNORECASE)
+        # Add space after punctuation if missing
+        text = re.sub(r'([,\.!?;:])([a-zA-Z])', r'\1 \2', text)
+        # Clean up multiple spaces
+        text = re.sub(r'\s+', ' ', text).strip()
         
         try:
             ffmpeg_paths = [
