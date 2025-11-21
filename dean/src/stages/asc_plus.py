@@ -1756,33 +1756,26 @@ def _is_within_time_window(rules: Optional[Dict[str, Any]] = None) -> Tuple[bool
 
 
 def _guardrail_kill(metrics: Dict[str, Any], rules: Optional[Dict[str, Any]] = None, rule_engine: Optional[Any] = None) -> Tuple[bool, str]:
-    """Evaluate kill rules with strong protections for good-performing creatives.
+    """Evaluate kill rules with new creative protection and performance-based kill rules.
     
     Protections:
-    - All minimums must be met (spend, impressions, runtime)
-    - Creatives with ATC signals are protected
-    - Creatives with good CTR are protected
-    - Learning phase grace period extended
-    - Time window restriction (only kill during specified hours)
-    - New creative cooldown (no kill rules for ads created today before 20:00 Amsterdam)
+    - New Creative Protection: Do not evaluate ANY kill rules until BOTH conditions are met:
+      - Impressions >= 400
+      - AND (Spend >= €10 OR Clicks >= 15)
+    - Lock rules are evaluated first to protect hero creatives
+    - Light, performance-based kill rules using 7-day benchmarks
     """
     rules = rules or {}
     asc_rules = rules.get("asc_plus_atc", {})
     engine_rules = asc_rules.get("engine", {})
-    fairness_rules = engine_rules.get("fairness", {})
-    learning_rules = engine_rules.get("learning", {})
-    kill_window = engine_rules.get("kill_window", {})
-    cooldown = engine_rules.get("new_creative_cooldown", {})
     kill_rules = asc_rules.get("kill", [])
-    minimums = asc_rules.get("minimums", {})
-    queue_rules = engine_rules.get("queue", {})
+    lock_rules = asc_rules.get("locks", [])
+    new_creative_protection = asc_rules.get("new_creative_protection", {})
     
-    min_spend_before_kill = safe_f(fairness_rules.get("min_spend_before_kill_eur", 55))
-    min_runtime_hours = safe_f(fairness_rules.get("min_runtime_hours", 48))
-    min_impressions = safe_f(minimums.get("min_impressions", 2500))
-    min_spend = safe_f(minimums.get("min_spend_eur", 55))
-    new_creative_grace_hours = safe_f(queue_rules.get("new_creative_grace_hours", 36))
-    max_learning_budget = safe_f(learning_rules.get("max_learning_budget_eur", 150))
+    # Get new creative protection thresholds
+    min_impressions_protection = safe_f(new_creative_protection.get("min_impressions", 400))
+    min_spend_protection = safe_f(new_creative_protection.get("min_spend_eur", 10))
+    min_clicks_protection = safe_f(new_creative_protection.get("min_clicks", 15))
     
     spend = safe_f(metrics.get("spend"))
     impressions = safe_f(metrics.get("impressions"))
@@ -1790,93 +1783,47 @@ def _guardrail_kill(metrics: Dict[str, Any], rules: Optional[Dict[str, Any]] = N
     add_to_cart = safe_f(metrics.get("add_to_cart"))
     purchases = safe_f(metrics.get("purchases"))
     ctr = safe_f(metrics.get("ctr"))
-    stage_hours = safe_f(metrics.get("stage_duration_hours"))
-    ad_age_days = safe_f(metrics.get("ad_age_days"))
-    hours_live = safe_f(metrics.get("hours_live"))
+    cpc = safe_f(metrics.get("cpc"))
     
-    derived_age_days = max(ad_age_days, (stage_hours / 24.0) if stage_hours else 0.0)
-    derived_runtime_hours = max(derived_age_days * 24.0, hours_live)
+    # Calculate cost per ATC if needed
+    cost_per_atc = None
+    if add_to_cart > 0 and spend > 0:
+        cost_per_atc = spend / add_to_cart
     
-    # TIME WINDOW PROTECTION: Only allow kills during specified time window
-    is_within_window, window_reason = _is_within_time_window(rules)
-    if not is_within_window:
-        _asc_log(logging.DEBUG, "Kill blocked: %s", window_reason)
-        return False, ""  # Outside kill window
+    # NEW CREATIVE PROTECTION: Do not evaluate ANY kill rules until BOTH conditions are met:
+    # - Impressions >= 400
+    # - AND (Spend >= €10 OR Clicks >= 15)
+    impressions_ok = impressions >= min_impressions_protection
+    spend_or_clicks_ok = (spend >= min_spend_protection) or (clicks >= min_clicks_protection)
     
-    # NEW CREATIVE COOLDOWN: Never evaluate kill rules for ads created today before 20:00 Amsterdam
-    if cooldown.get("enabled", False):
+    if not (impressions_ok and spend_or_clicks_ok):
+        _asc_log(logging.DEBUG, 
+            "Kill blocked: new creative protection (impressions=%d<%d OR (spend=€%.2f<%d AND clicks=%d<%d))",
+            int(impressions), int(min_impressions_protection),
+            spend, int(min_spend_protection), int(clicks), int(min_clicks_protection))
+        return False, ""  # Protected by new creative protection
+    
+    # Evaluate lock rules first - if ad is locked, never kill
+    if rule_engine and lock_rules:
         try:
-            creation_time_str = metrics.get("creation_time")
-            if creation_time_str:
-                # Parse creation time (assume UTC if no timezone info)
-                ad_creation = _parse_created_time(creation_time_str)
-                if ad_creation:
-                    # Convert to Amsterdam timezone
-                    if ad_creation.tzinfo is None:
-                        ad_creation = ad_creation.replace(tzinfo=UTC)
-                    ad_creation_amsterdam = ad_creation.astimezone(LOCAL_TZ)
-                    
-                    # Get current Amsterdam time
-                    now_amsterdam = datetime.now(LOCAL_TZ)
-                    
-                    # Check if ad was created today
-                    if ad_creation_amsterdam.date() == now_amsterdam.date():
-                        # Ad was created today - check if before cooldown hour
-                        cooldown_hour = int(cooldown.get("cooldown_hour", 20))
-                        if ad_creation_amsterdam.hour < cooldown_hour:
-                            # Ad created today before cooldown hour - skip kill evaluation
-                            _asc_log(logging.DEBUG, 
-                                "Kill blocked: new creative cooldown (created today at %02d:00, cooldown until %02d:00 Amsterdam)", 
-                                ad_creation_amsterdam.hour, cooldown_hour)
-                            return False, ""  # Protected by cooldown
+            from analytics.metrics import metrics_from_row, MetricsConfig
+            metrics_cfg = MetricsConfig(
+                prefer_roas_field=False,
+                account_currency="EUR",
+                product_currency="EUR",
+            )
+            m = metrics_from_row(metrics, cfg=metrics_cfg)
+            row = {"ad_id": metrics.get("ad_id", "")}
+            
+            for rule in lock_rules:
+                ok, reason = rule_engine._eval(rule, m, row)
+                if ok:
+                    _asc_log(logging.DEBUG, "Kill blocked: %s", reason)
+                    return False, ""  # Protected by lock rule
         except Exception as exc:
-            _asc_log(logging.WARNING, "Failed to check new creative cooldown: %s", exc)
-            # If cooldown check fails, allow kill evaluation (fail open for safety)
+            _asc_log(logging.WARNING, "Failed to evaluate lock rules: %s", exc)
     
-    # STRICT PROTECTION: All minimums must be met before ANY kill evaluation
-    if spend < min_spend_before_kill:
-        return False, ""
-    if impressions < min_impressions:
-        return False, ""
-    if derived_runtime_hours < min_runtime_hours:
-        return False, ""
-    
-    # LEARNING PHASE PROTECTION: Extended grace period for new creatives
-    if derived_runtime_hours < new_creative_grace_hours:
-        return False, ""
-    
-    # LEARNING BUDGET PROTECTION: Don't kill during learning phase
-    if spend < max_learning_budget:
-        # During learning phase, only kill if multiple severe negative signals
-        # AND no positive signals at all
-        has_positive_signals = (
-            (ctr > 0.01) or  # CTR > 1%
-            (add_to_cart > 0) or  # Has ATC signals
-            (purchases > 0)  # Has purchases
-        )
-        if has_positive_signals:
-            return False, ""  # Protect during learning if any positive signal
-    
-    # POSITIVE SIGNAL PROTECTION: Never kill creatives with strong positive signals
-    # Protection 1: Good CTR (above 1%)
-    if ctr >= 0.01:
-        return False, ""
-    
-    # Protection 2: Has ATC signals (buyer intent detected)
-    if add_to_cart >= 1:
-        return False, ""
-    
-    # Protection 3: Has purchases (obviously performing)
-    if purchases > 0:
-        return False, ""
-    
-    # Protection 4: Good click volume relative to spend (efficient)
-    if clicks > 0 and spend > 0:
-        cpc = spend / clicks
-        if cpc <= 1.50:  # Efficient CPC
-            return False, ""
-    
-    # Only evaluate kill rules if all protections pass
+    # Only evaluate kill rules if new creative protection passes and not locked
     if rule_engine and kill_rules:
         try:
             from analytics.metrics import metrics_from_row, MetricsConfig

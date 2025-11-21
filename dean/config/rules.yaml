@@ -1,45 +1,45 @@
 asc_plus_atc:
   minimums:
-    min_impressions: 2500
-    min_spend_eur: 55
-    min_runtime_hours: 48
+    min_impressions: 400
+    min_spend_eur: 10
+    min_clicks: 15
 
-  keep:
-    - {type: "ctr_gte", ctr_gte: 0.012}
-    - {type: "ctr_cpm_combo", ctr_gte: 0.010, cpm_lte: 55}
-    - {type: "atc_signal_lock", atc_gte: 3, spend_gte: 55}
+  # New Creative Protection: Do not evaluate ANY kill rules until BOTH conditions are met:
+  # - Impressions >= 400
+  # - AND (Spend >= €10 OR Clicks >= 15)
+  new_creative_protection:
+    min_impressions: 400
+    min_spend_eur: 10
+    min_clicks: 15
 
   locks:
-    - {type: "performance_lock", ctr_gte: 0.014, cpm_lte: 50, atc_gte: 3, evaluation_hours: 72, lock_hours: 96}
+    # Hero Creative Lock: Lock an ad as "Hero" if ATC >= 30 AND Cost/ATC <= €6.50
+    - {type: "hero_creative_lock", atc_gte: 30, cost_per_atc_lte: 6.50}
 
   kill:
-    # Only kill if ALL conditions met:
-    # - Spend >= €55 (after learning phase)
-    # - Impressions >= 2500 (enough data)
-    # - Runtime >= 48 hours (enough time)
-    # - CTR < 1% (poor engagement)
-    # - No ATC signals (no buyer intent)
-    # - No purchases (no conversions)
-    - {type: "ctr_spend_floor", spend_gte: 55, ctr_lt: 0.01}  # Only kill if CTR < 1% after full learning phase
+    # 4.1. Hard loser (no intent): Kill if Spend >= €25 AND ATC = 0
+    - {type: "hard_loser", spend_gte: 25, atc_eq: 0}
+    
+    # 4.2. Very poor ATC efficiency: Kill if Spend >= €35 AND Cost/ATC > €11.50
+    - {type: "poor_atc_efficiency", spend_gte: 35, cost_per_atc_gt: 11.50}
+    
+    # 4.3. Traffic quality failure: Kill if Spend >= €30 AND CTR < 3.0% AND CPC > €1.20
+    - {type: "traffic_quality_fail", spend_gte: 30, ctr_lt: 0.03, cpc_gt: 1.20}
+    
+    # 4.4. Slow bleeder safety net: Kill if ALL are true: Spend >= €50 AND ATC < 5 AND Cost/ATC > €10
+    - {type: "slow_bleeder", spend_gte: 50, atc_lt: 5, cost_per_atc_gt: 10}
 
   engine:
     consecutive_ticks_required: 2
     fairness:
-      min_spend_before_kill_eur: 55
-      min_runtime_hours: 48
+      min_spend_before_kill_eur: 25
+      min_runtime_hours: 0
     learning:
       max_learning_budget_eur: 150
     queue:
       maintain_creative_count: 15
       max_creative_turnover_per_24h: 0.15
-      new_creative_grace_hours: 36
-    kill_window:
-      enabled: true
-      start_hour: 6  # Amsterdam time (6:00)
-      end_hour: 12   # Amsterdam time (12:00)
-    new_creative_cooldown:
-      enabled: true
-      cooldown_hour: 20  # Amsterdam time (20:00) - no kill rules before this time for ads created today
+      new_creative_grace_hours: 0
 
   attribution_windows: ["7d_click", "1d_view"]
 

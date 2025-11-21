@@ -487,6 +487,70 @@ class AdvancedRuleEngine:
                         return True, f"ATC rate drop: {current_atc_rate:.3f} vs avg {avg_atc_rate:.3f} (-{drop_threshold*100:.0f}%)"
             return False, ""
 
+        # New kill rules
+        if t == "hard_loser":
+            # 4.1. Hard loser (no intent): Kill if Spend >= €25 AND ATC = 0
+            spend_ok = (m.spend or 0) >= rule.get("spend_gte", 25)
+            atc_eq = (m.add_to_cart or 0) == rule.get("atc_eq", 0)
+            return spend_ok and atc_eq, f"Hard loser: Spend≥€{rule.get('spend_gte', 25)} & ATC=0" if spend_ok and atc_eq else ""
+
+        if t == "poor_atc_efficiency":
+            # 4.2. Very poor ATC efficiency: Kill if Spend >= €35 AND Cost/ATC > €11.50
+            spend_ok = (m.spend or 0) >= rule.get("spend_gte", 35)
+            if not spend_ok:
+                return False, ""
+            atc_count = m.add_to_cart or 0
+            if atc_count == 0:
+                return False, ""  # Can't calculate cost per ATC if no ATC
+            cost_per_atc = (m.spend or 0) / atc_count
+            cost_ok = cost_per_atc > rule.get("cost_per_atc_gt", 11.50)
+            return cost_ok, f"Poor ATC efficiency: Spend≥€{rule.get('spend_gte', 35)} & Cost/ATC>€{rule.get('cost_per_atc_gt', 11.50)}" if cost_ok else ""
+
+        if t == "traffic_quality_fail":
+            # 4.3. Traffic quality failure: Kill if Spend >= €30 AND CTR < 3.0% AND CPC > €1.20
+            spend_ok = (m.spend or 0) >= rule.get("spend_gte", 30)
+            if not spend_ok:
+                return False, ""
+            ctr_ok = (m.ctr or 0.0) < rule.get("ctr_lt", 0.03)
+            if not ctr_ok:
+                return False, ""
+            # Calculate CPC from spend and clicks if not available
+            clicks = m.clicks or 0
+            if clicks == 0:
+                return False, ""  # Can't calculate CPC without clicks
+            cpc = m.cpc if m.cpc is not None else ((m.spend or 0) / clicks)
+            cpc_ok = cpc > rule.get("cpc_gt", 1.20)
+            ok = spend_ok and ctr_ok and cpc_ok
+            return ok, f"Traffic quality fail: Spend≥€{rule.get('spend_gte', 30)} & CTR<{rule.get('ctr_lt', 0.03):.1%} & CPC>€{rule.get('cpc_gt', 1.20)}" if ok else ""
+
+        if t == "slow_bleeder":
+            # 4.4. Slow bleeder safety net: Kill if ALL are true: Spend >= €50 AND ATC < 5 AND Cost/ATC > €10
+            spend_ok = (m.spend or 0) >= rule.get("spend_gte", 50)
+            atc_ok = (m.add_to_cart or 0) < rule.get("atc_lt", 5)
+            if not (spend_ok and atc_ok):
+                return False, ""
+            atc_count = m.add_to_cart or 0
+            if atc_count == 0:
+                return False, ""  # Can't calculate cost per ATC if no ATC
+            cost_per_atc = (m.spend or 0) / atc_count
+            cost_ok = cost_per_atc > rule.get("cost_per_atc_gt", 10.0)
+            ok = spend_ok and atc_ok and cost_ok
+            return ok, f"Slow bleeder: Spend≥€{rule.get('spend_gte', 50)} & ATC<{rule.get('atc_lt', 5)} & Cost/ATC>€{rule.get('cost_per_atc_gt', 10.0)}" if ok else ""
+
+        # Lock rules
+        if t == "hero_creative_lock":
+            # 5.1. Hero Creative Lock: Lock an ad as "Hero" if ATC >= 30 AND Cost/ATC <= €6.50
+            atc_ok = (m.add_to_cart or 0) >= rule.get("atc_gte", 30)
+            if not atc_ok:
+                return False, ""
+            atc_count = m.add_to_cart or 0
+            if atc_count == 0:
+                return False, ""
+            cost_per_atc = (m.spend or 0) / atc_count
+            cost_ok = cost_per_atc <= rule.get("cost_per_atc_lte", 6.50)
+            ok = atc_ok and cost_ok
+            return ok, f"Hero Creative: ATC≥{rule.get('atc_gte', 30)} & Cost/ATC≤€{rule.get('cost_per_atc_lte', 6.50)}" if ok else ""
+
         return False, ""
 
 
