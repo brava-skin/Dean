@@ -1797,10 +1797,10 @@ def _guardrail_kill(metrics: Dict[str, Any], rules: Optional[Dict[str, Any]] = N
     spend_or_clicks_ok = (spend >= min_spend_protection) or (clicks >= min_clicks_protection)
     
     if not (impressions_ok and spend_or_clicks_ok):
-        _asc_log(logging.DEBUG, 
-            "Kill blocked: new creative protection (impressions=%d<%d OR (spend=€%.2f<%d AND clicks=%d<%d))",
-            int(impressions), int(min_impressions_protection),
-            spend, int(min_spend_protection), int(clicks), int(min_clicks_protection))
+        _asc_log(logging.INFO, 
+            "Kill blocked: new creative protection for ad %s (impressions=%d<%d OR (spend=€%.2f<%d AND clicks=%d<%d), atc=%d)",
+            metrics.get("ad_id", "unknown"), int(impressions), int(min_impressions_protection),
+            spend, int(min_spend_protection), int(clicks), int(min_clicks_protection), int(add_to_cart))
         return False, ""  # Protected by new creative protection
     
     # Evaluate lock rules first - if ad is locked, never kill
@@ -1838,6 +1838,12 @@ def _guardrail_kill(metrics: Dict[str, Any], rules: Optional[Dict[str, Any]] = N
             for rule in kill_rules:
                 ok, reason = rule_engine._eval(rule, m, row)
                 if ok:
+                    # Log the kill decision with full metrics for debugging
+                    _asc_log(logging.INFO,
+                        "Kill rule triggered for ad %s: %s (spend=€%.2f, imps=%d, clicks=%d, atc=%d, ctr=%.2f%%)",
+                        metrics.get("ad_id", "unknown"), reason,
+                        spend, int(impressions), int(clicks), int(add_to_cart),
+                        (ctr * 100) if ctr else 0.0)
                     return True, reason
         except Exception as exc:
             _asc_log(logging.WARNING, "Failed to evaluate kill rules: %s", exc)
@@ -3099,13 +3105,27 @@ def _evaluate_and_kill_ads(
         if not ad_id:
             continue
         ad_id_str = str(ad_id)
-        metrics = lifetime_metrics_map.get(ad_id_str) or metrics_map.get(ad_id_str) or _build_ad_metrics(
-            {"ad_id": ad_id_str, "spend": 0, "impressions": 0, "clicks": 0},
-            "asc_plus",
-            account_today,
-            creation_time=creation_times.get(ad_id_str) if creation_times else None,
-            now_ts=now_utc,
-        )
+        # CRITICAL: Always use lifetime metrics for kill evaluation to check maximum of the ad, not just today
+        # This ensures we're evaluating based on the ad's full lifetime performance, not just today's data
+        metrics = lifetime_metrics_map.get(ad_id_str)
+        
+        if not metrics:
+            # If we don't have lifetime metrics, skip kill evaluation to avoid killing based on incomplete data
+            # This is safer than using daily metrics which might not reflect true performance
+            _asc_log(logging.WARNING, 
+                "Skipping kill evaluation for ad %s: no lifetime metrics available (only have daily data)",
+                ad_id_str)
+            continue
+        
+        # Log metrics being used for kill evaluation
+        _asc_log(logging.DEBUG, 
+            "Evaluating kill for ad %s using LIFETIME metrics (spend=€%.2f, imps=%d, clicks=%d, atc=%d)",
+            ad_id_str,
+            safe_f(metrics.get("spend")), 
+            int(safe_f(metrics.get("impressions"))),
+            int(safe_f(metrics.get("clicks"))),
+            int(safe_f(metrics.get("add_to_cart"))))
+        
         kill, kill_reason = _guardrail_kill(metrics, rules, rule_engine)
         if kill:
             if _pause_ad(client, ad_id, kill_reason):
@@ -3387,6 +3407,11 @@ def run_asc_plus_tick(
     lifetime_metrics_map = {
         ad_id: metrics for ad_id, metrics in lifetime_metrics_items if ad_id
     }
+    
+    # Log how many ads we have lifetime data for
+    _asc_log(logging.INFO, 
+        "Fetched lifetime metrics for %d ads (out of %d active ads) for kill evaluation",
+        len(lifetime_metrics_map), len(active_ads))
     
     killed_ads, killed_ids = _evaluate_and_kill_ads(
         client, active_ads, metrics_map, lifetime_metrics_map, rules, rule_engine,
