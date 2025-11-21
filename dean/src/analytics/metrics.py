@@ -199,14 +199,27 @@ def metrics_from_row(
     used_act: Dict[str, str] = {}
     used_val: Dict[str, str] = {}
 
-    purchases = _scan_actions(row, cfg.action_aliases["purchase"], cfg.window_keys)
+    # Check if purchases is already a direct field (from _build_ad_metrics)
+    # Prefer direct fields over scanning actions array for performance and accuracy
+    if "purchases" in row or "purchase" in row:
+        purchases = _to_float(row.get("purchases")) or _to_float(row.get("purchase"))
+    else:
+        # Fall back to scanning actions array if direct field not available
+        purchases = _scan_actions(row, cfg.action_aliases["purchase"], cfg.window_keys)
     if purchases > 0:
         for c in cfg.action_aliases["purchase"]:
             if _scan_actions(row, (c,), cfg.window_keys) > 0:
                 used_act.setdefault("purchase", c)
                 break
 
-    atc = _scan_actions(row, cfg.action_aliases["add_to_cart"], cfg.window_keys)
+    # Check if add_to_cart is already a direct field (from _build_ad_metrics)
+    # This is critical because _build_ad_metrics already extracts add_to_cart from actions
+    # and the rule engine needs to see the correct ATC value to avoid false positives
+    if "add_to_cart" in row or "atc" in row:
+        atc = _to_float(row.get("add_to_cart")) or _to_float(row.get("atc"))
+    else:
+        # Fall back to scanning actions array if direct field not available
+        atc = _scan_actions(row, cfg.action_aliases["add_to_cart"], cfg.window_keys)
     if atc > 0:
         for c in cfg.action_aliases["add_to_cart"]:
             if _scan_actions(row, (c,), cfg.window_keys) > 0:
