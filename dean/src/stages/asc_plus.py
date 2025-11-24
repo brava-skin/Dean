@@ -3165,7 +3165,9 @@ def _enforce_caps(
     excess = max(0, current_active_count - max_active)
     trimmed: List[Tuple[str, str]] = []
     
-    if excess > 0:
+    # TEMPORARILY DISABLED: Cap enforcement paused to allow new campaign without affecting existing creatives
+    # TODO: Re-enable after new campaign is set up
+    if False and excess > 0:  # Disabled: was `if excess > 0:`
         cap_pool = hydrated_active_ads if hydrated_active_ads else active_ads
         cap_candidates = _select_ads_for_cap(cap_pool, metrics_map, list(killed_ids), excess * 2)
         for _, candidate_ad_id, candidate_metrics in cap_candidates:
@@ -3193,15 +3195,22 @@ def _enforce_caps(
         
         current_active_count = get_active_count_internal()
     
-    active_count, hydrated_active_ads, hydrated_active_count, forced_kills, killed_ids = _enforce_hard_cap(
-        client, campaign_id, adset_id, metrics_map, creation_times or {},
-        max_active, killed_ids, allowed_statuses,
-    )
+    # TEMPORARILY DISABLED: Hard cap enforcement paused to allow new campaign without affecting existing creatives
+    # TODO: Re-enable after new campaign is set up
+    # active_count, hydrated_active_ads, hydrated_active_count, forced_kills, killed_ids = _enforce_hard_cap(
+    #     client, campaign_id, adset_id, metrics_map, creation_times or {},
+    #     max_active, killed_ids, allowed_statuses,
+    # )
+    # Replacement: Just get current counts without killing any ads
+    try:
+        active_count = client.count_active_ads_in_adset(adset_id, campaign_id=campaign_id)
+    except Exception:
+        active_count = current_active_count
+    hydrated_active_count = len(hydrated_active_ads)
+    forced_kills: List[Tuple[str, str]] = []  # No ads killed while disabled
     
     if forced_kills:
         trimmed.extend(forced_kills)
-    
-    hydrated_active_count = len(hydrated_active_ads)
     
     return active_count, hydrated_active_ads, hydrated_active_count, trimmed
 
@@ -3413,10 +3422,16 @@ def run_asc_plus_tick(
         "Fetched lifetime metrics for %d ads (out of %d active ads) for kill evaluation",
         len(lifetime_metrics_map), len(active_ads))
     
-    killed_ads, killed_ids = _evaluate_and_kill_ads(
-        client, active_ads, metrics_map, lifetime_metrics_map, rules, rule_engine,
-        creation_times, account_today, now_utc
-    )
+    # TEMPORARILY DISABLED: Kill evaluation paused to allow new campaign without affecting existing creatives
+    # TODO: Re-enable after new campaign is set up
+    _asc_log(logging.WARNING, 
+        "⚠️ Kill evaluation is TEMPORARILY DISABLED - no ads will be killed")
+    killed_ads: List[Tuple[str, str]] = []
+    killed_ids: Set[str] = set()
+    # killed_ads, killed_ids = _evaluate_and_kill_ads(
+    #     client, active_ads, metrics_map, lifetime_metrics_map, rules, rule_engine,
+    #     creation_times, account_today, now_utc
+    # )
     
     active_count = get_active_count()
     if killed_ids:
