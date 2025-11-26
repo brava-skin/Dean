@@ -2,9 +2,9 @@ name: Dean ASC+ Campaign Automation
 
 on:
   workflow_dispatch: # Manual runs still available
-  schedule:
-    # Run every hour for ASC+ campaign monitoring
-    - cron: '0 * * * *'
+  # schedule:
+  #   # Run every hour for ASC+ campaign monitoring
+  #   - cron: '0 * * * *'
 
 jobs:
   dean-automation:
