@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20  # Reduced timeout since we're optimizing
     env:
-      AUTOMATION_PAUSED: "false"
+      AUTOMATION_PAUSED: "true"
     
     steps:
     - name: Automation paused notice
